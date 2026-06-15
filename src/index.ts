@@ -132,6 +132,16 @@ server.tool(
 );
 
 // --- write_underlay ---
+// The closed set of fonts that render in-app (see svg.ts REGION_DEFAULTS).
+const FONT_ENUM = z.enum([
+  "Mulish",
+  "Newsreader",
+  "IBM Plex Mono",
+  "Caveat",
+  "Fredoka",
+  "Phosphor",
+]);
+
 const lineSchema = z.object({
   text: z.string().describe("The text to draw (gold)."),
   row: z
@@ -148,12 +158,38 @@ const lineSchema = z.object({
     .optional()
     .describe("Explicit baseline y, local to the region's top-left. Overrides `row`."),
   x: z.number().optional().describe("Local x offset from the region's left edge. Default 24."),
-  font: z
-    .enum(["Mulish", "Newsreader", "IBM Plex Mono", "Caveat", "Fredoka"])
-    .optional()
-    .describe("Font family. Defaults per region (Mulish; Newsreader for affirmation)."),
+  font: FONT_ENUM.optional().describe(
+    "Font family. Defaults per region (Mulish; Newsreader for affirmation).",
+  ),
   size: z.number().optional().describe("Font size in px. Sensible per-region default."),
-  fill: z.string().optional().describe("Override colour. Defaults to gold #C9A227."),
+  weight: z
+    .number()
+    .int()
+    .optional()
+    .describe("SVG font-weight (100–900). Defaults per region (600; 500 for affirmation)."),
+  fill: z.string().optional().describe("Override colour. Defaults to the gold default."),
+});
+
+// Calendar grid for the month region — the server computes each day's cell from
+// the template's column/row lines and emits day numbers + data-date tap targets.
+const calendarSchema = z.object({
+  month: z.string().describe('Month to lay out, "YYYY-MM" (e.g. "2026-02").'),
+  days: z
+    .array(
+      z.object({
+        day: z.number().int().min(1).max(31).describe("Day of month (1-based)."),
+        text: z.string().optional().describe("Optional event label under the day number."),
+        font: FONT_ENUM.optional(),
+        size: z.number().optional(),
+        weight: z.number().int().optional(),
+        fill: z.string().optional(),
+      }),
+    )
+    .optional()
+    .describe("Optional per-day event labels / styling."),
+  numberSize: z.number().optional().describe("Day-number font size (default 18)."),
+  numberWeight: z.number().int().optional().describe("Day-number weight (default 600)."),
+  fill: z.string().optional().describe("Override gold for the day numbers."),
 });
 
 server.tool(
@@ -170,7 +206,16 @@ server.tool(
           region: z
             .string()
             .describe('Region name from read_page, e.g. "schedule", "todo", "affirmation".'),
-          lines: z.array(lineSchema).describe("Text lines to place in this region."),
+          lines: z
+            .array(lineSchema)
+            .optional()
+            .describe("Text lines to place in this region. Mutually exclusive with `calendar`."),
+          calendar: calendarSchema
+            .optional()
+            .describe(
+              "Calendar grid for the month region — emits day numbers + data-date tap " +
+                "targets from the template grid. Mutually exclusive with `lines`.",
+            ),
         }),
       )
       .optional()

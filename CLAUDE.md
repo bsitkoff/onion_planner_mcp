@@ -19,9 +19,34 @@ local (not on `mamastuff`) because reaching that mirror needs local macOS filesy
 
 ```bash
 npm start          # run the server over stdio
+npm run call -- <tool> [args]   # dev CLI: drive any tool in a FRESH process (see below)
 npm run smoke      # copy fixtures → /tmp/onionskin-test and run the e2e test
 npx tsc --noEmit   # typecheck
 ```
+
+### Testing your own edits (the dev loop)
+
+The **registered** `onionskin` MCP server is a long-lived `tsx` process — it caches the
+code from session start and `tsx` does **not** hot-reload, so your edits won't show up
+through the in-conversation `mcp__onionskin__*` tools until that server is reconnected
+(`/mcp`) or Claude Code restarts. Don't test edits through it.
+
+Instead use **`npm run call`** (`test/cli.ts`): it dispatches to the same underlying
+functions the server wraps (`readPage`, `writeUnderlay`, `composeAiSvg`, the path guard),
+in a brand-new process every invocation — so it always runs your latest code. It honours
+`ONIONSKIN_CONTAINER`, defaulting to the **live** iCloud path, so you can test against
+fixtures or live:
+
+```bash
+npm run call -- read_page Shared/Daily/2026-02-06
+npm run call -- write_underlay Shared/Daily/_mcp-test '{"regions":[...]}'
+ONIONSKIN_CONTAINER=/tmp/onionskin-test npm run call -- list_pages
+```
+
+A Bash-spawned process **inherits the host's Full Disk Access**, so live reads/writes work
+from the CLI without reconnecting the registered server. Loop: edit → `npm run call` (or
+`npm run smoke` for fixtures) → verify → only reconnect the registered server when you need
+to exercise the MCP transport itself.
 
 ## Architecture
 
@@ -33,6 +58,25 @@ npx tsc --noEmit   # typecheck
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
 | `src/svg.ts` | Compose `ai.svg` from structured region input; gold `#C9A227`; per-region font defaults. |
 | `src/page.ts` | Read a page, **atomic** ai.svg writes, manifest status flips, `create_page`. |
+
+## How a page is addressed
+
+A page is a folder of layered SVGs (`template → ai → stickers → ink`) plus `manifest.json`;
+a chapter is a folder of pages, ordered by `.folder.json`. Page discovery is "any folder
+containing `manifest.json`" (`library.findPages`), recursing under `Shared/` only.
+
+`template.svg` carries the geometry. Each addressable region is a `<g id="region-<name>"
+data-region="<name>" transform="translate(x,y)">`; `template.parseRegions` turns these into
+`Region[]` with the group origin, optional `<rect>` box, `data-rows`/`data-cols` hints, and
+the **absolute positions of ruled lines** (`ruledLines` = horizontal rules, `colLines` =
+vertical). Those ruled lines are the writable "rows."
+
+`write_underlay`'s structured `regions` input is the normal path: `svg.composeAiSvg` looks
+up each region by name and places each line's baseline via `row` (snap to a ruled line +
+`~0.4 × row-pitch`), or explicit `y`, or — for boxes with no rules (todo, affirmation) —
+line-stacking / vertical-centering. So callers never compute coordinates; they reference a
+region name and a row index from `read_page`. An unknown region name throws (listing the
+valid ones). Raw `svg` bypasses all of this — full control, no geometry help.
 
 ## Invariants (do not break)
 
@@ -54,3 +98,11 @@ npx tsc --noEmit   # typecheck
   never crash. (iCloud also adds sync latency in both directions — Mac write → iPad pickup
   is not instant.)
 - ESM project (`"type": "module"`, NodeNext) — local imports use `.js` extensions.
+- **Fonts are a closed set** (`Mulish`, `Newsreader`, `IBM Plex Mono`, `Caveat`, `Fredoka`)
+  — only these render in-app; the `write_underlay` enum and per-region defaults in `svg.ts`
+  (`REGION_DEFAULTS`) encode that. Don't introduce other font families.
+- The ai layer has a 3-state status (`empty → refreshing → ready`) in `manifest.layers.ai`;
+  the app only composites `ready`. `write_underlay` sets `ready` by default. Use `refreshing`
+  before a long multi-step edit so a half-built page never shows.
+- `npm run smoke` depends on the **sibling `../onionskin` repo** (it copies
+  `../onionskin/Onionskin/Fixtures/Library`); it can't run without that checkout present.

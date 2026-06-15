@@ -13,6 +13,7 @@ import {
   clearUnderlay,
   createPage,
 } from "../src/page.js";
+import { GOLD } from "../src/svg.js";
 
 let pass = 0;
 let fail = 0;
@@ -68,7 +69,8 @@ async function main() {
   const aiPath = path.join(root, target, "ai.svg");
   const ai = await fs.readFile(aiPath, "utf8");
   check("ai.svg contains schedule text", ai.includes("9:00 standup"));
-  check("ai.svg uses gold fill", ai.includes("#C9A227"));
+  check("ai.svg uses gold fill", ai.includes(GOLD));
+  check("ai.svg sets a heavier font-weight", ai.includes('font-weight="600"'));
   check("ai.svg groups by region", ai.includes('data-region="schedule"') && ai.includes('data-region="affirmation"'));
   // Derive the expected slot from the parsed geometry (fixtures may change):
   // row 2's baseline must land between ruled line 2 and ruled line 3 (its slot).
@@ -87,6 +89,49 @@ async function main() {
   check("manifest ai.status = ready", m2.layers.ai.status === "ready");
   check("manifest modified bumped", m2.modified !== before, `${before} -> ${m2.modified}`);
   check("write reported bytes", wr.bytes > 0);
+
+  // Regression: a no-ruled-lines box (e.g. todo) with MULTIPLE lines must stack
+  // top-down with ascending, distinct baselines — NOT center line 0 over the rest.
+  // (A single line in such a box still centers; see affirmation above.)
+  const todo = read.regions.find((r) => r.name === "todo");
+  check("todo is a no-ruled-lines box", !!todo && todo.ruledLines.length === 0, String(todo?.ruledLines.length));
+  await writeUnderlay(root, target, {
+    status: "ready",
+    regions: [{ region: "todo", lines: [
+      { text: "TODO_A" }, { text: "TODO_B" }, { text: "TODO_C" },
+    ]}],
+  });
+  const aiTodo = (await fs.readFile(aiPath, "utf8")).split("\n");
+  const ys = ["TODO_A", "TODO_B", "TODO_C"].map((t) => {
+    const m = (aiTodo.find((l) => l.includes(t)) ?? "").match(/y="(-?\d+)"/);
+    return m ? Number(m[1]) : NaN;
+  });
+  check("multi-line todo has ascending baselines (no overlap)",
+    ys[0] < ys[1] && ys[1] < ys[2], `y=${JSON.stringify(ys)}`);
+  check("multi-line todo first line not vertically centered",
+    Number.isFinite(ys[0]) && (todo ? ys[0] < (todo.height ?? 200) / 2 : false), `y0=${ys[0]}`);
+
+  console.log("\nwrite_underlay (calendar grid — monthly tap-to-day)");
+  const monthly = "Shared/Monthly/2026-02"; // Feb 2026 starts on a Sunday, 28 days
+  const monthRead = await readPage(root, monthly);
+  const monthRegion = monthRead.regions.find((r) => r.name === "month");
+  check("month region is a 7-col grid", (monthRegion?.colLines.length ?? 0) === 8, String(monthRegion?.colLines.length));
+  await writeUnderlay(root, monthly, {
+    status: "ready",
+    regions: [{ region: "month", calendar: { month: "2026-02", days: [{ day: 14, text: "Valentine" }] } }],
+  });
+  const cal = await fs.readFile(path.join(root, monthly, "ai.svg"), "utf8");
+  check("emits data-date for day 1", cal.includes('data-date="2026-02-01"'));
+  check("emits data-date for day 28", cal.includes('data-date="2026-02-28"'));
+  check("does NOT emit day 29 (Feb has 28)", !cal.includes('data-date="2026-02-29"'));
+  check("emits a tap-target rect", /<rect [^>]*data-date="2026-02-14"/.test(cal));
+  check("draws the day number 14", />14<\/text>/.test(cal));
+  check("draws the optional event label", cal.includes(">Valentine</text>"));
+  // Feb 1 2026 is a Sunday → day 1 in column 0 (x≈0); day 14 is a Saturday → last column (x large).
+  const x1 = (cal.match(/<rect x="(-?\d+)"[^>]*data-date="2026-02-01"/) ?? [])[1];
+  const x14 = (cal.match(/<rect x="(-?\d+)"[^>]*data-date="2026-02-14"/) ?? [])[1];
+  check("day 1 sits in the first column", Number(x1) < 50, `x=${x1}`);
+  check("day 14 sits in the last column", Number(x14) > 700, `x=${x14}`);
 
   console.log("\nwrite_underlay (raw svg)");
   await writeUnderlay(root, target, {

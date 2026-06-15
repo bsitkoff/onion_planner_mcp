@@ -21,7 +21,8 @@ local (not on `mamastuff`) because reaching that mirror needs local macOS filesy
 npm start          # run the server over stdio
 npm run call -- <tool> [args]   # dev CLI: drive any tool in a FRESH process (see below)
 npm run smoke      # copy fixtures → /tmp/onionskin-test and run the e2e test
-npx tsc --noEmit   # typecheck
+npx tsc --noEmit   # typecheck only (no output)
+npm run build      # tsc → emits to dist/ (gitignored); the server runs via tsx, so this is rarely needed
 ```
 
 ### Testing your own edits (the dev loop)

@@ -53,6 +53,15 @@ write_underlay         → place text by region/row; server computes coordinates
 `row` aligns to the region's ruled lines (from `read_page`). Use `y`/`x` for explicit
 placement, or pass a full `svg` document for total control.
 
+For a monthly page, give the `month` region a `calendar` spec instead of `lines` — the
+server lays out the grid (Sunday-start) from the template, drawing day numbers and a
+`data-date` tap target per cell so tapping a date opens that day:
+
+```jsonc
+{ "region": "month",
+  "calendar": { "month": "2026-02", "days": [ { "day": 14, "text": "Valentine" } ] } }
+```
+
 ## Configuration
 
 | Env var | Default | Meaning |

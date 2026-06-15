@@ -56,7 +56,7 @@ to exercise the MCP transport itself.
 | `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under `Shared/`, no traversal). |
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
-| `src/svg.ts` | Compose `ai.svg` from structured region input; gold `#C9A227`; per-region font defaults. |
+| `src/svg.ts` | Compose `ai.svg` from structured region input (text lines + the `calendar` grid); gold default `GOLD` (`#9C7C1A`); per-region font/size/weight defaults. |
 | `src/page.ts` | Read a page, **atomic** ai.svg writes, manifest status flips, `create_page`. |
 
 ## How a page is addressed
@@ -78,6 +78,14 @@ line-stacking / vertical-centering. So callers never compute coordinates; they r
 region name and a row index from `read_page`. An unknown region name throws (listing the
 valid ones). Raw `svg` bypasses all of this — full control, no geometry help.
 
+A region entry may instead carry a **`calendar`** spec (`{ month: "YYYY-MM", days?: [...] }`)
+in place of `lines` — used for the gridded `month` region. `svg.composeCalendar` derives each
+day's cell from the region's `colLines`/`ruledLines` (Sunday-start, matching the `SUN…SAT`
+headers) and emits a day number + a `<rect data-date="YYYY-MM-DD" fill="none">` per cell. Those
+`data-date` rects are the app's **tap-to-day** targets (tapping opens that day's daily page);
+the server only stamps the attribute, the app handles navigation. `lines` and `calendar` are
+mutually exclusive per region.
+
 ## Invariants (do not break)
 
 - **Only ever write** `ai.svg` and the manifest's `layers.ai` block (+ top-level
@@ -98,9 +106,13 @@ valid ones). Raw `svg` bypasses all of this — full control, no geometry help.
   never crash. (iCloud also adds sync latency in both directions — Mac write → iPad pickup
   is not instant.)
 - ESM project (`"type": "module"`, NodeNext) — local imports use `.js` extensions.
-- **Fonts are a closed set** (`Mulish`, `Newsreader`, `IBM Plex Mono`, `Caveat`, `Fredoka`)
-  — only these render in-app; the `write_underlay` enum and per-region defaults in `svg.ts`
-  (`REGION_DEFAULTS`) encode that. Don't introduce other font families.
+- **Fonts are a closed set** (`Mulish`, `Newsreader`, `IBM Plex Mono`, `Caveat`, `Fredoka`,
+  `Phosphor`) — only these render in-app; the shared `FONT_ENUM` in `index.ts` and per-region
+  defaults in `svg.ts` (`REGION_DEFAULTS`) encode that. Don't introduce other font families.
+- **Legibility:** the gold default was deepened (`#C9A227 → #9C7C1A`) and text carries a
+  `font-weight` (per-region default 600, 500 for the affirmation; per-line `weight` override).
+  The brand gold lives in the app's `FORMAT.md`; keep the server's `GOLD` constant in sync with
+  it. `font-weight` only helps if the app renderer honours it and ships heavier font cuts.
 - The ai layer has a 3-state status (`empty → refreshing → ready`) in `manifest.layers.ai`;
   the app only composites `ready`. `write_underlay` sets `ready` by default. Use `refreshing`
   before a long multi-step edit so a half-built page never shows.

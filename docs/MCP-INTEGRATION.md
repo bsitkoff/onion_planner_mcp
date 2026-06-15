@@ -120,8 +120,8 @@ output by region so it's legible:
 Coordinates are **absolute page coordinates** (region `translate` + your local offset),
 or wrap your elements in a `<g transform="translate(...)">` matching the region — either
 works; the app composites raw SVG. Fonts that render in-app: `Mulish` (sans),
-`Newsreader` (serif), `IBM Plex Mono` (mono), `Caveat`, `Fredoka`. Unknown families fall
-back to the serif.
+`Newsreader` (serif), `IBM Plex Mono` (mono), `Caveat`, `Fredoka`, `Phosphor` (icons).
+Unknown families fall back to the serif.
 
 ### d. Declare readiness — the handshake
 Onionskin will **not** composite your `ai.svg` until the manifest says so. After your

@@ -5,6 +5,7 @@ A local MCP server that writes the **gold AI underlay** (`ai.svg`) into
 folder of plain files in an iCloud container — no API, no library — so this server is
 **filesystem-only**: it reads `template.svg` for region geometry and writes `ai.svg` +
 the manifest's status flag. Full contract: [`docs/MCP-INTEGRATION.md`](docs/MCP-INTEGRATION.md).
+Shipped + planned work: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## What it does
 
@@ -12,7 +13,7 @@ Every Onionskin page is a folder compositing four SVG layers
 (`template → ai → stickers → ink`). The **ai layer is yours**; the user's ink/stickers
 are not. Permission is location: only pages under `Shared/` are touchable; `Private/` is
 invisible. This server lets Claude fill a page's schedule, to-dos, priorities, notes, and
-affirmation, then flip `manifest.json → layers.ai.status` to `ready` so the app composites
+quote, then flip `manifest.json → layers.ai.status` to `ready` so the app composites
 it on next foreground.
 
 ## Tools
@@ -22,17 +23,17 @@ it on next foreground.
 | `get_library` | read | Resolve & validate the iCloud library; list Shared chapters. **Call first.** |
 | `list_pages` | read | List shared pages with title, template, size, modified, ai status. |
 | `read_page` | read | One page's manifest + parsed **regions** (geometry) + current ai.svg. |
-| `write_underlay` | write | Write ai.svg (structured `regions` *or* raw `svg`) + set status. |
+| `write_underlay` | write | Write ai.svg (structured `regions` *or* raw `svg`) + set status. `merge` patches named regions; `dryRun` previews without writing; returns fit `warnings`. |
 | `set_underlay_status` | write | Flip ai status (`empty`/`refreshing`/`ready`) without rewriting. |
 | `clear_underlay` | write | Reset ai.svg to empty + status `empty`. |
-| `create_page` | write | Clone a sibling's template to make a new shared page. |
+| `create_page` | write | New shared page from a sibling's template, or from the `Templates/` catalogue by id. |
 
 ### Typical flow
 
 ```
 get_library            → confirm the library is reachable
 list_pages             → find "Shared/Daily/2026-06-14"
-read_page              → learn its regions (schedule rows, affirmation box, …)
+read_page              → learn its regions (schedule rows, quote box, …)
 write_underlay         → place text by region/row; server computes coordinates; status=ready
 ```
 
@@ -45,13 +46,19 @@ write_underlay         → place text by region/row; server computes coordinates
     { "region": "schedule", "lines": [
       { "text": "9:00 standup", "row": 2 },
       { "text": "13:00 1:1", "row": 6 } ] },
-    { "region": "affirmation", "lines": [ { "text": "Small steps still move forward." } ] }
+    { "region": "todo", "lines": [
+      { "text": "Email the registrar", "marker": "checkbox" } ] },
+    { "region": "quote", "lines": [ { "text": "Small steps still move forward." } ] }
   ]
 }
 ```
 
 `row` aligns to the region's ruled lines (from `read_page`). Use `y`/`x` for explicit
-placement, or pass a full `svg` document for total control.
+placement, `marker` (`checkbox`/`bullet`) for a leading mark, or pass a full `svg`
+document for total control. Pass `merge: true` to update only the regions you supply and
+leave the rest of the page intact (e.g. slide a new meeting into the schedule without
+clearing the to-dos); pass `dryRun: true` to get the composed SVG plus overflow `warnings`
+back without writing.
 
 For a monthly page, give the `month` region a `calendar` spec instead of `lines` — the
 server lays out the grid (Sunday-start) from the template, drawing day numbers and a

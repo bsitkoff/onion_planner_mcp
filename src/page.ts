@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePageRel } from "./paths.js";
 import { parseRegions, parseViewBox, type Region } from "./template.js";
-import { composeAiSvg, emptySvg, type RegionInput } from "./svg.js";
+import { composeAiSvg, mergeRegions, emptySvg, type RegionInput } from "./svg.js";
 
 export type AiStatus = "empty" | "refreshing" | "ready";
 
@@ -108,36 +108,66 @@ export interface WriteResult {
   status: AiStatus;
   bytes: number;
   aiSvg: string;
+  /** Non-fatal placement warnings from composing structured regions. */
+  warnings: string[];
+  /** True when this was a dry run — nothing was written to disk. */
+  dryRun: boolean;
 }
 
 /**
  * Write ai.svg for a shared page (atomically) and set its status. Accepts either
  * a raw SVG document or structured region input (composed against page geometry).
+ *
+ * `merge` (structured input only) patches the named regions into the existing
+ * ai.svg, preserving every other region. `dryRun` composes and returns the result
+ * (with warnings) without touching disk.
  */
 export async function writeUnderlay(
   root: string,
   rel: string,
-  opts: { svg?: string; regions?: RegionInput[]; status: AiStatus },
+  opts: {
+    svg?: string;
+    regions?: RegionInput[];
+    status: AiStatus;
+    merge?: boolean;
+    dryRun?: boolean;
+  },
 ): Promise<WriteResult> {
   const abs = resolvePageRel(root, rel);
   // Confirm it's a real page before writing.
   const manifest = await readJson<Manifest>(path.join(abs, "manifest.json"));
 
   let svg: string;
+  let warnings: string[] = [];
   if (opts.svg !== undefined) {
+    if (opts.merge) {
+      throw new Error("`merge` is only supported with structured `regions`, not raw `svg`.");
+    }
     svg = opts.svg.trim() + "\n";
   } else if (opts.regions) {
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg) : [];
     const size = pageSize(manifest, templateSvg);
-    svg = composeAiSvg(size, opts.regions, regions);
+    const composed = composeAiSvg(size, opts.regions, regions);
+    warnings = composed.warnings;
+    if (opts.merge) {
+      const existing = await readIfExists(path.join(abs, "ai.svg"));
+      svg = mergeRegions(existing, composed.svg, size);
+    } else {
+      svg = composed.svg;
+    }
   } else {
     throw new Error("writeUnderlay requires either `svg` or `regions`.");
   }
 
+  const bytes = Buffer.byteLength(svg);
+  if (opts.dryRun) {
+    return { page: rel, status: opts.status, bytes, aiSvg: svg, warnings, dryRun: true };
+  }
+
   await atomicWrite(path.join(abs, "ai.svg"), svg);
   await patchManifestStatus(abs, opts.status);
-  return { page: rel, status: opts.status, bytes: Buffer.byteLength(svg), aiSvg: svg };
+  return { page: rel, status: opts.status, bytes, aiSvg: svg, warnings, dryRun: false };
 }
 
 /** Flip the ai-layer status without rewriting the SVG. */
@@ -168,10 +198,80 @@ export interface CreateResult {
   clonedFrom: string;
 }
 
+/** The layers + geometry a new page is instantiated from. */
+interface PageSource {
+  templateSvg: string;
+  /** Starter sticker layer (catalogue templates may ship one); else null = empty. */
+  stickersSvg: string | null;
+  size: [number, number];
+  /** Value written to the manifest's top-level `template` field. */
+  templateName: string;
+  /** Provenance string returned to the caller (a sibling page or a catalogue id). */
+  clonedFrom: string;
+}
+
+/** Find a sibling page in the chapter to clone a template from, if any. */
+async function findSiblingTemplate(
+  chapterAbs: string,
+  chapterRel: string,
+  opts: { name: string; template?: string },
+): Promise<{ rel: string; manifest: Manifest; templateSvg: string } | null> {
+  let siblings;
+  try {
+    siblings = await fs.readdir(chapterAbs, { withFileTypes: true });
+  } catch {
+    return null; // chapter folder doesn't exist yet (brand-new chapter)
+  }
+  for (const s of siblings) {
+    if (!s.isDirectory() || s.name.startsWith(".") || s.name === opts.name) continue;
+    const sAbs = path.join(chapterAbs, s.name);
+    const m = await readIfExists(path.join(sAbs, "manifest.json"));
+    const t = await readIfExists(path.join(sAbs, "template.svg"));
+    if (!m || !t) continue;
+    const manifest = JSON.parse(m) as Manifest;
+    if (opts.template && manifest.template !== opts.template) continue;
+    return { rel: `${chapterRel}/${s.name}`, manifest, templateSvg: t };
+  }
+  return null;
+}
+
+/** Load a template from the top-level `Templates/<id>/` catalogue, if it exists. */
+async function loadCatalogueTemplate(
+  root: string,
+  id: string,
+): Promise<{ templateSvg: string; stickersSvg: string | null; size: [number, number] } | null> {
+  const dir = path.join(root, "Templates", id);
+  const templateSvg = await readIfExists(path.join(dir, "template.svg"));
+  if (!templateSvg) return null;
+  const stickersSvg = await readIfExists(path.join(dir, "stickers.svg"));
+  const size = parseViewBox(templateSvg) ?? [1024, 1366];
+  return { templateSvg, stickersSvg, size };
+}
+
+/** List catalogue template ids (folders under `Templates/` with a template.svg). */
+async function listCatalogueTemplates(root: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await fs.readdir(path.join(root, "Templates"), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const ids: string[] = [];
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    if (await readIfExists(path.join(root, "Templates", e.name, "template.svg"))) {
+      ids.push(e.name);
+    }
+  }
+  return ids.sort();
+}
+
 /**
- * Create a new shared page by cloning template.svg from a sibling page in the
- * same chapter, writing manifest + empty layers + media/, and appending the new
- * folder to the chapter's .folder.json order.
+ * Create a new shared page, writing manifest + layers + media/ and appending the
+ * new folder to the chapter's .folder.json order. The template comes from a
+ * **sibling page** in the same chapter when one exists (keeps a chapter
+ * consistent); otherwise it is instantiated from the top-level **`Templates/`
+ * catalogue** by id (`template`), so a brand-new/empty chapter can still be seeded.
  */
 export async function createPage(
   root: string,
@@ -190,35 +290,45 @@ export async function createPage(
     if (e.code !== "ENOENT") throw e;
   }
 
-  // Find a sibling page to clone the template from.
-  const siblings = await fs.readdir(chapterAbs, { withFileTypes: true });
-  let cloneFrom: { rel: string; manifest: Manifest; templateSvg: string } | null = null;
-  for (const s of siblings) {
-    if (!s.isDirectory() || s.name.startsWith(".") || s.name === opts.name) continue;
-    const sAbs = path.join(chapterAbs, s.name);
-    const m = await readIfExists(path.join(sAbs, "manifest.json"));
-    const t = await readIfExists(path.join(sAbs, "template.svg"));
-    if (!m || !t) continue;
-    const manifest = JSON.parse(m) as Manifest;
-    if (opts.template && manifest.template !== opts.template) continue;
-    cloneFrom = { rel: `${chapterRel}/${s.name}`, manifest, templateSvg: t };
-    break;
-  }
-  if (!cloneFrom) {
-    throw new Error(
-      `No sibling page in "${chapterRel}"${opts.template ? ` with template "${opts.template}"` : ""} ` +
-        `to clone a template from. Create one in the app first.`,
-    );
+  // Prefer a sibling; fall back to the Templates/ catalogue.
+  const sibling = await findSiblingTemplate(chapterAbs, chapterRel, opts);
+  let source: PageSource;
+  if (sibling) {
+    source = {
+      templateSvg: sibling.templateSvg,
+      stickersSvg: null,
+      size: pageSize(sibling.manifest, sibling.templateSvg),
+      templateName: sibling.manifest.template ?? opts.template ?? "daily",
+      clonedFrom: sibling.rel,
+    };
+  } else {
+    const cat = opts.template ? await loadCatalogueTemplate(root, opts.template) : null;
+    if (!cat) {
+      const ids = await listCatalogueTemplates(root);
+      const why = opts.template
+        ? `no catalogue template "${opts.template}" exists under Templates/`
+        : "pass `template` with a catalogue id to start from the Templates/ catalogue";
+      throw new Error(
+        `No sibling page in "${chapterRel}" to clone from, and ${why}. ` +
+          `Available templates: ${ids.join(", ") || "(none)"}.`,
+      );
+    }
+    source = {
+      templateSvg: cat.templateSvg,
+      stickersSvg: cat.stickersSvg,
+      size: cat.size,
+      templateName: opts.template!,
+      clonedFrom: `Templates/${opts.template}`,
+    };
   }
 
-  const size = pageSize(cloneFrom.manifest, cloneFrom.templateSvg);
-  const templateName = cloneFrom.manifest.template ?? "daily";
+  const { size, templateName } = source;
   const ts = nowIso();
 
   await fs.mkdir(path.join(newAbs, "media"), { recursive: true });
-  await atomicWrite(path.join(newAbs, "template.svg"), cloneFrom.templateSvg);
+  await atomicWrite(path.join(newAbs, "template.svg"), source.templateSvg);
   await atomicWrite(path.join(newAbs, "ai.svg"), emptySvg(size));
-  await atomicWrite(path.join(newAbs, "stickers.svg"), emptySvg(size));
+  await atomicWrite(path.join(newAbs, "stickers.svg"), source.stickersSvg ?? emptySvg(size));
   await atomicWrite(path.join(newAbs, "ink.svg"), emptySvg(size));
 
   const manifest: Manifest = {
@@ -247,5 +357,5 @@ export async function createPage(
   if (!folder.order.includes(opts.name)) folder.order.push(opts.name);
   await atomicWrite(folderFile, JSON.stringify(folder, null, 2) + "\n");
 
-  return { page: newRel, template: templateName, size, clonedFrom: cloneFrom.rel };
+  return { page: newRel, template: templateName, size, clonedFrom: source.clonedFrom };
 }

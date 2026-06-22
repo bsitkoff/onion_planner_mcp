@@ -40,18 +40,26 @@ That `Documents/` directory is the **library root**. Layout:
 ```
 Documents/                         ← library root
 ├─ settings.json                   ← global settings (read-only for you)
+├─ Templates/                      ← catalogue of templates (read-only; create_page source)
+│  ├─ templates.json               ← id/name/category/style/files per template
+│  └─ daily-minimal/template.svg   ← one folder per template id
+├─ Stickers/                       ← catalogue of reusable sticker PNGs (read-only)
+│  └─ Marks/star.png …
 ├─ Shared/                         ← YOUR sandbox. Anything here is writable.
 │  └─ Daily/                       ← a chapter (folder)
 │     ├─ .folder.json
 │     └─ 2026-06-13/               ← a page (folder; name is a human date/slug)
 │        ├─ manifest.json
-│        ├─ template.svg           ← read for regions; never write
+│        ├─ template.svg           ← read for regions; never write (copied from the catalogue)
 │        ├─ ai.svg                 ← YOU write this
 │        ├─ stickers.svg           ← never write
 │        ├─ ink.svg                ← never write
 │        └─ media/
 └─ Private/                        ← off-limits. Do not read or write.
 ```
+
+A fresh library ships the `Templates/` + `Stickers/` catalogues but **no `Shared/`
+pages** — the app (or `create_page`) creates pages by copying a template into `Shared/`.
 
 **Only touch pages whose path contains `…/Shared/…`.**
 
@@ -90,29 +98,32 @@ portrait points). All your geometry is in this space.
     <rect x="0" y="0" width="540" height="870" fill="none"/>
     <!-- ruled hour lines + labels … -->
   </g>
-  <g id="region-affirmation" data-region="affirmation" transform="translate(56,1148)">…</g>
+  <g id="region-quote" data-region="quote" transform="translate(56,1148)">…</g>
   <g id="region-todo"        data-region="todo"        transform="translate(636,520)">…</g>
 </svg>
 ```
 
 To write "the schedule", read `region-schedule`'s `transform` (and its rect size) and
 emit elements positioned to match. The daily template exposes:
-`region-schedule`, `region-priorities`, `region-todo`, `region-notes`,
-`region-affirmation`. Other templates expose `region-month`, `region-canvas`,
-`region-notes`, etc. **Don't hard-code positions — read the region transform.**
+`region-header`, `region-schedule`, `region-priorities`, `region-todo`,
+`region-notes`, `region-quote` (the serif quote/affirmation box). Monthly templates
+expose `region-header`, `region-month`, `region-weekdays`, `region-goals`,
+`region-notes`. **Region names vary by template and change as templates evolve — read
+them from `read_page`/the template, don't hard-code.**
 
 ### c. Write `ai.svg`
-Emit one self-contained SVG on the page's `viewBox`. Gold is `#C9A227`. Group your
-output by region so it's legible:
+Emit one self-contained SVG on the page's `viewBox`. Gold is `#9C7C1A` — the brand gold
+(`#C9A227`) deepened for legibility on white paper; this is what the reference server emits
+by default. Group your output by region so it's legible:
 
 ```xml
 <svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg">
   <g data-region="schedule">
-    <text x="86" y="284" font-family="Mulish" font-size="14" fill="#C9A227">04:00  pill alarm</text>
-    <text x="86" y="362" font-family="Mulish" font-size="14" fill="#C9A227">09:00  standup</text>
+    <text x="86" y="284" font-family="Mulish" font-size="14" fill="#9C7C1A">04:00  pill alarm</text>
+    <text x="86" y="362" font-family="Mulish" font-size="14" fill="#9C7C1A">09:00  standup</text>
   </g>
-  <g data-region="affirmation">
-    <text x="80" y="1204" font-family="Newsreader" font-size="26" fill="#C9A227">I am capable of embracing change.</text>
+  <g data-region="quote">
+    <text x="80" y="1204" font-family="Newsreader" font-size="26" fill="#9C7C1A">I am capable of embracing change.</text>
   </g>
 </svg>
 ```
@@ -165,11 +176,15 @@ instant pickup.) Write whenever you like; it appears on the next read.
 You normally write into pages the user created. If you want to *create* a shared page
 (e.g., tomorrow's daily), make a folder under a shared chapter and write the full set:
 `manifest.json` + `template.svg` + empty `ai.svg`/`stickers.svg`/`ink.svg` + `media/`.
-You'd need a template — easiest is to **copy `template.svg` from an existing page of the
-same `template`** (templates are self-contained per page) and start the other three
-layers as `<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"></svg>`. Add
-the new folder name to the chapter's `.folder.json → order`. Prefer letting the user
-create pages and just filling the underlay unless you have a reason.
+You need a template — get one of two ways: **copy `template.svg` from an existing
+sibling page** in the chapter (templates are self-contained per page), or, for a
+brand-new/empty chapter, **copy from the top-level `Templates/<id>/` catalogue** (the
+ids and their files are listed in `Templates/templates.json`; some ship a starter
+`stickers.svg` too). Start the remaining layers as
+`<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"></svg>`. Add the new
+folder name to the chapter's `.folder.json → order`. (The reference server's
+`create_page` does exactly this — sibling first, catalogue as fallback.) Prefer letting
+the user create pages and just filling the underlay unless you have a reason.
 
 ---
 

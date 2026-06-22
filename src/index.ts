@@ -25,12 +25,13 @@ const server = new McpServer(
     instructions:
       "Onionskin is a planner whose pages are folders of SVG layers in an iCloud " +
       "folder. You write the gold 'ai.svg' underlay (schedule, to-dos, priorities, " +
-      "notes, affirmation) into pages under Shared/, then mark it ready — the app " +
+      "notes, quote) into pages under Shared/, then mark it ready — the app " +
       "composites it on next foreground. Always call get_library first, then read_page " +
-      "to learn a page's regions before write_underlay. You can ONLY touch Shared/ pages; " +
-      "Private/ is invisible, and you never write the user's ink or sticker layers. " +
-      "Prefer write_underlay's structured `regions` input (the server positions text " +
-      "from template geometry); use raw `svg` only when you need full control.",
+      "to learn a page's regions before write_underlay (region names vary by template). " +
+      "You can ONLY touch Shared/ pages; Private/ is invisible, and you never write the " +
+      "user's ink or sticker layers. Prefer write_underlay's structured `regions` input " +
+      "(the server positions text from template geometry); use `merge` to update only " +
+      "some regions, `dryRun` to preview. Use raw `svg` only when you need full control.",
   },
 );
 
@@ -159,15 +160,22 @@ const lineSchema = z.object({
     .describe("Explicit baseline y, local to the region's top-left. Overrides `row`."),
   x: z.number().optional().describe("Local x offset from the region's left edge. Default 24."),
   font: FONT_ENUM.optional().describe(
-    "Font family. Defaults per region (Mulish; Newsreader for affirmation).",
+    "Font family. Defaults per region (Mulish; Newsreader for the quote).",
   ),
   size: z.number().optional().describe("Font size in px. Sensible per-region default."),
   weight: z
     .number()
     .int()
     .optional()
-    .describe("SVG font-weight (100–900). Defaults per region (600; 500 for affirmation)."),
+    .describe("SVG font-weight (100–900). Defaults per region (600; 500 for the quote)."),
   fill: z.string().optional().describe("Override colour. Defaults to the gold default."),
+  marker: z
+    .enum(["checkbox", "bullet"])
+    .optional()
+    .describe(
+      "Leading mark before the text (drawn, no font dependency): 'checkbox' for " +
+        "to-do items, 'bullet' for bulleted notes. The text is shifted past it.",
+    ),
 });
 
 // Calendar grid for the month region — the server computes each day's cell from
@@ -197,7 +205,10 @@ server.tool(
   "Write a shared page's gold ai.svg (atomically) and set its status. Provide EITHER " +
     "`regions` (structured — the server positions each line from the page's geometry; " +
     "preferred) OR `svg` (a full <svg> document you composed yourself). Sets status to " +
-    "'ready' by default so the app will composite it. Refuses any page outside Shared/.",
+    "'ready' by default so the app will composite it. Use `merge` to update only the named " +
+    "regions and keep the rest of the page; use `dryRun` to preview the result + fit " +
+    "warnings without writing. Returns non-fatal `warnings` for likely overflow. Refuses " +
+    "any page outside Shared/.",
   {
     page: z.string().describe('Relative page path, e.g. "Shared/Daily/2026-02-06".'),
     regions: z
@@ -205,7 +216,7 @@ server.tool(
         z.object({
           region: z
             .string()
-            .describe('Region name from read_page, e.g. "schedule", "todo", "affirmation".'),
+            .describe('Region name from read_page, e.g. "schedule", "todo", "quote".'),
           lines: z
             .array(lineSchema)
             .optional()
@@ -228,9 +239,21 @@ server.tool(
       .enum(["empty", "refreshing", "ready"])
       .default("ready")
       .describe("AI-layer status to set after writing. 'ready' makes the app show it."),
+    merge: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Patch only the named regions into the existing ai.svg, preserving every other " +
+          "region (e.g. slide a new meeting into the schedule without clearing the to-dos). " +
+          "Structured `regions` only — not valid with raw `svg`.",
+      ),
+    dryRun: z
+      .boolean()
+      .default(false)
+      .describe("Compose and return the result + warnings WITHOUT writing or changing status."),
   },
   { idempotentHint: true },
-  async ({ page, regions, svg, status }) => {
+  async ({ page, regions, svg, status, merge, dryRun }) => {
     try {
       if ((regions && svg) || (!regions && !svg)) {
         return {
@@ -238,8 +261,14 @@ server.tool(
           isError: true as const,
         };
       }
+      if (merge && svg) {
+        return {
+          ...text("`merge` is only supported with structured `regions`, not raw `svg`."),
+          isError: true as const,
+        };
+      }
       const root = await requireLibrary();
-      const res = await writeUnderlay(root, page, { regions, svg, status });
+      const res = await writeUnderlay(root, page, { regions, svg, status, merge, dryRun });
       return json({ ok: true, ...res });
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {
@@ -299,9 +328,11 @@ server.tool(
 // --- create_page ---
 server.tool(
   "create_page",
-  "Create a new shared page (e.g. tomorrow's daily) by cloning template.svg from a sibling " +
-    "page in the same chapter, writing manifest + empty layers + media/, and adding it to the " +
-    "chapter order. Prefer letting the user create pages in the app; use this only when asked.",
+  "Create a new shared page (e.g. tomorrow's daily). The template comes from a sibling page " +
+    "in the same chapter when one exists; otherwise it's instantiated from the top-level " +
+    "Templates/ catalogue by id (`template`), so a brand-new/empty chapter can still be seeded. " +
+    "Writes manifest + layers + media/ and adds it to the chapter order. Prefer letting the " +
+    "user create pages in the app; use this only when asked.",
   {
     chapter: z.string().describe('Chapter name under Shared/, e.g. "Daily".'),
     name: z
@@ -311,7 +342,10 @@ server.tool(
     template: z
       .string()
       .optional()
-      .describe('Require the cloned sibling to use this template, e.g. "daily". Optional.'),
+      .describe(
+        'Catalogue template id, e.g. "daily-minimal". Used to seed an empty chapter from the ' +
+          "Templates/ catalogue, and to require a matching template when cloning a sibling.",
+      ),
   },
   async ({ chapter, name, title, template }) => {
     try {

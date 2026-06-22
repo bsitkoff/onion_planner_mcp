@@ -70,15 +70,24 @@ async function main() {
 
     case "write_underlay": {
       if (!args[0]) throw new Error("write_underlay needs a page path.");
-      // arg[1] is a JSON object: { regions?, svg?, status? }
+      // arg[1] is a JSON object: { regions?, svg?, status?, merge?, dryRun? }
       const body = parseJson(args[1], "write body");
       const status: AiStatus = body.status ?? "ready";
       if ((body.regions && body.svg) || (!body.regions && !body.svg)) {
         throw new Error("Provide exactly one of `regions` or `svg` in the JSON body.");
       }
+      if (body.merge && body.svg) {
+        throw new Error("`merge` is only supported with structured `regions`, not raw `svg`.");
+      }
       return out({
         ok: true,
-        ...(await writeUnderlay(root, args[0], { regions: body.regions, svg: body.svg, status })),
+        ...(await writeUnderlay(root, args[0], {
+          regions: body.regions,
+          svg: body.svg,
+          status,
+          merge: body.merge,
+          dryRun: body.dryRun,
+        })),
       });
     }
 

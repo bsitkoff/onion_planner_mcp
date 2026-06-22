@@ -91,6 +91,40 @@ export interface CalendarSpec {
   fill?: string;
 }
 
+/** Where to place an image within its region's box. */
+export type ImageCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right" | "center";
+
+/**
+ * An AI-owned image placed into a region. The caller passes `data` (base64) +
+ * `format`; `page.ts` validates/sizes it, writes it to the page's `media/ai/`
+ * folder, and fills in `href` + the resolved `width`/`height` before this reaches
+ * `composeAiSvg`, which only reads the resolved fields.
+ */
+export interface ImageInput {
+  /** Base64-encoded image bytes (caller-supplied). */
+  data?: string;
+  /** Encoding of `data`. */
+  format?: "png" | "jpeg";
+  /** Stable filename stem; defaults to a content hash. Sanitized in page.ts. */
+  name?: string;
+  /** Display width in region-local units (required). */
+  width?: number;
+  /** Display height; omitted = preserve aspect from the decoded image. */
+  height?: number;
+  /** Region-local x (overrides `corner`). */
+  x?: number;
+  /** Region-local y (overrides `corner`). */
+  y?: number;
+  /** Placement within the region box (default `center`). Ignored if x/y set. */
+  corner?: ImageCorner;
+  /** Inset from the region edge for corner placement (default 8). */
+  margin?: number;
+  /** Image opacity, 0–1. */
+  opacity?: number;
+  /** Resolved by page.ts: the `media/ai/<file>` reference written into ai.svg. */
+  href?: string;
+}
+
 export interface RegionInput {
   /** Region name from read_page, e.g. "schedule", "todo", "quote". */
   region: string;
@@ -98,6 +132,8 @@ export interface RegionInput {
   lines?: LineInput[];
   /** Calendar grid (the month region). Mutually exclusive with `lines`. */
   calendar?: CalendarSpec;
+  /** AI-owned images placed in this region (written to `media/ai/`). */
+  images?: ImageInput[];
   /**
    * Clock hour (0–23) of ruled row 0 — anchors `line.time` to the grid. No
    * template carries hour labels, so the caller supplies this; without it, a
@@ -214,6 +250,77 @@ function markerFragment(
     svg: `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}"/>`,
     advance: 2 * r + Math.round(size * 0.4),
   };
+}
+
+/** Intrinsic pixel dimensions of an encoded image. */
+export interface ImageDims {
+  width: number;
+  height: number;
+}
+
+const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/**
+ * Read an image's intrinsic dimensions from its header, validating the magic
+ * bytes against the declared `format` along the way (so a mislabeled or corrupt
+ * buffer is rejected before it's written). PNG reads the IHDR; JPEG scans for the
+ * first SOF marker. Throws on an invalid/unsupported buffer.
+ */
+export function imageDims(buf: Uint8Array, format: "png" | "jpeg"): ImageDims {
+  if (format === "png") {
+    if (buf.length < 24 || !PNG_SIG.every((b, i) => buf[i] === b)) {
+      throw new Error("image data is not a valid PNG (bad signature).");
+    }
+    const rd = (o: number) =>
+      ((buf[o] << 24) | (buf[o + 1] << 16) | (buf[o + 2] << 8) | buf[o + 3]) >>> 0;
+    return { width: rd(16), height: rd(20) }; // IHDR width/height, big-endian
+  }
+  if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) {
+    throw new Error("image data is not a valid JPEG (bad SOI marker).");
+  }
+  let o = 2;
+  while (o + 9 < buf.length) {
+    if (buf[o] !== 0xff) {
+      o++;
+      continue;
+    }
+    const marker = buf[o + 1];
+    const len = (buf[o + 2] << 8) | buf[o + 3];
+    // SOF0–SOF15 carry dimensions, except the non-frame markers C4/C8/CC.
+    const isSOF =
+      marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isSOF) {
+      return { width: (buf[o + 7] << 8) | buf[o + 8], height: (buf[o + 5] << 8) | buf[o + 6] };
+    }
+    o += 2 + len;
+  }
+  throw new Error("could not read JPEG dimensions.");
+}
+
+/** Region-local placement of an image from its corner/margin (or explicit x/y). */
+function placeImage(region: Region, img: ImageInput): { x: number; y: number } {
+  if (img.x !== undefined || img.y !== undefined) {
+    return { x: Math.round(img.x ?? 0), y: Math.round(img.y ?? 0) };
+  }
+  const margin = img.margin ?? 8;
+  const W = region.width;
+  const H = region.height;
+  const w = img.width ?? 0;
+  const h = img.height ?? 0;
+  if (W === null || H === null) return { x: margin, y: margin }; // no box → top-left inset
+  switch (img.corner ?? "center") {
+    case "top-left":
+      return { x: margin, y: margin };
+    case "top-right":
+      return { x: Math.round(W - w - margin), y: margin };
+    case "bottom-left":
+      return { x: margin, y: Math.round(H - h - margin) };
+    case "bottom-right":
+      return { x: Math.round(W - w - margin), y: Math.round(H - h - margin) };
+    case "center":
+    default:
+      return { x: Math.round((W - w) / 2), y: Math.round((H - h) / 2) };
+  }
 }
 
 /** Pixels below a ruled line to drop the text baseline, from the row pitch. */
@@ -405,6 +512,26 @@ export function composeAiSvg(
     parts.push(
       `  <g transform="translate(${region.x},${region.y})" data-region="${region.name}">`,
     );
+    // Images paint first (background); text/calendar lands on top.
+    for (const img of input.images ?? []) {
+      if (!img.href || !img.width || !img.height) continue;
+      const { x, y } = placeImage(region, img);
+      const op = img.opacity !== undefined ? ` opacity="${img.opacity}"` : "";
+      parts.push(
+        `    <image href="${escapeXml(img.href)}" x="${x}" y="${y}" ` +
+          `width="${img.width}" height="${img.height}"${op}/>`,
+      );
+      if (
+        region.width !== null &&
+        region.height !== null &&
+        (x < 0 || y < 0 || x + img.width > region.width || y + img.height > region.height)
+      ) {
+        warnings.push(
+          `region "${region.name}": image (${img.width}×${img.height}) may extend past ` +
+            `the ${region.width}×${region.height} region box.`,
+        );
+      }
+    }
     if (input.calendar) {
       parts.push(...composeCalendar(region, input.calendar));
     } else {

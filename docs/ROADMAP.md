@@ -20,8 +20,9 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
 
 ### Invariants every item must respect
 
-- Only ever write `ai.svg` + the manifest's `layers.ai` block (+ `modified`); on create, the
-  new page's own files + chapter `.folder.json`. Never touch ink/stickers/template/Private.
+- Only ever write `ai.svg` + the manifest's `layers.ai` block (+ `modified`) + the page's
+  **`media/ai/`** subfolder (AI-owned art); on create, the new page's own files + chapter
+  `.folder.json`. Never touch ink/stickers/template, the rest of `media/`, or Private.
 - All writes through `resolvePageRel` (Shared/ containment) + `atomicWrite`.
 - No network. Re-read `manifest.size` per page; geometry comes from each page's template.
 - Closed font set (`Mulish, Newsreader, IBM Plex Mono, Caveat, Fredoka, Phosphor`).
@@ -57,6 +58,19 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
   Precedence `y > row > time > order`; a `time` with no `startHour` warns and falls back to
   order (overnight-safe), and a time outside the grid pins to the nearest edge with a warning.
   `rowForTime` in `svg.ts`.
+- **Phase 2.2 — embed generated images**: a region may carry `images` — base64 PNG/JPEG the
+  caller supplies (this server has no network/generation). Investigating the **app's renderer**
+  set the mechanism: it's a custom SwiftUI Canvas parser that resolves `<image href>` only as a
+  **page-relative file path** (`MediaCache`, decoded via `CGImageSource`, cached by URL#mtime),
+  with **no data-URI support**. So the server writes art into a dedicated **`media/ai/`**
+  subfolder and references it by href — ai.svg stays tiny, art syncs once over iCloud. Per
+  image: validated magic bytes vs `format`, a 2MB hard cap (+soft warn), aspect-filled height,
+  corner/x-y placement within the region box, content-hash filenames. **Orphan GC** drops any
+  `media/ai/*` no longer referenced by the final (post-merge) ai.svg; `clear_underlay` removes
+  the folder. `resolveImages`/`gcOrphanMedia` in `page.ts`, `imageDims`/`<image>` emission in
+  `svg.ts`. **Invariant extended:** the server may now also write/delete under `media/ai/`
+  (never the rest of `media/`, never user layers). **App contract** (one blocking change: give
+  the AI layer a real `imageProvider`) lives in the plan + app thread. Smoke +13 (84 total).
 - **Phase 2.5 — auto text-wrap**: opt-in `wrap: true` per line breaks the text to the region
   width (greedy word-pack reusing the Phase-1 `estimateTextWidth`; hard-break for an over-long
   word). Continuation segments stack just below the baseline and **do not consume the next
@@ -77,11 +91,13 @@ The "umbrella in the corner." `Phosphor` is in `FONT_ENUM` but otherwise unused.
 ships the Phosphor cut; drawn-shape fallback otherwise. (Markers already prove the
 drawn-shape path.)
 
-### 2.2 Embed generated images into `ai.svg` · Effort M · Feasibility MEDIUM
-The "motivational sticker" placed into the layer we own: emit `<image href="data:…">` with
-corner/x-y placement. The `Stickers/` catalogue now ships real PNG marks (`star.png`,
-`note.png`, …) — those are concrete assets to embed. **Needs** confirmation the app renderer
-honors `<image>`/data-URIs; data-URIs bloat `ai.svg` (every byte syncs over iCloud) — cap size.
+### 2.2 Embed generated images into `ai.svg` — ✅ shipped (see Done above)
+A region may carry `images` (base64 art the caller supplies). **Design settled by reading the
+app:** the renderer resolves `<image href>` only as a **file path relative to the page folder**
+(`MediaCache`), with **no data-URI support** — so the server writes art to a page-owned
+`media/ai/` folder and references it by href, keeping ai.svg tiny and avoiding base64 iCloud
+bloat. Data-URIs were the wrong call. The one app change required: give the AI layer a real
+`imageProvider` (today it's `{ _ in nil }`) — see the contract in the plan / app thread.
 
 ### 2.3 Time-aware schedule input — ✅ shipped (see Done above)
 Schedule lines take `time: "HH:MM"`; snapped to the nearest ruled row via per-region
@@ -129,13 +145,17 @@ ruled row. Vertical-fit warning replaces the width-overflow warning when wrappin
 
 ## App-side unknowns to confirm before Phase 2
 
-1. Does the app's compositor honor `<image>` + data-URIs in `ai.svg`? (gates 2.2)
-2. Does the app ship a Phosphor font cut and honor `font-weight`? (gates 2.1)
+1. ~~Does the app honor `<image>` + data-URIs?~~ Resolved (2.2): the renderer takes
+   **page-relative file paths only, no data-URIs** — so we write to `media/ai/` and href it.
+   The one app change needed: give the AI layer a real `imageProvider` (currently `{ _ in nil }`).
+2. Does the app ship a Phosphor font cut and honor `font-weight`? **font-weight: confirmed**
+   (Mulish/Newsreader are variable fonts the renderer weights). Phosphor cut: bundled
+   (`Phosphor.ttf`) — but no decoration feature is built, so this is informational.
 3. ~~How is schedule hour-anchoring encoded?~~ Resolved (2.3): no template carries hour
    labels, so the caller passes `startHour` + `rowsPerHour`. No app dependency.
 
 ## Verification
 
-`npm run smoke` (self-seeding e2e, 71 checks) · `npm run call -- <tool> [args]` (drive a
+`npm run smoke` (self-seeding e2e, 84 checks) · `npm run call -- <tool> [args]` (drive a
 tool in a fresh process) · `npx tsc --noEmit`. Keep the smoke test deriving coordinates and
 region names from parsed geometry — the fixtures keep changing.

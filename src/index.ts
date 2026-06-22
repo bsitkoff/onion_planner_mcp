@@ -232,15 +232,46 @@ const calendarSchema = z.object({
   fill: z.string().optional().describe("Override gold for the day numbers."),
 });
 
+// An AI-owned image placed in a region — the caller supplies the bytes (base64);
+// the server writes them to the page's media/ai/ folder and references them by href.
+const imageSchema = z.object({
+  data: z
+    .string()
+    .describe(
+      "Base64-encoded image bytes. The caller supplies the art — this server has no " +
+        "network and generates nothing. Keep it small (≤1536px JPEG); there is a 2MB cap.",
+    ),
+  format: z.enum(["png", "jpeg"]).describe("Encoding of `data` (png keeps alpha; jpeg for photos)."),
+  name: z
+    .string()
+    .optional()
+    .describe("Stable filename stem — re-writing the same name replaces the image. Defaults to a content hash."),
+  width: z.number().positive().describe("Display width in region-local units."),
+  height: z
+    .number()
+    .positive()
+    .optional()
+    .describe("Display height; omit to preserve the image's aspect ratio."),
+  x: z.number().optional().describe("Region-local x. Overrides `corner`."),
+  y: z.number().optional().describe("Region-local y. Overrides `corner`."),
+  corner: z
+    .enum(["top-left", "top-right", "bottom-left", "bottom-right", "center"])
+    .optional()
+    .describe("Placement within the region box (default center). Ignored if x/y are set."),
+  margin: z.number().optional().describe("Inset from the region edge for corner placement (default 8)."),
+  opacity: z.number().min(0).max(1).optional().describe("Image opacity, 0–1."),
+});
+
 server.tool(
   "write_underlay",
   "Write a shared page's gold ai.svg (atomically) and set its status. Provide EITHER " +
     "`regions` (structured — the server positions each line from the page's geometry; " +
-    "preferred) OR `svg` (a full <svg> document you composed yourself). Sets status to " +
-    "'ready' by default so the app will composite it. Use `merge` to update only the named " +
-    "regions and keep the rest of the page; use `dryRun` to preview the result + fit " +
-    "warnings without writing. Returns non-fatal `warnings` for likely overflow. Refuses " +
-    "any page outside Shared/.",
+    "preferred) OR `svg` (a full <svg> document you composed yourself). A region may also " +
+    "carry `images` (base64 art the server writes to the page's media/ai/ folder and " +
+    "references from ai.svg). Sets status to 'ready' by default so the app will composite " +
+    "it. Use `merge` to update only the named regions and keep the rest of the page; use " +
+    "`dryRun` to preview the result + fit warnings without writing. Returns non-fatal " +
+    "`warnings` for likely overflow. Refuses any page outside Shared/.",
   {
     page: z.string().describe('Relative page path, e.g. "Shared/Daily/2026-02-06".'),
     regions: z
@@ -258,6 +289,13 @@ server.tool(
             .describe(
               "Calendar grid for the month region — emits day numbers + data-date tap " +
                 "targets from the template grid. Mutually exclusive with `lines`.",
+            ),
+          images: z
+            .array(imageSchema)
+            .optional()
+            .describe(
+              "AI-owned images to place in this region. Written to the page's media/ai/ " +
+                "folder and referenced from ai.svg; the app renders them under stickers + ink.",
             ),
           startHour: z
             .number()

@@ -293,6 +293,57 @@ async function main() {
   const afterFuture = await listPageRows(root, { modifiedAfter: "2999-01-01" });
   check("modifiedAfter far-future excludes everything", afterFuture.length === 0, String(afterFuture.length));
 
+  console.log("\nwrite_underlay images → media/ai/ (file-relative, GC, validation)");
+  const PNG_1x1 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg==";
+  const exists = (p: string) => fs.access(p).then(() => true).catch(() => false);
+  const imgPage = "Shared/Daily/2026-06-24";
+  await createPage(root, { chapter: "Daily", name: "2026-06-24", title: "Wednesday" });
+  await writeUnderlay(root, imgPage, {
+    status: "ready",
+    regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "motivation", width: 120, corner: "center" }] }],
+  });
+  const imgAi = await fs.readFile(path.join(root, imgPage, "ai.svg"), "utf8");
+  const imgFile = path.join(root, imgPage, "media", "ai", "motivation.png");
+  check("ai.svg references the media/ai image", imgAi.includes('href="media/ai/motivation.png"'), imgAi.slice(0, 200));
+  check("height filled from aspect (1×1 → 120²)", /width="120" height="120"/.test(imgAi), imgAi);
+  check("image file written under media/ai/", await exists(imgFile));
+  check("written bytes equal the decoded base64", (await fs.readFile(imgFile)).equals(Buffer.from(PNG_1x1, "base64")));
+
+  // Orphan GC: re-write the page without the image → its file is removed.
+  await writeUnderlay(root, imgPage, { status: "ready", regions: [{ region: "notes", lines: [{ text: "no image now" }] }] });
+  check("orphan GC removed the now-unreferenced image", !(await exists(imgFile)));
+
+  // merge preserves another region's image + its file.
+  await writeUnderlay(root, imgPage, { status: "ready", regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "keep", width: 50 }] }] });
+  await writeUnderlay(root, imgPage, { status: "ready", merge: true, regions: [{ region: "schedule", lines: [{ text: "8:00 keep me", row: 0 }] }] });
+  const mergedImgAi = await fs.readFile(path.join(root, imgPage, "ai.svg"), "utf8");
+  check("merge keeps the other region's image ref", mergedImgAi.includes('href="media/ai/keep.png"'));
+  check("merge kept the image file (not GC'd)", await exists(path.join(root, imgPage, "media", "ai", "keep.png")));
+
+  // clear_underlay removes the whole media/ai folder.
+  await clearUnderlay(root, imgPage);
+  check("clear removed media/ai entirely", !(await exists(path.join(root, imgPage, "media", "ai"))));
+
+  // dryRun composes the href but writes no file.
+  const dryImg = await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "dry", width: 40 }] }] });
+  check("dryRun composes the image href", dryImg.aiSvg.includes('href="media/ai/dry.png"'));
+  check("dryRun wrote no media file", !(await exists(path.join(root, imgPage, "media", "ai", "dry.png"))));
+
+  // Validation: format/magic mismatch, oversize, traversal name.
+  let badFormat = false;
+  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "jpeg", width: 40 }] }] }); } catch { badFormat = true; }
+  check("rejects a format/magic-byte mismatch", badFormat);
+  let oversize = false;
+  const big = Buffer.alloc(2 * 1024 * 1024 + 10, 1).toString("base64");
+  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: big, format: "png", width: 40 }] }] }); } catch { oversize = true; }
+  check("rejects an oversize image (>2MB)", oversize);
+  const travAi = (await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "../../evil", width: 40 }] }] })).aiSvg;
+  const travHref = travAi.match(/href="[^"]*"/)?.[0] ?? "";
+  const travBase = travHref.replace(/^href="media\/ai\//, "").replace(/"$/, "");
+  // Safe = stays under media/ai/: no slash in the filename, no leading dot (no `../`).
+  check("sanitizes a traversal filename", travHref.startsWith('href="media/ai/') && !travBase.includes("/") && !travBase.startsWith("."), travHref);
+
   console.log("\nNEGATIVE: refuse Private + traversal");
   let refusedPrivate = false;
   try {

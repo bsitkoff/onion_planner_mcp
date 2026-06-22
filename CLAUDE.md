@@ -58,8 +58,8 @@ to exercise the MCP transport itself.
 | `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under `Shared/`, no traversal). |
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
-| `src/svg.ts` | Compose `ai.svg` from structured region input (text lines + the `calendar` grid); gold default `GOLD` (`#9C7C1A`); per-region font/size/weight defaults. |
-| `src/page.ts` | Read a page, **atomic** ai.svg writes, manifest status flips, `create_page`. |
+| `src/svg.ts` | Compose `ai.svg` from structured region input (text lines, `calendar` grid, `<image>` placement); `imageDims` header parse; gold default `GOLD` (`#9C7C1A`); per-region font/size/weight defaults. |
+| `src/page.ts` | Read a page, **atomic** ai.svg + `media/ai/` image writes (`resolveImages`/`gcOrphanMedia`), manifest status flips, `create_page`. |
 
 The 7 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`,
 `write_underlay`, `set_underlay_status`, `clear_underlay`, `create_page`. Only the last four
@@ -98,6 +98,16 @@ existing `ai.svg` (parsing its `<g data-region>` blocks, replacing matches, keep
 **`dryRun`** composes and returns the result + warnings without writing or flipping status.
 `merge` is structured-input only (rejected with raw `svg`).
 
+A region entry may also carry **`images`** — base64 PNG/JPEG art the caller supplies (this
+server has no network/generation). The app's renderer resolves `<image href>` only as a
+**page-relative file path** (no data-URIs), so `page.ts:resolveImages` validates the bytes
+(magic vs `format`, 2MB cap), writes them to the page's **`media/ai/`** folder, and rewrites
+the `<image href="media/ai/…">` into the region group; `svg.ts:imageDims` reads intrinsic size
+(aspect-fills an omitted height). Placement is region-local via `corner`/`x`/`y`. After each
+write, `gcOrphanMedia` deletes any `media/ai/*` the final (post-merge) ai.svg no longer
+references; `clear_underlay` removes the folder. Images ride inside their region's `<g>`, so
+`merge` preserves them with the region.
+
 A region entry may instead carry a **`calendar`** spec (`{ month: "YYYY-MM", days?: [...] }`)
 in place of `lines` — used for the gridded `month` region. `svg.composeCalendar` derives each
 day's cell via `gridBounds` (an even division of the region box by `data-cols`/`data-rows`,
@@ -116,9 +126,10 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
 
 ## Invariants (do not break)
 
-- **Only ever write** `ai.svg` and the manifest's `layers.ai` block (+ top-level
-  `modified`); on create, the new page's own files + the chapter `.folder.json` order.
-  Never touch `ink.svg`, `stickers.svg`, `template.svg`, or anything under `Private/`.
+- **Only ever write** `ai.svg`, the manifest's `layers.ai` block (+ top-level `modified`),
+  and the page's **`media/ai/`** subfolder (AI-owned images — written + garbage-collected
+  here); on create, the new page's own files + the chapter `.folder.json` order. Never touch
+  `ink.svg`, `stickers.svg`, `template.svg`, the rest of `media/`, or anything under `Private/`.
 - All writes go through `resolvePageRel` (enforces `Shared/` containment) and `atomicWrite`
   (temp + rename).
 - **Re-read `manifest.size` per page** — never assume `1024×1366`. The geometry comes from
@@ -143,8 +154,16 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
   defaults in `svg.ts` (`REGION_DEFAULTS`) encode that. Don't introduce other font families.
 - **Legibility:** the gold default was deepened (`#C9A227 → #9C7C1A`) and text carries a
   `font-weight` (per-region default 600, 500 for the serif `quote`; per-line `weight` override).
-  The brand gold lives in the app's `FORMAT.md`; keep the server's `GOLD` constant in sync with
-  it. `font-weight` only helps if the app renderer honours it and ships heavier font cuts.
+  `font-weight` is **confirmed honoured** — the app's `Mulish`/`Newsreader` are variable fonts
+  the renderer weights at runtime. The app's authoritative brand gold is still `#C9A227`
+  (`colors.css`, `Palette.swift`, `FORMAT.md`); the server's deepened `#9C7C1A` is an
+  intentional divergence — reconcile only on Bridget's call (don't silently re-sync).
+- **The app renderer is a custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit):
+  it handles `svg, g, rect, line, path, text, image` and silently drops anything else (it has
+  no `<circle>` today — the shipped `bullet` marker emits one and the app team is adding
+  support). `<image href>` resolves **only as a page-relative file path** (no data-URIs) and
+  the **AI layer needs a non-nil `imageProvider`** (an app change) for images to appear at all.
+  When emitting raw `svg`, stay within that element set.
 - The ai layer has a 3-state status (`empty → refreshing → ready`) in `manifest.layers.ai`;
   the app only composites `ready`. `write_underlay` sets `ready` by default. Use `refreshing`
   before a long multi-step edit so a half-built page never shows.

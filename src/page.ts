@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { resolvePageRel } from "./paths.js";
 import { parseRegions, parseViewBox, type Region } from "./template.js";
-import { composeAiSvg, mergeRegions, emptySvg, type RegionInput } from "./svg.js";
+import { composeAiSvg, mergeRegions, emptySvg, imageDims, type RegionInput } from "./svg.js";
 
 export type AiStatus = "empty" | "refreshing" | "ready";
 
@@ -25,10 +26,98 @@ function nowIso(): string {
 
 let tmpCounter = 0;
 /** Write a file atomically: temp sibling + rename, so no reader sees a partial file. */
-async function atomicWrite(absFile: string, content: string): Promise<void> {
+async function atomicWrite(absFile: string, content: string | Uint8Array): Promise<void> {
   const tmp = `${absFile}.tmp-${process.pid}-${tmpCounter++}`;
-  await fs.writeFile(tmp, content, "utf8");
+  await fs.writeFile(tmp, content); // string defaults to utf8; Uint8Array writes bytes
   await fs.rename(tmp, absFile);
+}
+
+/** AI-owned image storage, per page — only the server writes/cleans this subtree. */
+const MEDIA_AI = path.join("media", "ai");
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // hard cap per image (iCloud-sync hygiene)
+const WARN_IMAGE_BYTES = 512 * 1024; // soft warning threshold
+
+/** Filename stem safe to join under media/ai/ (no slashes, traversal, or leading dots). */
+function sanitizeName(name: string): string {
+  const base = name.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "");
+  return base.length ? base : "img";
+}
+
+/**
+ * Decode, validate, size, and (unless dryRun) write each region's images into the
+ * page's `media/ai/` folder, mutating each `ImageInput` in place with its resolved
+ * `href`/`width`/`height` so `composeAiSvg` can reference it. Returns soft warnings.
+ */
+async function resolveImages(
+  pageAbs: string,
+  regions: RegionInput[],
+  dryRun: boolean,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  const mediaAiAbs = path.join(pageAbs, MEDIA_AI);
+  for (const region of regions) {
+    for (const img of region.images ?? []) {
+      if (!img.data || !img.format) {
+        throw new Error(`image in region "${region.region}" needs both \`data\` (base64) and \`format\`.`);
+      }
+      if (img.width === undefined || img.width <= 0) {
+        throw new Error(`image in region "${region.region}" needs a positive \`width\`.`);
+      }
+      const buf = Buffer.from(img.data, "base64");
+      if (buf.length === 0) {
+        throw new Error(`image in region "${region.region}" has empty or invalid base64 data.`);
+      }
+      if (buf.length > MAX_IMAGE_BYTES) {
+        throw new Error(
+          `image in region "${region.region}" is ${buf.length} bytes — over the ` +
+            `${MAX_IMAGE_BYTES}-byte cap. Downscale it (≤1536px JPEG) before sending.`,
+        );
+      }
+      if (buf.length > WARN_IMAGE_BYTES) {
+        warnings.push(
+          `region "${region.region}": image is ${Math.round(buf.length / 1024)}KB — large for ` +
+            `iCloud sync; consider downscaling.`,
+        );
+      }
+      const dims = imageDims(buf, img.format); // also validates the magic bytes
+      const width = img.width;
+      const height = img.height ?? Math.round((width * dims.height) / dims.width);
+      const ext = img.format === "jpeg" ? "jpg" : "png";
+      const stem = sanitizeName(img.name ?? createHash("sha256").update(buf).digest("hex").slice(0, 16));
+      const file = `${stem}.${ext}`;
+
+      img.href = `${MEDIA_AI.split(path.sep).join("/")}/${file}`; // forward-slash href
+      img.width = width;
+      img.height = height;
+
+      if (!dryRun) {
+        const fileAbs = path.join(mediaAiAbs, file);
+        if (fileAbs !== path.join(mediaAiAbs, path.basename(fileAbs))) {
+          throw new Error("resolved image path escapes media/ai.");
+        }
+        await fs.mkdir(mediaAiAbs, { recursive: true });
+        await atomicWrite(fileAbs, buf);
+      }
+    }
+  }
+  return warnings;
+}
+
+/** Delete any file in `media/ai/` not referenced by an href in the final ai.svg. */
+async function gcOrphanMedia(pageAbs: string, svg: string): Promise<void> {
+  const mediaAiAbs = path.join(pageAbs, MEDIA_AI);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(mediaAiAbs);
+  } catch {
+    return; // no media/ai folder → nothing to GC
+  }
+  const refs = new Set([...svg.matchAll(/href="media\/ai\/([^"]+)"/g)].map((m) => m[1]));
+  for (const f of entries) {
+    if (!refs.has(f)) {
+      await fs.rm(path.join(mediaAiAbs, f), { force: true }).catch(() => {});
+    }
+  }
 }
 
 async function readJson<T>(absFile: string): Promise<T> {
@@ -145,11 +234,14 @@ export async function writeUnderlay(
     }
     svg = opts.svg.trim() + "\n";
   } else if (opts.regions) {
+    // Resolve images first (writes media/ai/ files, fills each image's href) so the
+    // composed ai.svg never references a file that isn't on disk yet.
+    const imageWarnings = await resolveImages(abs, opts.regions, opts.dryRun ?? false);
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg) : [];
     const size = pageSize(manifest, templateSvg);
     const composed = composeAiSvg(size, opts.regions, regions);
-    warnings = composed.warnings;
+    warnings = [...composed.warnings, ...imageWarnings];
     if (opts.merge) {
       const existing = await readIfExists(path.join(abs, "ai.svg"));
       svg = mergeRegions(existing, composed.svg, size);
@@ -166,6 +258,8 @@ export async function writeUnderlay(
   }
 
   await atomicWrite(path.join(abs, "ai.svg"), svg);
+  // Drop any AI image no longer referenced by the final (possibly merged) ai.svg.
+  await gcOrphanMedia(abs, svg);
   await patchManifestStatus(abs, opts.status);
   return { page: rel, status: opts.status, bytes, aiSvg: svg, warnings, dryRun: false };
 }
@@ -181,13 +275,15 @@ export async function setStatus(
   await patchManifestStatus(abs, status);
 }
 
-/** Reset ai.svg to empty and status to "empty". */
+/** Reset ai.svg to empty and status to "empty", and drop AI-owned media. */
 export async function clearUnderlay(root: string, rel: string): Promise<void> {
   const abs = resolvePageRel(root, rel);
   const manifest = await readJson<Manifest>(path.join(abs, "manifest.json"));
   const templateSvg = await readIfExists(path.join(abs, "template.svg"));
   const size = pageSize(manifest, templateSvg);
   await atomicWrite(path.join(abs, "ai.svg"), emptySvg(size));
+  // Remove the AI image folder — these assets belong to the now-cleared ai layer.
+  await fs.rm(path.join(abs, MEDIA_AI), { recursive: true, force: true }).catch(() => {});
   await patchManifestStatus(abs, "empty");
 }
 

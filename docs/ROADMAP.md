@@ -49,6 +49,22 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
   **full-text / handwriting search is the intended follow-on** — a future `textContains` over
   OCR'd `ink.svg` slots in as one more guard behind its own data source (not the manifest),
   without reshaping the tool. Smoke test +8 checks (60 total).
+- **Phase 2.3 — time-aware schedule input**: a schedule line may carry `time: "HH:MM"` (24h)
+  and the server snaps it to the nearest ruled row, so the caller needn't compute row indices.
+  The "decide before building" open question is **resolved by exploration**: no daily/agenda
+  template carries hour labels (the schedule region is ruled `<line>`s only), so parsing is
+  impossible — anchoring is explicit via per-region `startHour` + `rowsPerHour` (default 1).
+  Precedence `y > row > time > order`; a `time` with no `startHour` warns and falls back to
+  order (overnight-safe), and a time outside the grid pins to the nearest edge with a warning.
+  `rowForTime` in `svg.ts`.
+- **Phase 2.5 — auto text-wrap**: opt-in `wrap: true` per line breaks the text to the region
+  width (greedy word-pack reusing the Phase-1 `estimateTextWidth`; hard-break for an over-long
+  word). Continuation segments stack just below the baseline and **do not consume the next
+  ruled row**, so a caller's row→content mapping is preserved. When wrapping, the width-overflow
+  warning is suppressed and replaced by a vertical-fit warning if the stacked block collides
+  with the next row or runs past the region box. `wrapText` in `svg.ts`. (Possible follow-up:
+  default-on for the free-text box regions `quote`/`notes`, where there's no row to disturb.)
+  Smoke test +11 checks (71 total).
 
 ---
 
@@ -67,11 +83,10 @@ corner/x-y placement. The `Stickers/` catalogue now ships real PNG marks (`star.
 `note.png`, …) — those are concrete assets to embed. **Needs** confirmation the app renderer
 honors `<image>`/data-URIs; data-URIs bloat `ai.svg` (every byte syncs over iCloud) — cap size.
 
-### 2.3 Time-aware schedule input · Effort M · Feasibility MEDIUM
-Pass `time: "HH:MM"` on schedule lines; map to the nearest ruled row, so the orchestrator
-needn't compute row indices. **Open dependency:** `parseRegions` reads `<line>` positions but
-not hour *labels*, so the server doesn't know "row 0 = 6am." Resolve with a `startHour` +
-`rowsPerHour` param, or extend the parser to read hour labels. Decide before building.
+### 2.3 Time-aware schedule input — ✅ shipped (see Done above)
+Schedule lines take `time: "HH:MM"`; snapped to the nearest ruled row via per-region
+`startHour` + `rowsPerHour`. The "read hour labels from the template" alternative was ruled
+out — no template carries them — so explicit anchoring is the design, not a parser change.
 
 ### 2.4 Search / filter pages — ✅ shipped (see Done above)
 Metadata filters live on `list_pages`. Remaining stretch: **full-text / handwriting search**
@@ -87,9 +102,10 @@ in this filesystem-only server. Leading alternative: app does the OCR and writes
 the manifest (or a sidecar) on the ink's lifecycle; server just reads it for `textContains`.
 Decide before building 2.4's full-text stretch.
 
-### 2.5 Auto text-wrap · Effort M · Feasibility MEDIUM
-Build on the overflow estimator: wrap long lines to region width instead of overflowing.
-Sequence after the estimator (already shipped in Phase 1).
+### 2.5 Auto text-wrap — ✅ shipped (see Done above)
+Opt-in `wrap: true` per line breaks long text to the region width (reusing the Phase-1
+overflow estimator), stacking continuations below the baseline without consuming the next
+ruled row. Vertical-fit warning replaces the width-overflow warning when wrapping.
 
 ---
 
@@ -115,10 +131,11 @@ Sequence after the estimator (already shipped in Phase 1).
 
 1. Does the app's compositor honor `<image>` + data-URIs in `ai.svg`? (gates 2.2)
 2. Does the app ship a Phosphor font cut and honor `font-weight`? (gates 2.1)
-3. How is schedule hour-anchoring encoded — parseable labels, or do we require a `startHour`? (gates 2.3)
+3. ~~How is schedule hour-anchoring encoded?~~ Resolved (2.3): no template carries hour
+   labels, so the caller passes `startHour` + `rowsPerHour`. No app dependency.
 
 ## Verification
 
-`npm run smoke` (self-seeding e2e, 60 checks) · `npm run call -- <tool> [args]` (drive a
+`npm run smoke` (self-seeding e2e, 71 checks) · `npm run call -- <tool> [args]` (drive a
 tool in a fresh process) · `npx tsc --noEmit`. Keep the smoke test deriving coordinates and
 region names from parsed geometry — the fixtures keep changing.

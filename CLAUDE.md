@@ -79,13 +79,17 @@ vertical). Those ruled lines are the writable "rows."
 
 `write_underlay`'s structured `regions` input is the normal path: `svg.composeAiSvg` looks
 up each region by name and places each line's baseline via `row` (snap to a ruled line +
-`~0.4 × row-pitch`), or explicit `y`, or — for boxes with no rules (e.g. `quote`, `notes`)
-— line-stacking / vertical-centering. A line may carry a `marker` (`checkbox`/`bullet`,
-drawn as a shape — no font dependency) before its text. So callers never compute
-coordinates; they reference a region name and a row index from `read_page`. An unknown
-region name throws (listing the valid ones). Raw `svg` bypasses all of this — full control,
-no geometry help. `composeAiSvg` returns `{ svg, warnings }`; the warnings flag likely
-overflow (text past the region rect, more lines than ruled rows) and surface in the
+`~0.4 × row-pitch`), or a clock `time` (`"HH:MM"` → nearest row, anchored by the region's
+`startHour` + `rowsPerHour` since no template carries hour labels), or explicit `y`, or —
+for boxes with no rules (e.g. `quote`, `notes`) — line-stacking / vertical-centering
+(precedence `y > row > time > order`). A line may carry a `marker` (`checkbox`/`bullet`,
+drawn as a shape — no font dependency) before its text, and `wrap: true` to break long text
+to the region width (continuations stack below the baseline without consuming the next ruled
+row). So callers never compute coordinates; they reference a region name and a row index from
+`read_page`. An unknown region name throws (listing the valid ones). Raw `svg` bypasses all
+of this — full control, no geometry help. `composeAiSvg` returns `{ svg, warnings }`; the
+warnings flag likely overflow (text past the region rect, more lines than ruled rows, a
+wrapped block that overruns its row, a `time` that can't be anchored) and surface in the
 `write_underlay` result — important because overnight/unattended writes have no human watching.
 
 Two `write_underlay` modifiers: **`merge`** patches only the named regions into the

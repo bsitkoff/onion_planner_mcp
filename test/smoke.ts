@@ -118,6 +118,65 @@ async function main() {
   check("manifest ai.status = ready", m2.layers.ai.status === "ready");
   check("manifest modified bumped", m2.modified !== before, `${before} -> ${m2.modified}`);
 
+  console.log("\ntime-aware schedule (time → nearest ruled row; dry-run)");
+  const yOf = (svg: string, needle: string) =>
+    Number((svg.split("\n").find((l) => l.includes(needle)) ?? "").match(/y="(\d+)"/)?.[1] ?? -1);
+  // startHour 8, rowsPerHour 1: "11:00" → row 3. Reuse the geometry-derived slots (rl).
+  const timed = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", startHour: 8, lines: [{ text: "11:00 mtg", time: "11:00" }] }],
+  });
+  const ty = yOf(timed.aiSvg, "11:00 mtg");
+  const er = 3;
+  check("time 11:00 (startHour 8) lands in the row-3 slot", ty > rl[er] && ty < (rl[er + 1] ?? rl[er] + 58), `y=${ty} expected in (${rl[er]}, ${rl[er + 1]})`);
+  // rowsPerHour 2: 09:30 sits one ruled row below 09:00.
+  const half = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", startHour: 9, rowsPerHour: 2, lines: [
+      { text: "nine", time: "09:00" }, { text: "ninethirty", time: "09:30" },
+    ] }],
+  });
+  check("rowsPerHour=2 puts 09:30 one row below 09:00", yOf(half.aiSvg, ">ninethirty</text>") > yOf(half.aiSvg, ">nine</text>"), `${yOf(half.aiSvg, ">nine</text>")} -> ${yOf(half.aiSvg, ">ninethirty</text>")}`);
+  // No startHour: time is ignored (warns), but the page still composes.
+  const noAnchor = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "floating", time: "10:00" }] }],
+  });
+  check("time without startHour warns", noAnchor.warnings.some((w) => w.includes("startHour")), JSON.stringify(noAnchor.warnings));
+  check("time without startHour still composes", noAnchor.aiSvg.includes(">floating</text>"));
+  // Malformed time is rejected.
+  let badTime = false;
+  try {
+    await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", startHour: 8, lines: [{ text: "x", time: "9am" }] }] });
+  } catch { badTime = true; }
+  check("rejects malformed time string", badTime);
+
+  console.log("\nauto text-wrap (wrap long lines to region width; dry-run)");
+  const longLine = "This is a very long schedule entry that will not fit on one line and must wrap";
+  const wrapped = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: longLine, row: 0, wrap: true }] }],
+  });
+  const wg = regionGroup(wrapped.aiSvg, "schedule") ?? "";
+  const segs = [...wg.matchAll(/<text\b[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  check("wrap splits a long line into multiple <text>", segs.length > 1, `segments=${segs.length}`);
+  check("every wrapped segment is shorter than the original", segs.length > 1 && segs.every((s) => s.length > 0 && s.length < longLine.length), JSON.stringify(segs));
+  check("wrapping suppresses the overflow warning", !wrapped.warnings.some((w) => w.includes("overflow")), JSON.stringify(wrapped.warnings));
+  // Same line WITHOUT wrap: a single <text> that still warns overflow.
+  const noWrap = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: longLine, row: 0 }] }],
+  });
+  const ng = regionGroup(noWrap.aiSvg, "schedule") ?? "";
+  check("no-wrap keeps a single <text>", (ng.match(/<text\b/g) ?? []).length === 1);
+  check("no-wrap still warns about overflow", noWrap.warnings.some((w) => w.includes("overflow")), JSON.stringify(noWrap.warnings));
+  // A block tall enough to run into the next row triggers the vertical-fit warning.
+  const tall = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: longLine.repeat(8), row: 0, wrap: true }] }],
+  });
+  check("wrapped block warns when it overruns the row", tall.warnings.some((w) => w.includes("overlap the next row")), JSON.stringify(tall.warnings));
+
   console.log("\noverflow warnings (dry-run, no write)");
   const longText = "This is an absurdly long line of text that cannot possibly fit the box".repeat(1);
   const overflow = await writeUnderlay(root, daily, {

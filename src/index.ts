@@ -170,6 +170,15 @@ const lineSchema = z.object({
       "Ruled-row index to align to (0-based), from the region's ruledLines. " +
         "For the schedule, row 0 is the first hour. Ignored if `y` is set.",
     ),
+  time: z
+    .string()
+    .optional()
+    .describe(
+      'Clock time "HH:MM" (24-hour) for schedule lines — the server snaps it to the ' +
+        "nearest ruled row using the region's `startHour`/`rowsPerHour`, so you needn't " +
+        "compute row indices. Ignored if `y` or `row` is set, or if the region has no " +
+        "`startHour`.",
+    ),
   y: z
     .number()
     .optional()
@@ -191,6 +200,13 @@ const lineSchema = z.object({
     .describe(
       "Leading mark before the text (drawn, no font dependency): 'checkbox' for " +
         "to-do items, 'bullet' for bulleted notes. The text is shifted past it.",
+    ),
+  wrap: z
+    .boolean()
+    .optional()
+    .describe(
+      "Wrap long text to the region width instead of overflowing. Continuation " +
+        "lines stack just below the baseline (they don't consume the next ruled row).",
     ),
 });
 
@@ -243,6 +259,21 @@ server.tool(
               "Calendar grid for the month region — emits day numbers + data-date tap " +
                 "targets from the template grid. Mutually exclusive with `lines`.",
             ),
+          startHour: z
+            .number()
+            .int()
+            .min(0)
+            .max(23)
+            .optional()
+            .describe(
+              "Clock hour (0–23) of ruled row 0 in this region — anchors each line's " +
+                "`time` to the grid. Required for `time` to take effect.",
+            ),
+          rowsPerHour: z
+            .number()
+            .positive()
+            .optional()
+            .describe("Ruled rows per hour (default 1; 2 = a half-hour grid). Anchors `time`."),
         }),
       )
       .optional()

@@ -37,6 +37,12 @@ export interface LineInput {
   text: string;
   /** Ruled-row index to align to (0-based). Ignored if `y` is given. */
   row?: number;
+  /**
+   * Clock time "HH:MM" (24-hour). Resolved to a ruled row via the region's
+   * `startHour`/`rowsPerHour` (nearest row). Ignored if `y` or `row` is given,
+   * or if the region has no ruled rows / no `startHour`.
+   */
+  time?: string;
   /** Explicit baseline y, local to the region's top-left. Overrides `row`. */
   y?: number;
   /** Local x offset from the region's left edge. Defaults to 24. */
@@ -52,6 +58,12 @@ export interface LineInput {
    * shapes (no font dependency).
    */
   marker?: LineMarker;
+  /**
+   * Wrap the text to the region width instead of overflowing. Continuation
+   * segments stack just below the baseline (they do NOT consume the next ruled
+   * row, so a caller's row→content mapping stays intact).
+   */
+  wrap?: boolean;
 }
 
 /** One day's optional event label + styling on a calendar grid. */
@@ -86,6 +98,14 @@ export interface RegionInput {
   lines?: LineInput[];
   /** Calendar grid (the month region). Mutually exclusive with `lines`. */
   calendar?: CalendarSpec;
+  /**
+   * Clock hour (0–23) of ruled row 0 — anchors `line.time` to the grid. No
+   * template carries hour labels, so the caller supplies this; without it, a
+   * line's `time` is ignored (placed by order instead).
+   */
+  startHour?: number;
+  /** Ruled rows per hour (default 1; 2 = a half-hour grid). Anchors `line.time`. */
+  rowsPerHour?: number;
 }
 
 function escapeXml(s: string): string {
@@ -114,6 +134,56 @@ const DEFAULT_CHAR_RATIO = 0.55;
 function estimateTextWidth(text: string, font: string, size: number): number {
   const ratio = CHAR_WIDTH_RATIO[font] ?? DEFAULT_CHAR_RATIO;
   return Math.round(text.length * size * ratio);
+}
+
+/**
+ * Map a clock time ("HH:MM", 24-hour) to a ruled-row index, given the hour at
+ * row 0 and how many rows cover an hour. Rounds to the nearest row. Throws on a
+ * malformed time string. The caller clamps/validates the resulting row range.
+ */
+function rowForTime(time: string, startHour: number, rowsPerHour: number): number {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time.trim());
+  if (!m) throw new Error(`time must be "HH:MM" (24-hour), got "${time}".`);
+  const minutesFromStart = (Number(m[1]) * 60 + Number(m[2])) - startHour * 60;
+  return Math.round((minutesFromStart / 60) * rowsPerHour);
+}
+
+/**
+ * Greedily break `text` into segments that each fit within `maxWidth` (per the
+ * width heuristic). A single over-long word is hard-broken at the character
+ * level so one token can't overflow. Returns `[text]` unchanged when it already
+ * fits or `maxWidth <= 0`.
+ */
+function wrapText(text: string, font: string, size: number, maxWidth: number): string[] {
+  if (maxWidth <= 0 || estimateTextWidth(text, font, size) <= maxWidth) return [text];
+  const words = text.split(/\s+/).filter((w) => w.length > 0);
+  const out: string[] = [];
+  let cur = "";
+  for (const word of words) {
+    const candidate = cur ? `${cur} ${word}` : word;
+    if (estimateTextWidth(candidate, font, size) <= maxWidth) {
+      cur = candidate;
+      continue;
+    }
+    if (cur) out.push(cur);
+    if (estimateTextWidth(word, font, size) > maxWidth) {
+      // Hard-break a word longer than the whole width.
+      let chunk = "";
+      for (const ch of word) {
+        if (chunk && estimateTextWidth(chunk + ch, font, size) > maxWidth) {
+          out.push(chunk);
+          chunk = ch;
+        } else {
+          chunk += ch;
+        }
+      }
+      cur = chunk;
+    } else {
+      cur = word;
+    }
+  }
+  if (cur) out.push(cur);
+  return out.length > 0 ? out : [text];
 }
 
 /**
@@ -347,30 +417,86 @@ export function composeAiSvg(
             `${region.ruledLines.length} ruled rows — extra lines may overflow.`,
         );
       }
+      const rowsPerHour = input.rowsPerHour && input.rowsPerHour > 0 ? input.rowsPerHour : 1;
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
         const font = line.font ?? def.font;
         const weight = line.weight ?? def.weight;
         const fill = line.fill ?? GOLD;
         let x = line.x ?? DEFAULT_X_PAD;
-        const y = Math.round(baselineFor(region, line, i, size, lines.length));
+
+        // Resolve a clock time to a ruled row (precedence: y > row > time).
+        let effLine = line;
+        if (line.time !== undefined && line.y === undefined && line.row === undefined) {
+          if (region.ruledLines.length === 0) {
+            warnings.push(
+              `region "${region.name}": line "${truncate(line.text)}" has a time but the ` +
+                `region has no ruled rows — time ignored.`,
+            );
+          } else if (input.startHour === undefined) {
+            warnings.push(
+              `region "${region.name}": line "${truncate(line.text)}" has time "${line.time}" ` +
+                `but no startHour was set for the region — placed by order instead.`,
+            );
+          } else {
+            const r = rowForTime(line.time, input.startHour, rowsPerHour);
+            if (r < 0 || r > region.ruledLines.length - 1) {
+              warnings.push(
+                `region "${region.name}": time "${line.time}" falls outside the ` +
+                  `${region.ruledLines.length}-row grid — pinned to the nearest edge.`,
+              );
+            }
+            effLine = { ...line, row: r };
+          }
+        }
+
+        const y = Math.round(baselineFor(region, effLine, i, size, lines.length));
         if (line.marker) {
           const m = markerFragment(line.marker, x, y, size, fill);
           parts.push(`    ${m.svg}`);
           x += m.advance;
         }
-        parts.push(
-          `    <text x="${x}" y="${y}" font-family="${escapeXml(font)}" ` +
-            `font-size="${size}" font-weight="${weight}" fill="${fill}">${escapeXml(line.text)}</text>`,
-        );
-        // Warn if the text likely runs past the region's right edge.
+
+        // Wrap to the region width when asked; otherwise a single segment.
+        const maxWidth = region.width !== null ? region.width - x : null;
+        const segments =
+          line.wrap && maxWidth !== null && maxWidth > 0
+            ? wrapText(line.text, font, size, maxWidth)
+            : [line.text];
+        const subPitch = Math.round(size * 1.3);
+        segments.forEach((seg, si) => {
+          const sy = y + si * subPitch;
+          parts.push(
+            `    <text x="${x}" y="${sy}" font-family="${escapeXml(font)}" ` +
+              `font-size="${size}" font-weight="${weight}" fill="${fill}">${escapeXml(seg)}</text>`,
+          );
+        });
+
         if (region.width !== null) {
-          const end = x + estimateTextWidth(line.text, font, size);
-          if (end > region.width) {
-            warnings.push(
-              `region "${region.name}": line "${truncate(line.text)}" ` +
-                `(~${end}px) may overflow the ${region.width}px region width.`,
-            );
+          if (!line.wrap) {
+            // Warn if the (unwrapped) text likely runs past the right edge.
+            const end = x + estimateTextWidth(line.text, font, size);
+            if (end > region.width) {
+              warnings.push(
+                `region "${region.name}": line "${truncate(line.text)}" ` +
+                  `(~${end}px) may overflow the ${region.width}px region width.`,
+              );
+            }
+          } else if (segments.length > 1) {
+            // Wrapping handled the width; warn instead if the stacked block
+            // collides with the next ruled row or runs past the region box.
+            const dropped = (segments.length - 1) * subPitch;
+            const pitch =
+              region.ruledLines.length >= 2 ? region.ruledLines[1] - region.ruledLines[0] : null;
+            const collidesRow = pitch !== null && dropped > pitch;
+            const pastBox =
+              region.height !== null && y + dropped + Math.round(size * 0.3) > region.height;
+            if (collidesRow || pastBox) {
+              warnings.push(
+                `region "${region.name}": wrapped line "${truncate(line.text)}" ` +
+                  `(${segments.length} rows) may overlap the next row or run past the region.`,
+              );
+            }
           }
         }
       });

@@ -84,6 +84,12 @@ Sequence after the estimator (already shipped in Phase 1).
 - **`ai.svg` history / undo** — tension with the "only write `ai.svg` + manifest ai block"
   invariant; the app may own undo. `merge` + `clear_underlay` already cover most "oops" cases.
 - **New template types / regions** — owned by the app; the server follows once templates ship.
+- **Calendar-chapter-aware `create_page`** — the app's `FORMAT.md` defines chapter-level
+  calendar config (`year`, `month`, `defaultTemplate`, `weekdayTemplates`, `deletedDays`) that
+  the server doesn't read today. It doesn't affect the `ai.svg` write contract, so nothing's
+  broken — but a future `create_page` could honor it (pick the right weekday template, respect
+  `deletedDays`, default the template from the chapter) instead of just cloning a sibling /
+  taking an explicit `template`. Revisit when auto-creating dated pages into a calendar chapter.
 - **Live `Shared/` watcher** — app-side; out of server scope.
 
 ---

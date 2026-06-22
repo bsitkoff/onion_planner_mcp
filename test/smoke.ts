@@ -11,7 +11,13 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { requireLibrary, listChapters, listPages, LibraryMissingError } from "../src/library.js";
+import {
+  requireLibrary,
+  listChapters,
+  listPages,
+  listPageRows,
+  LibraryMissingError,
+} from "../src/library.js";
 import {
   readPage,
   writeUnderlay,
@@ -205,6 +211,28 @@ async function main() {
   check("can write underlay into the cloned page", (await fs.readFile(path.join(root, "Shared/Daily/2026-06-23/ai.svg"), "utf8")).includes("7:30 coffee"));
   const folder = JSON.parse(await fs.readFile(path.join(root, "Shared/Daily/.folder.json"), "utf8"));
   check("chapter order includes both pages", folder.order.includes("2026-06-22") && folder.order.includes("2026-06-23"));
+
+  console.log("\nlist_pages metadata filters");
+  // At this point: Daily/2026-06-22 (daily-minimal, "Monday", status empty after clear),
+  // Daily/2026-06-23 (daily-minimal, "Tuesday", ready), Monthly/2026-02 (monthly-minimal,
+  // "February", ready). Derive the unfiltered total rather than hard-coding it.
+  const allRows = await listPageRows(root);
+  const total = allRows.length;
+  check("unfiltered lists every page", total >= 3, String(total));
+  const byTemplate = await listPageRows(root, { template: "daily-minimal" });
+  check("template filter keeps only daily-minimal", byTemplate.length === 2 && byTemplate.every((r) => r.template === "daily-minimal"), JSON.stringify(byTemplate.map((r) => r.page)));
+  const ready = await listPageRows(root, { aiStatus: "ready" });
+  check("aiStatus=ready excludes the cleared daily", ready.every((r) => r.aiStatus === "ready") && !ready.some((r) => r.page === daily), JSON.stringify(ready.map((r) => r.page)));
+  const empty = await listPageRows(root, { aiStatus: "empty" });
+  check("aiStatus=empty finds the cleared daily", empty.some((r) => r.page === daily) && empty.every((r) => r.aiStatus === "empty"), JSON.stringify(empty.map((r) => r.page)));
+  const titled = await listPageRows(root, { titleContains: "feb" });
+  check("titleContains is case-insensitive", titled.length === 1 && titled[0].title === "February", JSON.stringify(titled.map((r) => r.title)));
+  const combined = await listPageRows(root, { chapter: "Daily", template: "daily-minimal" });
+  check("filters AND together (chapter + template)", combined.length === 2 && combined.every((r) => r.page.startsWith("Shared/Daily/")), JSON.stringify(combined.map((r) => r.page)));
+  const beforeFuture = await listPageRows(root, { modifiedBefore: "2999-01-01" });
+  check("modifiedBefore far-future keeps all dated pages", beforeFuture.length === total, `${beforeFuture.length}/${total}`);
+  const afterFuture = await listPageRows(root, { modifiedAfter: "2999-01-01" });
+  check("modifiedAfter far-future excludes everything", afterFuture.length === 0, String(afterFuture.length));
 
   console.log("\nNEGATIVE: refuse Private + traversal");
   let refusedPrivate = false;

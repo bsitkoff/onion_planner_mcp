@@ -42,6 +42,13 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
   - `composeCalendar` derives the grid from the box + `data-cols`/`data-rows` (robust to the
     month template now drawing only interior dividers inside a `<rect>`).
   - Smoke test rewritten to seed its own chapters + create pages from the catalogue (52 checks).
+- **Phase 2.4 — search / filter pages**: `list_pages` gained optional `template`, `aiStatus`,
+  `titleContains`, and `modifiedAfter`/`modifiedBefore` filters (combine with AND). The walk +
+  per-page manifest read now lives in `library.listPageRows` (shared by the tool and the dev
+  CLI); the return shape is unchanged. The filter surface is a single growable `PageFilter`, so
+  **full-text / handwriting search is the intended follow-on** — a future `textContains` over
+  OCR'd `ink.svg` slots in as one more guard behind its own data source (not the manifest),
+  without reshaping the tool. Smoke test +8 checks (60 total).
 
 ---
 
@@ -66,9 +73,19 @@ needn't compute row indices. **Open dependency:** `parseRegions` reads `<line>` 
 not hour *labels*, so the server doesn't know "row 0 = 6am." Resolve with a `startHour` +
 `rowsPerHour` param, or extend the parser to read hour labels. Decide before building.
 
-### 2.4 Search / filter pages · Effort S–M · Feasibility HIGH
-For "set my whole week." Cheap — `list_pages` already walks `Shared/` and reads each manifest.
-Optional filters: `template`, `aiStatus`, `titleContains`, date range; stretch: full-text.
+### 2.4 Search / filter pages — ✅ shipped (see Done above)
+Metadata filters live on `list_pages`. Remaining stretch: **full-text / handwriting search**
+over OCR'd `ink.svg` — a separate data source (recognized ink text, likely an app-side or
+separate-pipeline concern), not manifest metadata. The `PageFilter` surface is shaped to take
+a `textContains`/`query` param alongside the metadata filters when that pipeline exists.
+
+**Open decision (someday):** where does the recognized handwriting text live so it's
+searchable? Candidate idea — store it *invisibly on the AI layer* (the searchable-PDF
+pattern). Tension: ai.svg is rewritten/cleared independently of the ink, so OCR text there
+gets clobbered, and OCR realistically runs app-side (Apple's recognizer + live strokes), not
+in this filesystem-only server. Leading alternative: app does the OCR and writes the text into
+the manifest (or a sidecar) on the ink's lifecycle; server just reads it for `textContains`.
+Decide before building 2.4's full-text stretch.
 
 ### 2.5 Auto text-wrap · Effort M · Feasibility MEDIUM
 Build on the overflow estimator: wrap long lines to region width instead of overflowing.
@@ -102,6 +119,6 @@ Sequence after the estimator (already shipped in Phase 1).
 
 ## Verification
 
-`npm run smoke` (self-seeding e2e, 52 checks) · `npm run call -- <tool> [args]` (drive a
+`npm run smoke` (self-seeding e2e, 60 checks) · `npm run call -- <tool> [args]` (drive a
 tool in a fresh process) · `npx tsc --noEmit`. Keep the smoke test deriving coordinates and
 region names from parsed geometry — the fixtures keep changing.

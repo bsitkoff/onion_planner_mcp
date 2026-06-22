@@ -15,7 +15,7 @@
  * A Bash-spawned process inherits the host's Full Disk Access, so live reads/writes
  * work here without reconnecting the registered server.
  */
-import { requireLibrary, listChapters, listPages } from "../src/library.js";
+import { requireLibrary, listChapters, listPageRows, type PageFilter } from "../src/library.js";
 import {
   readPage,
   writeUnderlay,
@@ -41,7 +41,7 @@ async function main() {
   if (!tool) {
     throw new Error(
       "Usage: npm run call -- <tool> [args]\n" +
-        "Tools: get_library | list_pages [chapter] | read_page <page> [--template] |\n" +
+        "Tools: get_library | list_pages [chapter] [key=value filters] | read_page <page> [--template] |\n" +
         "  write_underlay <page> <json> | set_underlay_status <page> <status> |\n" +
         "  clear_underlay <page> | create_page <json>",
     );
@@ -54,12 +54,19 @@ async function main() {
       return out({ root, exists: true, sharedChapters: await listChapters(root) });
 
     case "list_pages": {
-      const pages = await listPages(root, args[0]);
-      const rows = [];
-      for (const p of pages) {
-        const r = await readPage(root, p);
-        rows.push({ page: p, title: r.manifest.title ?? null, aiStatus: r.aiStatus });
+      // Filters are key=value args (chapter, template, aiStatus, titleContains,
+      // modifiedAfter, modifiedBefore). A bare positional arg is still the chapter.
+      const filter: PageFilter = {};
+      for (const a of args) {
+        const eq = a.indexOf("=");
+        if (eq === -1) {
+          filter.chapter = a;
+          continue;
+        }
+        const key = a.slice(0, eq) as keyof PageFilter;
+        (filter as any)[key] = a.slice(eq + 1);
       }
+      const rows = await listPageRows(root, filter);
       return out({ count: rows.length, pages: rows });
     }
 

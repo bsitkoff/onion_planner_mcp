@@ -21,7 +21,7 @@ it on next foreground.
 | Tool | Kind | Purpose |
 |---|---|---|
 | `get_library` | read | Resolve & validate the iCloud library; list Shared chapters. **Call first.** |
-| `list_pages` | read | List shared pages with title, template, size, modified, ai status. |
+| `list_pages` | read | List shared pages with title, template, size, modified, ai status. Optional filters (AND): `chapter`, `template`, `aiStatus`, `titleContains`, `modifiedAfter`/`modifiedBefore`. |
 | `read_page` | read | One page's manifest + parsed **regions** (geometry) + current ai.svg. |
 | `write_underlay` | write | Write ai.svg (structured `regions` *or* raw `svg`) + set status. `merge` patches named regions; `dryRun` previews without writing; returns fit `warnings`. |
 | `set_underlay_status` | write | Flip ai status (`empty`/`refreshing`/`ready`) without rewriting. |

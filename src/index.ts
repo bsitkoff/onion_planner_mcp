@@ -5,7 +5,7 @@ import { resolveRoot } from "./paths.js";
 import {
   requireLibrary,
   listChapters,
-  listPages,
+  listPageRows,
   LibraryMissingError,
 } from "./library.js";
 import {
@@ -67,32 +67,48 @@ server.tool(
 // --- list_pages ---
 server.tool(
   "list_pages",
-  "List shared pages with metadata and current AI-layer status. Each result's `page` is " +
-    "the relative path used by all other tools (e.g. \"Shared/Daily/2026-02-06\"). Does NOT " +
-    "return layer contents — call read_page for a page's regions and current ai.svg.",
+  "List shared pages with metadata and current AI-layer status, optionally filtered. " +
+    "Each result's `page` is the relative path used by all other tools (e.g. " +
+    "\"Shared/Daily/2026-02-06\"). Does NOT return layer contents — call read_page for a " +
+    "page's regions and current ai.svg. Filters combine with AND.",
   {
     chapter: z
       .string()
       .optional()
       .describe('Optional chapter name to filter by, e.g. "Daily". Omit for all chapters.'),
+    template: z
+      .string()
+      .optional()
+      .describe('Keep only pages with this template id, e.g. "daily-minimal".'),
+    aiStatus: z
+      .enum(["empty", "refreshing", "ready"])
+      .optional()
+      .describe('Keep only pages whose ai-layer is in this state. "empty" = not yet authored.'),
+    titleContains: z
+      .string()
+      .optional()
+      .describe("Case-insensitive substring match on the page title."),
+    modifiedAfter: z
+      .string()
+      .optional()
+      .describe('ISO date/datetime; keep pages whose manifest.modified is on/after this.'),
+    modifiedBefore: z
+      .string()
+      .optional()
+      .describe('ISO date/datetime; keep pages whose manifest.modified is strictly before this.'),
   },
   { readOnlyHint: true },
-  async ({ chapter }) => {
+  async ({ chapter, template, aiStatus, titleContains, modifiedAfter, modifiedBefore }) => {
     try {
       const root = await requireLibrary();
-      const pages = await listPages(root, chapter);
-      const rows = [];
-      for (const p of pages) {
-        const r = await readPage(root, p);
-        rows.push({
-          page: p,
-          title: r.manifest.title ?? null,
-          template: r.manifest.template ?? null,
-          size: r.size,
-          modified: r.manifest.modified ?? null,
-          aiStatus: r.aiStatus,
-        });
-      }
+      const rows = await listPageRows(root, {
+        chapter,
+        template,
+        aiStatus,
+        titleContains,
+        modifiedAfter,
+        modifiedBefore,
+      });
       return json({ count: rows.length, pages: rows });
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {

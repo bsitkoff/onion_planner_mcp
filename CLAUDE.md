@@ -1,15 +1,16 @@
 # CLAUDE.md
 
 Guidance for working on this repo. See `README.md` for usage and `docs/ROADMAP.md` for what's
-shipped and what's next. **The file-format contract is [`../onionskin/design/FORMAT.md`](../onionskin/design/FORMAT.md)
-— the single source of truth;** `docs/MCP-INTEGRATION.md` is the standalone integration quickstart
+shipped and what's next. **The file-format contract lives in the Onionskin app repo at
+`design/FORMAT.md` — the single source of truth;** `docs/MCP-INTEGRATION.md` is the standalone
+integration quickstart
 that points back to it, `docs/AUTHORING.md` covers how to fill pages, and
 `docs/COWORK-WORKFLOW.md` is the nightly CoWork runbook (how this gets driven in production).
 
 ## What this is
 
 A **local stdio** MCP server (TypeScript, run via `tsx`) that writes the gold `ai.svg`
-underlay into [Onionskin](../onionskin) planner pages. Integration is **filesystem-only** —
+underlay into [Onionskin](https://onionskin.sitkoff.net) planner pages. Integration is **filesystem-only** —
 it reads/writes plain SVG + JSON in the app's iCloud container. There is no network API.
 
 Matches the fleet convention (`../CommonPlannerMCP`): official `@modelcontextprotocol/sdk`,
@@ -22,7 +23,7 @@ local (not on `mamastuff`) because reaching that mirror needs local macOS filesy
 
 **Facts live in one place; everywhere else links.** The file-format contract — layers, regions,
 the gold underlay, `manifest.json`, the on-device visual parity — is owned by
-[`../onionskin/design/FORMAT.md`](../onionskin/design/FORMAT.md); link to it rather than restating
+the Onionskin app repo's `design/FORMAT.md`; link to it rather than restating
 (duplicated facts drift). Owners in this repo: `README.md` (usage), this file
 (architecture · invariants · gotchas), `docs/AUTHORING.md` (authoring underlays + themes),
 `docs/COWORK-WORKFLOW.md` (the nightly CoWork runbook — the operational layer above AUTHORING),

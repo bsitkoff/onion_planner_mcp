@@ -10,7 +10,8 @@
     "build": "tsc",
     "smoke": "rm -rf /tmp/onionskin-test && cp -R ../onionskin/Onionskin/Fixtures/Library /tmp/onionskin-test && ONIONSKIN_CONTAINER=/tmp/onionskin-test tsx test/smoke.ts"
   },
-  "license": "ISC",
+  "author": "Bridget Sitkoff",
+  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "fast-xml-parser": "^5.8.0",

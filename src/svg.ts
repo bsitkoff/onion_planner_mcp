@@ -7,6 +7,60 @@ import type { Region } from "./template.js";
  */
 export const GOLD = "#9C7C1A";
 
+/**
+ * A page palette. Gold was only ever a *default*, not a constraint — the app
+ * renderer honours any `fill`, so the AI layer can carry colour. A theme maps the
+ * composer's colour roles; callers pick one with `write_underlay({ theme })`.
+ *
+ * - `text`/`serif`: body text (serif = the quote region).
+ * - `accent`: markers (checkbox/bullet), rules, calendar day numbers.
+ * - `banners` + `bannerText`: section-heading banners (a coloured pill behind a
+ *   white label), cycled per heading so sections read distinctly — like the
+ *   colour-coded banners in a real planner.
+ * - `headingStyle`: `banner` (coloured pill) or `underline` (coloured label +
+ *   hairline rule — the quieter, original look).
+ */
+export interface Theme {
+  text: string;
+  serif: string;
+  accent: string;
+  bannerText: string;
+  banners: string[];
+  headingStyle: "banner" | "underline";
+}
+
+export const THEMES: Record<string, Theme> = {
+  // The legacy monochrome default — unchanged output when no theme is chosen.
+  gold: {
+    text: GOLD, serif: GOLD, accent: GOLD,
+    bannerText: "#FFFFFF", banners: [GOLD], headingStyle: "underline",
+  },
+  // Lively, saturated — closest to a colourful planner spread.
+  bright: {
+    text: "#3A3A3A", serif: "#8E6FC9", accent: "#E86A92",
+    bannerText: "#FFFFFF", banners: ["#3FB6A8", "#F2884B", "#E86A92", "#8E6FC9"],
+    headingStyle: "banner",
+  },
+  // Softer, hand-painted warmth.
+  cozy: {
+    text: "#4A4A4A", serif: "#7E5A78", accent: "#C56B6B",
+    bannerText: "#FFFFFF", banners: ["#C56B6B", "#7C8A5A", "#C9A227", "#7E5A78"],
+    headingStyle: "banner",
+  },
+  // Restrained — one or two accents, quiet labels, lots of whitespace.
+  editorial: {
+    text: "#33312E", serif: "#B5654A", accent: "#B5654A",
+    bannerText: "#FFFFFF", banners: ["#B5654A", "#9A9081"], headingStyle: "underline",
+  },
+};
+
+export const THEME_NAMES = Object.keys(THEMES);
+
+/** Resolve a theme name to a Theme, defaulting to the legacy gold palette. */
+export function resolveTheme(name?: string): Theme {
+  return (name && THEMES[name]) || THEMES.gold;
+}
+
 const DEFAULT_X_PAD = 24;
 /** Default text weight — heavier than regular to carry the gold on white. */
 const DEFAULT_WEIGHT = 600;
@@ -17,18 +71,26 @@ const DEFAULT_WEIGHT = 600;
  * The serif "quote" region was historically named "affirmation"; both are kept so
  * older pages still pick up the serif styling. Unknown regions use FALLBACK_DEFAULT.
  */
-const REGION_DEFAULTS: Record<string, { font: string; size: number; weight: number }> = {
+interface RegionDefault {
+  font: string;
+  size: number;
+  weight: number;
+  /** Left inset for text when a line omits `x` (overrides DEFAULT_X_PAD). The
+   *  schedule needs a wider gutter so its text clears the printed hour labels. */
+  xPad?: number;
+}
+const REGION_DEFAULTS: Record<string, RegionDefault> = {
   quote: { font: "Newsreader", size: 26, weight: 500 },
   affirmation: { font: "Newsreader", size: 26, weight: 500 }, // legacy region name
   header: { font: "Mulish", size: 20, weight: 700 },
-  schedule: { font: "Mulish", size: 14, weight: 600 },
+  schedule: { font: "Mulish", size: 15, weight: 600, xPad: 52 },
   priorities: { font: "Mulish", size: 15, weight: 600 },
   todo: { font: "Mulish", size: 15, weight: 600 },
   notes: { font: "Mulish", size: 14, weight: 600 },
   goals: { font: "Mulish", size: 15, weight: 600 },
   month: { font: "Mulish", size: 13, weight: 600 },
 };
-const FALLBACK_DEFAULT = { font: "Mulish", size: 14, weight: DEFAULT_WEIGHT };
+const FALLBACK_DEFAULT: RegionDefault = { font: "Mulish", size: 14, weight: DEFAULT_WEIGHT };
 
 /** A leading mark drawn before a line's text (todo lists, bulleted notes). */
 export type LineMarker = "checkbox" | "bullet";
@@ -64,6 +126,16 @@ export interface LineInput {
    * row, so a caller's row→content mapping stays intact).
    */
   wrap?: boolean;
+  /**
+   * Render this line as a section heading rather than body text: bold, letter-
+   * spaced, with a hairline gold rule beneath it spanning the region width. This
+   * is how the AI layer draws *dynamic structure* into a neutral region — e.g.
+   * carving the `notes` box into "Important" / "Tomorrow" / "Habits" sub-blocks
+   * only on the days that need them, so the printed template can stay minimal.
+   * In a box (unruled) region, a heading takes a little extra space above it and
+   * the lines after it flow below; `marker`/`wrap` are ignored on a heading line.
+   */
+  heading?: boolean;
 }
 
 /** One day's optional event label + styling on a calendar grid. */
@@ -101,9 +173,16 @@ export type ImageCorner = "top-left" | "top-right" | "bottom-left" | "bottom-rig
  * `composeAiSvg`, which only reads the resolved fields.
  */
 export interface ImageInput {
-  /** Base64-encoded image bytes (caller-supplied). */
+  /** Base64-encoded image bytes (caller-supplied). Mutually exclusive with `path`. */
   data?: string;
-  /** Encoding of `data`. */
+  /**
+   * Absolute local file path to read the image bytes from, instead of inlining
+   * `data`. Lets an overnight/automated caller embed a generated PNG by reference —
+   * the file never passes through the model context. Leading `~` is expanded.
+   * Mutually exclusive with `data`.
+   */
+  path?: string;
+  /** Encoding. Optional when reading from `path` (sniffed from the file's magic bytes). */
   format?: "png" | "jpeg";
   /** Stable filename stem; defaults to a content hash. Sanitized in page.ts. */
   name?: string;
@@ -128,6 +207,16 @@ export interface ImageInput {
 export interface RegionInput {
   /** Region name from read_page, e.g. "schedule", "todo", "quote". */
   region: string;
+  /**
+   * A region *title* banner, drawn in the margin just above the region box (so it
+   * never consumes a content row). This is how the AI labels a region the template
+   * left bare — e.g. "SCHEDULE" / "TOP 3" over a minimal grid. `banner` themes draw
+   * a colored pill; `underline`/`gold` themes a bold label + short rule. (For
+   * sub-sections *inside* a box, use a `heading` line instead.)
+   */
+  label?: string;
+  /** Override the label banner color (defaults to the theme's cycled banner color). */
+  labelFill?: string;
   /** Text lines (ruled/box regions). Mutually exclusive with `calendar`. */
   lines?: LineInput[];
   /** Calendar grid (the month region). Mutually exclusive with `lines`. */
@@ -171,6 +260,17 @@ function estimateTextWidth(text: string, font: string, size: number): number {
   const ratio = CHAR_WIDTH_RATIO[font] ?? DEFAULT_CHAR_RATIO;
   return Math.round(text.length * size * ratio);
 }
+
+/**
+ * Width to give a banner LABEL's colored pill. Deliberately *over*-estimates: banner
+ * labels are heavy (weight 700–800) and letter-spaced, so they render much wider than
+ * the body-text heuristic predicts — under-sizing clips the text outside the pill.
+ * Better too wide than too tight.
+ */
+function bannerLabelWidth(text: string, size: number): number {
+  return Math.round(text.length * size * 0.82);
+}
+const BANNER_PAD_X = 12;
 
 /**
  * Map a clock time ("HH:MM", 24-hour) to a ruled-row index, given the hour at
@@ -359,6 +459,47 @@ function baselineFor(
   return topPad + row * lineHeight;
 }
 
+/**
+ * Vertical baselines for an *unruled* (box) region, laid out as a top-down flow:
+ * a running cursor that gives each line its height, plus extra breathing room
+ * above a `heading`. This is what lets the AI stack dynamic sections (heading +
+ * items, a habit list) inside a neutral box without the template pre-printing
+ * them. Honours explicit `y` (kept verbatim) and legacy box `row` (an absolute
+ * slot). A single plain line is vertically centred (nice for the quote).
+ */
+function flowBaselines(region: Region, lines: LineInput[], def: RegionDefault): number[] {
+  const first = lines.length ? (lines[0].size ?? def.size) : def.size;
+  if (
+    lines.length === 1 &&
+    !lines[0].heading &&
+    lines[0].row === undefined &&
+    lines[0].y === undefined &&
+    region.height
+  ) {
+    return [Math.round(region.height / 2 + first / 3)];
+  }
+  const out: number[] = [];
+  let cursor = Math.round(first * 1.2); // top padding
+  lines.forEach((line, i) => {
+    const sz = line.size ?? def.size;
+    const lineH = Math.round(sz * 1.5);
+    if (line.y !== undefined) {
+      out[i] = line.y; // explicit baseline — don't disturb the cursor
+      return;
+    }
+    if (line.row !== undefined) {
+      const b = Math.round(sz * 1.2) + Math.max(0, Math.floor(line.row)) * lineH;
+      out[i] = b;
+      cursor = b + lineH;
+      return;
+    }
+    if (line.heading && i > 0) cursor += Math.round(sz * 0.6); // gap before a new section
+    out[i] = cursor;
+    cursor += line.heading ? lineH + 10 : lineH; // headings reserve room for their rule
+  });
+  return out;
+}
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
@@ -398,7 +539,7 @@ function gridBounds(
  * in LOCAL coordinates (the caller wraps them in the region's translate group, so
  * we subtract the region origin from the absolute grid boundaries).
  */
-function composeCalendar(region: Region, spec: CalendarSpec): string[] {
+function composeCalendar(region: Region, spec: CalendarSpec, theme: Theme): string[] {
   const m = /^(\d{4})-(\d{2})$/.exec(spec.month.trim());
   if (!m) throw new Error(`calendar.month must be "YYYY-MM", got "${spec.month}".`);
   const year = Number(m[1]);
@@ -427,7 +568,7 @@ function composeCalendar(region: Region, spec: CalendarSpec): string[] {
   const numFont = spec.numberFont ?? "Mulish";
   const numSize = spec.numberSize ?? 18;
   const numWeight = spec.numberWeight ?? 600;
-  const fill = spec.fill ?? GOLD;
+  const fill = spec.fill ?? theme.accent;
   const byDay = new Map((spec.days ?? []).map((d) => [d.day, d]));
 
   const parts: string[] = [];
@@ -488,13 +629,17 @@ export function composeAiSvg(
   size: [number, number],
   inputs: RegionInput[],
   regions: Region[],
+  themeName?: string,
 ): ComposeResult {
+  const theme = resolveTheme(themeName);
   const byName = new Map(regions.map((r) => [r.name, r]));
   const [w, h] = size;
   const parts: string[] = [
     `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`,
   ];
   const warnings: string[] = [];
+  // Banner heading colours cycle across the whole page so sections read distinctly.
+  let bannerIdx = 0;
 
   for (const input of inputs) {
     const region = byName.get(input.region);
@@ -512,6 +657,40 @@ export function composeAiSvg(
     parts.push(
       `  <g transform="translate(${region.x},${region.y})" data-region="${region.name}">`,
     );
+    // Region title banner, in the margin just above the box (never consumes a row).
+    if (input.label) {
+      const lsize = 15;
+      const ly = -12; // baseline above the region's top edge
+      const lx = DEFAULT_X_PAD;
+      const lw = bannerLabelWidth(input.label, lsize);
+      if (region.y + ly - lsize < 0) {
+        warnings.push(`region "${region.name}": label "${truncate(input.label)}" may sit above the page top.`);
+      }
+      if (theme.headingStyle === "banner") {
+        const padX = BANNER_PAD_X;
+        const bh = Math.round(lsize * 1.15) + 6;
+        const by = ly - Math.round(lsize * 0.82) - 3;
+        const color = input.labelFill ?? theme.banners[bannerIdx % theme.banners.length];
+        bannerIdx++;
+        parts.push(
+          `    <rect x="${lx}" y="${by}" width="${lw + padX * 2}" height="${bh}" rx="6" fill="${color}"/>`,
+        );
+        parts.push(
+          `    <text x="${lx + padX}" y="${ly}" font-family="Mulish" font-size="${lsize}" ` +
+            `font-weight="800" letter-spacing="0.1em" fill="${theme.bannerText}">${escapeXml(input.label)}</text>`,
+        );
+      } else {
+        const lfill = input.labelFill ?? theme.text;
+        parts.push(
+          `    <text x="${lx}" y="${ly}" font-family="Mulish" font-size="${lsize}" ` +
+            `font-weight="800" letter-spacing="0.1em" fill="${lfill}">${escapeXml(input.label)}</text>`,
+        );
+        parts.push(
+          `    <line x1="${lx}" y1="${ly + 4}" x2="${lx + lw + 18}" y2="${ly + 4}" ` +
+            `stroke="${lfill}" stroke-width="1.5" opacity="0.5"/>`,
+        );
+      }
+    }
     // Images paint first (background); text/calendar lands on top.
     for (const img of input.images ?? []) {
       if (!img.href || !img.width || !img.height) continue;
@@ -533,10 +712,13 @@ export function composeAiSvg(
       }
     }
     if (input.calendar) {
-      parts.push(...composeCalendar(region, input.calendar));
+      parts.push(...composeCalendar(region, input.calendar, theme));
     } else {
       const def = REGION_DEFAULTS[region.name] ?? FALLBACK_DEFAULT;
       const lines = input.lines ?? [];
+      // Body text uses the theme's ink; the quote box uses its serif colour.
+      const baseFill =
+        region.name === "quote" || region.name === "affirmation" ? theme.serif : theme.text;
       // Warn if there are more lines than ruled rows to land them on.
       if (region.ruledLines.length > 0 && lines.length > region.ruledLines.length) {
         warnings.push(
@@ -545,12 +727,16 @@ export function composeAiSvg(
         );
       }
       const rowsPerHour = input.rowsPerHour && input.rowsPerHour > 0 ? input.rowsPerHour : 1;
+      // Box (unruled) regions flow top-down so dynamic sections stack cleanly;
+      // ruled regions snap each line to a row (computed per-line below).
+      const boxBaselines =
+        region.ruledLines.length === 0 ? flowBaselines(region, lines, def) : null;
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
         const font = line.font ?? def.font;
         const weight = line.weight ?? def.weight;
-        const fill = line.fill ?? GOLD;
-        let x = line.x ?? DEFAULT_X_PAD;
+        const fill = line.fill ?? baseFill;
+        let x = line.x ?? def.xPad ?? DEFAULT_X_PAD;
 
         // Resolve a clock time to a ruled row (precedence: y > row > time).
         let effLine = line;
@@ -577,9 +763,54 @@ export function composeAiSvg(
           }
         }
 
-        const y = Math.round(baselineFor(region, effLine, i, size, lines.length));
+        const y = boxBaselines
+          ? Math.round(boxBaselines[i])
+          : Math.round(baselineFor(region, effLine, i, size, lines.length));
+
+        // A section heading. `banner` themes draw a coloured pill + white label
+        // (cycling banner colours so sections read distinctly); `underline` themes
+        // draw a coloured label + hairline rule (quieter). No marker/wrap — a label.
+        if (line.heading) {
+          const hWeight = line.weight ?? 700;
+          if (theme.headingStyle === "banner") {
+            const labelW = bannerLabelWidth(line.text, size);
+            const padX = BANNER_PAD_X;
+            const bh = Math.round(size * 1.15) + 6;
+            const by = y - Math.round(size * 0.82) - 3;
+            const color = line.fill ?? theme.banners[bannerIdx % theme.banners.length];
+            bannerIdx++;
+            parts.push(
+              `    <rect x="${x}" y="${by}" width="${labelW + padX * 2}" height="${bh}" ` +
+                `rx="6" fill="${color}"/>`,
+            );
+            parts.push(
+              `    <text x="${x + padX}" y="${y}" font-family="${escapeXml(font)}" ` +
+                `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em" ` +
+                `fill="${theme.bannerText}">${escapeXml(line.text)}</text>`,
+            );
+          } else {
+            const hfill = line.fill ?? theme.text;
+            parts.push(
+              `    <text x="${x}" y="${y}" font-family="${escapeXml(font)}" ` +
+                `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em" ` +
+                `fill="${hfill}">${escapeXml(line.text)}</text>`,
+            );
+            if (region.width !== null) {
+              const rx2 = region.width - (def.xPad ?? DEFAULT_X_PAD);
+              const ry = y + Math.round(size * 0.45);
+              if (rx2 > x) {
+                parts.push(
+                  `    <line x1="${x}" y1="${ry}" x2="${rx2}" y2="${ry}" ` +
+                    `stroke="${hfill}" stroke-width="1" opacity="0.4"/>`,
+                );
+              }
+            }
+          }
+          return;
+        }
+
         if (line.marker) {
-          const m = markerFragment(line.marker, x, y, size, fill);
+          const m = markerFragment(line.marker, x, y, size, line.fill ?? theme.accent);
           parts.push(`    ${m.svg}`);
           x += m.advance;
         }

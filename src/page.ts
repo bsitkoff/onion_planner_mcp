@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { createHash } from "node:crypto";
 import { resolvePageRel } from "./paths.js";
-import { parseRegions, parseViewBox, type Region } from "./template.js";
+import { parseRegions, parseViewBox, inspectTemplate, type Region, type TemplateInfo } from "./template.js";
 import { composeAiSvg, mergeRegions, emptySvg, imageDims, type RegionInput } from "./svg.js";
 
 export type AiStatus = "empty" | "refreshing" | "ready";
@@ -37,6 +38,22 @@ const MEDIA_AI = path.join("media", "ai");
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // hard cap per image (iCloud-sync hygiene)
 const WARN_IMAGE_BYTES = 512 * 1024; // soft warning threshold
 
+/** Expand a leading `~` to the user's home dir (file paths from a caller may use it). */
+function expandHome(p: string): string {
+  if (p === "~") return os.homedir();
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
+/** Sniff PNG/JPEG from the leading magic bytes; null if neither. */
+function sniffFormat(buf: Uint8Array): "png" | "jpeg" | null {
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return "png";
+  }
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xd8) return "jpeg";
+  return null;
+}
+
 /** Filename stem safe to join under media/ai/ (no slashes, traversal, or leading dots). */
 function sanitizeName(name: string): string {
   const base = name.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "");
@@ -57,15 +74,26 @@ async function resolveImages(
   const mediaAiAbs = path.join(pageAbs, MEDIA_AI);
   for (const region of regions) {
     for (const img of region.images ?? []) {
-      if (!img.data || !img.format) {
-        throw new Error(`image in region "${region.region}" needs both \`data\` (base64) and \`format\`.`);
+      if ((img.data === undefined) === (img.path === undefined)) {
+        throw new Error(`image in region "${region.region}" needs exactly one of \`data\` (base64) or \`path\`.`);
       }
       if (img.width === undefined || img.width <= 0) {
         throw new Error(`image in region "${region.region}" needs a positive \`width\`.`);
       }
-      const buf = Buffer.from(img.data, "base64");
+      // Source the bytes: a local file (no base64 through context) or inline base64.
+      let buf: Buffer;
+      if (img.path !== undefined) {
+        const fileSrc = expandHome(img.path);
+        try {
+          buf = await fs.readFile(fileSrc);
+        } catch {
+          throw new Error(`image in region "${region.region}": cannot read file "${img.path}".`);
+        }
+      } else {
+        buf = Buffer.from(img.data!, "base64");
+      }
       if (buf.length === 0) {
-        throw new Error(`image in region "${region.region}" has empty or invalid base64 data.`);
+        throw new Error(`image in region "${region.region}" has empty or invalid image data.`);
       }
       if (buf.length > MAX_IMAGE_BYTES) {
         throw new Error(
@@ -79,10 +107,18 @@ async function resolveImages(
             `iCloud sync; consider downscaling.`,
         );
       }
-      const dims = imageDims(buf, img.format); // also validates the magic bytes
+      // Format: declared, or sniffed from the file's magic bytes when reading a path.
+      const format = img.format ?? sniffFormat(buf);
+      if (!format) {
+        throw new Error(
+          `image in region "${region.region}": could not determine format — pass \`format\` ` +
+            `("png" or "jpeg"), the bytes are neither.`,
+        );
+      }
+      const dims = imageDims(buf, format); // also validates the magic bytes
       const width = img.width;
       const height = img.height ?? Math.round((width * dims.height) / dims.width);
-      const ext = img.format === "jpeg" ? "jpg" : "png";
+      const ext = format === "jpeg" ? "jpg" : "png";
       const stem = sanitizeName(img.name ?? createHash("sha256").update(buf).digest("hex").slice(0, 16));
       const file = `${stem}.${ext}`;
 
@@ -147,6 +183,12 @@ export interface PageRead {
   regions: Region[];
   aiStatus: AiStatus;
   aiSvg: string | null;
+  /**
+   * What the template already provides (labels/banners/stickers + its palette), so
+   * the AI can match its level: fill quietly + in the template's colours when
+   * `styled`, or go full (theme, banners, art) when it's a bare minimal scaffold.
+   */
+  template: TemplateInfo;
   templateSvg?: string;
 }
 
@@ -159,6 +201,7 @@ export async function readPage(
   const abs = resolvePageRel(root, rel);
   const manifest = await readJson<Manifest>(path.join(abs, "manifest.json"));
   const templateSvg = await readIfExists(path.join(abs, "template.svg"));
+  const stickersSvg = await readIfExists(path.join(abs, "stickers.svg"));
   const aiSvg = await readIfExists(path.join(abs, "ai.svg"));
   const regions = templateSvg ? parseRegions(templateSvg) : [];
   const size = pageSize(manifest, templateSvg);
@@ -169,6 +212,9 @@ export async function readPage(
     regions,
     aiStatus: manifest.layers?.ai?.status ?? "empty",
     aiSvg,
+    template: templateSvg
+      ? inspectTemplate(templateSvg, stickersSvg)
+      : { styled: false, hasLabels: false, hasBanners: false, stickersPresent: false, palette: [] },
     ...(includeTemplate && templateSvg ? { templateSvg } : {}),
   };
 }
@@ -220,6 +266,8 @@ export async function writeUnderlay(
     status: AiStatus;
     merge?: boolean;
     dryRun?: boolean;
+    /** Palette name (see svg.ts THEMES); defaults to gold. Ignored with raw `svg`. */
+    theme?: string;
   },
 ): Promise<WriteResult> {
   const abs = resolvePageRel(root, rel);
@@ -240,7 +288,7 @@ export async function writeUnderlay(
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg) : [];
     const size = pageSize(manifest, templateSvg);
-    const composed = composeAiSvg(size, opts.regions, regions);
+    const composed = composeAiSvg(size, opts.regions, regions, opts.theme);
     warnings = [...composed.warnings, ...imageWarnings];
     if (opts.merge) {
       const existing = await readIfExists(path.join(abs, "ai.svg"));

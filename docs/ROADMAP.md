@@ -31,6 +31,12 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
 
 ## Done (this pass)
 
+- **Dynamic sections (planner-fidelity)** — a line `heading: true` draws a section label
+  (bold, letter-spaced, hairline rule) and box regions now flow top-down, so the AI layer
+  composes day-specific structure (Important / Tomorrow / Habits) into a neutral region
+  *without* enriching the template — the minimal template stays a neutral scaffold by
+  design. Plus a per-region `xPad` (schedule text clears the hour gutter) and an authoring
+  guide ([`docs/AUTHORING.md`](AUTHORING.md)) for filling pages with real, varied content.
 - **Doc/code gold sync** — `docs/MCP-INTEGRATION.md` now states the shipped `#9C7C1A`.
 - **Phase 1**: `write_underlay` `merge` (region-level patch, preserves the rest verbatim);
   line `marker` (drawn `checkbox`/`bullet`); overflow/fit `warnings` (returned, non-fatal);
@@ -140,6 +146,9 @@ ruled row. Vertical-fit warning replaces the width-overflow warning when wrappin
   `deletedDays`, default the template from the chapter) instead of just cloning a sibling /
   taking an explicit `template`. Revisit when auto-creating dated pages into a calendar chapter.
 - **Live `Shared/` watcher** — app-side; out of server scope.
+- **On-device underlay author (Apple Intelligence)** — already **shipped** in the app as an
+  additive, opt-in sibling that coexists with and defers to this MCP (not a replacement). How
+  it relates + the visual-parity handoff: [`ON-DEVICE-UNDERLAY.md`](ON-DEVICE-UNDERLAY.md).
 
 ---
 

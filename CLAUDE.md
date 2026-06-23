@@ -85,7 +85,12 @@ for boxes with no rules (e.g. `quote`, `notes`) — line-stacking / vertical-cen
 (precedence `y > row > time > order`). A line may carry a `marker` (`checkbox`/`bullet`,
 drawn as a shape — no font dependency) before its text, and `wrap: true` to break long text
 to the region width (continuations stack below the baseline without consuming the next ruled
-row). So callers never compute coordinates; they reference a region name and a row index from
+row). A line may also be a `heading` (a section label) — `banner` themes draw it as a colored
+pill, `underline` themes as a label + rule. `write_underlay` takes a **`theme`** (palette:
+`gold` default / `bright` / `cozy` / `editorial`) that colors banners, body text, accents, and
+the quote — gold was only ever a default, not a constraint, and the orchestrator is meant to
+pick the theme to fit the day's mood (see `docs/AUTHORING.md`). So callers never compute
+coordinates; they reference a region name and a row index from
 `read_page`. An unknown region name throws (listing the valid ones). Raw `svg` bypasses all
 of this — full control, no geometry help. `composeAiSvg` returns `{ svg, warnings }`; the
 warnings flag likely overflow (text past the region rect, more lines than ruled rows, a
@@ -98,8 +103,10 @@ existing `ai.svg` (parsing its `<g data-region>` blocks, replacing matches, keep
 **`dryRun`** composes and returns the result + warnings without writing or flipping status.
 `merge` is structured-input only (rejected with raw `svg`).
 
-A region entry may also carry **`images`** — base64 PNG/JPEG art the caller supplies (this
-server has no network/generation). The app's renderer resolves `<image href>` only as a
+A region entry may also carry **`images`** — PNG/JPEG art the caller supplies as base64
+`data` **or** a local file `path` (read off disk, so a generated image never passes through
+the model context — for overnight/automated writes; format is sniffed when omitted). This
+server has no network/generation. The app's renderer resolves `<image href>` only as a
 **page-relative file path** (no data-URIs), so `page.ts:resolveImages` validates the bytes
 (magic vs `format`, 2MB cap), writes them to the page's **`media/ai/`** folder, and rewrites
 the `<image href="media/ai/…">` into the region group; `svg.ts:imageDims` reads intrinsic size
@@ -159,10 +166,10 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
   (`colors.css`, `Palette.swift`, `FORMAT.md`); the server's deepened `#9C7C1A` is an
   intentional divergence — reconcile only on Bridget's call (don't silently re-sync).
 - **The app renderer is a custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit):
-  it handles `svg, g, rect, line, path, text, image` and silently drops anything else (it has
-  no `<circle>` today — the shipped `bullet` marker emits one and the app team is adding
-  support). `<image href>` resolves **only as a page-relative file path** (no data-URIs) and
-  the **AI layer needs a non-nil `imageProvider`** (an app change) for images to appear at all.
+  it handles `svg, g, rect, line, path, text, image, circle` and silently drops anything else
+  (`<circle>` support landed 2026-06-22, so the `bullet` marker now renders on device).
+  `<image href>` resolves **only as a page-relative file path** (no data-URIs) and the
+  **AI layer needs a non-nil `imageProvider`** (an app change) for images to appear at all.
   When emitting raw `svg`, stay within that element set.
 - The ai layer has a 3-state status (`empty → refreshing → ready`) in `manifest.layers.ai`;
   the app only composites `ready`. `write_underlay` sets `ready` by default. Use `refreshing`

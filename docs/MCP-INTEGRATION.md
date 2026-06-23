@@ -111,6 +111,15 @@ expose `region-header`, `region-month`, `region-weekdays`, `region-goals`,
 `region-notes`. **Region names vary by template and change as templates evolve — read
 them from `read_page`/the template, don't hard-code.**
 
+**Templates stay deliberately minimal — draw structure yourself.** A daily template is a
+neutral scaffold (a schedule grid, a couple of labelled boxes, a notes area), *not* a
+pre-printed form with a slot for every possible section. That's intentional: a fixed,
+busy template makes every day look identical. Day-to-day structure — an "Important" list,
+a "Tomorrow" preview, a habit tracker — is the **AI layer's** job, rendered into a neutral
+region only on the days that need it (the reference server's `heading` line draws a section
+label + rule, with its items flowing below). Don't ask for a richer template; compose the
+richness into `ai.svg`.
+
 ### c. Write `ai.svg`
 Emit one self-contained SVG on the page's `viewBox`. Gold is `#9C7C1A` — the brand gold
 (`#C9A227`) deepened for legibility on white paper; this is what the reference server emits

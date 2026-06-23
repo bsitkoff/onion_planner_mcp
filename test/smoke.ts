@@ -11,6 +11,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import {
   requireLibrary,
   listChapters,
@@ -26,6 +27,7 @@ import {
   createPage,
 } from "../src/page.js";
 import { GOLD } from "../src/svg.js";
+import { inspectTemplate } from "../src/template.js";
 
 let pass = 0;
 let fail = 0;
@@ -77,6 +79,11 @@ async function main() {
   check("schedule region parsed with ruled lines", (schedule?.ruledLines.length ?? 0) >= 8, String(schedule?.ruledLines.length));
   check("quote region parsed (no-ruled box)", !!quote && quote.ruledLines.length === 0, String(quote?.ruledLines.length));
   check("todo region parsed", !!todo);
+  // Template inspection: minimal is a bare scaffold (go full); cozy is styled (fill quietly).
+  check("template info: minimal is not styled", read.template.styled === false && !read.template.hasLabels && read.template.palette.length === 0, JSON.stringify(read.template));
+  const cozyInfo = inspectTemplate(await fs.readFile(path.join(root, "Templates", "daily-cozy", "template.svg"), "utf8"));
+  check("template info: cozy is styled with its own banners", cozyInfo.styled && cozyInfo.hasBanners && cozyInfo.hasLabels, JSON.stringify(cozyInfo));
+  check("template info: cozy palette is non-empty and non-neutral", cozyInfo.palette.length > 0 && cozyInfo.palette.every((h) => /^#[0-9a-f]{6}$/.test(h)), JSON.stringify(cozyInfo.palette));
 
   console.log("\nwrite_underlay (structured: schedule rows + checkbox to-dos + quote)");
   const before = read.manifest.modified;
@@ -176,6 +183,67 @@ async function main() {
     regions: [{ region: "schedule", lines: [{ text: longLine.repeat(8), row: 0, wrap: true }] }],
   });
   check("wrapped block warns when it overruns the row", tall.warnings.some((w) => w.includes("overlap the next row")), JSON.stringify(tall.warnings));
+
+  console.log("\ndynamic sections (heading + items flow in a box region; dry-run)");
+  // The neutral `notes` box (no ruled lines) is where the AI draws day-specific
+  // structure: section headings + their items, only when a day needs them.
+  const sectioned = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "notes", lines: [
+      { text: "Important", heading: true },
+      { text: "Leona planner check", marker: "bullet" },
+      { text: "VEX order", marker: "bullet" },
+      { text: "Tomorrow", heading: true },
+      { text: "Prep slides", marker: "checkbox" },
+      { text: "Habits", heading: true },
+      { text: "Walk", marker: "checkbox" },
+    ] }],
+  });
+  const notesGroup = regionGroup(sectioned.aiSvg, "notes") ?? "";
+  check("heading text is letter-spaced", notesGroup.includes('letter-spacing="0.08em"'), notesGroup.slice(0, 160));
+  const headingRules = [...notesGroup.matchAll(new RegExp(`<line[^>]*stroke="${GOLD}"[^>]*opacity="0.4"`, "g"))].length;
+  check("each of the 3 headings draws a hairline rule", headingRules === 3, `rules=${headingRules}`);
+  // Flow order: headings and their items stack top-down in the order given.
+  const yImp = yOf(sectioned.aiSvg, ">Important</text>");
+  const yLeona = yOf(sectioned.aiSvg, ">Leona planner check</text>");
+  const yVex = yOf(sectioned.aiSvg, ">VEX order</text>");
+  const yTom = yOf(sectioned.aiSvg, ">Tomorrow</text>");
+  const yHab = yOf(sectioned.aiSvg, ">Habits</text>");
+  check("sections flow top-down in order", yImp < yLeona && yLeona < yTom && yTom < yHab, `${yImp} < ${yLeona} < ${yTom} < ${yHab}`);
+  check("a heading takes more vertical room than a body item", yLeona - yImp > yVex - yLeona, `heading advance=${yLeona - yImp}, item advance=${yVex - yLeona}`);
+
+  console.log("\nthemed output (colored banners + accents; dry-run)");
+  const themed = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true, theme: "bright",
+    regions: [{ region: "notes", lines: [
+      { text: "IMPORTANT", heading: true },
+      { text: "Renew parking pass", marker: "checkbox" },
+      { text: "TOMORROW", heading: true },
+      { text: "Dentist 9am", marker: "bullet" },
+    ] }],
+  });
+  const tg = regionGroup(themed.aiSvg, "notes") ?? "";
+  check("banner heading draws a filled colored rect", /<rect[^>]*fill="#3FB6A8"/.test(tg) || /<rect[^>]*fill="#F2884B"/.test(tg), tg.slice(0, 200));
+  check("two banners use two different cycled colors", new Set([...tg.matchAll(/<rect[^>]*rx="6" fill="(#[0-9A-Fa-f]{6})"/g)].map((m) => m[1])).size === 2, tg);
+  check("banner label is white, not gold", tg.includes('fill="#FFFFFF"') && !tg.includes(GOLD), tg.slice(0, 240));
+  check("themed body text uses theme ink, not gold", tg.includes('fill="#3A3A3A"'), tg);
+  // The gold default is unchanged (back-compat): headings stay underline+rule.
+  const goldHead = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "notes", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "notes") ?? "";
+  check("default (no theme) keeps the gold underline heading", goldHead.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(goldHead), goldHead);
+
+  console.log("\nregion label banner (above the box; themed; dry-run)");
+  const labeled = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true, theme: "bright",
+    regions: [{ region: "schedule", label: "SCHEDULE", lines: [{ text: "9:00 standup", row: 0 }] }],
+  });
+  const lgroup = regionGroup(labeled.aiSvg, "schedule") ?? "";
+  // The label banner is a filled rect at a NEGATIVE local y (sits above row 0).
+  check("label draws a banner above the region (negative y)", /<rect[^>]*y="-\d+"[^>]*rx="6"/.test(lgroup), lgroup.slice(0, 200));
+  check("label text is the title, white on the banner", lgroup.includes(">SCHEDULE</text>") && lgroup.includes('fill="#FFFFFF"'), lgroup.slice(0, 260));
+  check("label does not consume row 0 (the line still lands in its slot)", lgroup.includes(">9:00 standup</text>"), lgroup);
+  // No label, default theme → no banner emitted (back-compat).
+  const noLabel = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", lines: [{ text: "x", row: 0 }] }] })).aiSvg, "schedule") ?? "";
+  check("no label → no banner rect", !/<rect[^>]*rx="6"/.test(noLabel), noLabel);
 
   console.log("\noverflow warnings (dry-run, no write)");
   const longText = "This is an absurdly long line of text that cannot possibly fit the box".repeat(1);
@@ -343,6 +411,27 @@ async function main() {
   const travBase = travHref.replace(/^href="media\/ai\//, "").replace(/"$/, "");
   // Safe = stays under media/ai/: no slash in the filename, no leading dot (no `../`).
   check("sanitizes a traversal filename", travHref.startsWith('href="media/ai/') && !travBase.includes("/") && !travBase.startsWith("."), travHref);
+
+  console.log("\nwrite_underlay images via local file `path` (no base64 through context)");
+  const srcPng = path.join(os.tmpdir(), "onionskin-smoke-src.png");
+  await fs.writeFile(srcPng, Buffer.from(PNG_1x1, "base64"));
+  await writeUnderlay(root, imgPage, {
+    status: "ready",
+    regions: [{ region: "notes", images: [{ path: srcPng, name: "from-path", width: 64 }] }],
+  });
+  const pathAi = await fs.readFile(path.join(root, imgPage, "ai.svg"), "utf8");
+  const pathFile = path.join(root, imgPage, "media", "ai", "from-path.png");
+  check("path image referenced from ai.svg", pathAi.includes('href="media/ai/from-path.png"'), pathAi.slice(0, 160));
+  check("format sniffed from the file (no format passed)", await exists(pathFile));
+  check("path image bytes copied into media/ai/", (await fs.readFile(pathFile)).equals(Buffer.from(PNG_1x1, "base64")));
+  check("path image aspect-fills height (1×1 → 64²)", /width="64" height="64"/.test(pathAi), pathAi);
+  let badPath = false;
+  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ path: "/no/such/file-xyz.png", width: 40 }] }] }); } catch { badPath = true; }
+  check("a missing path file errors clearly", badPath);
+  let bothErr = false;
+  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, path: srcPng, format: "png", width: 40 }] }] }); } catch { bothErr = true; }
+  check("rejects an image with both data and path", bothErr);
+  await fs.rm(srcPng, { force: true });
 
   console.log("\nNEGATIVE: refuse Private + traversal");
   let refusedPrivate = false;

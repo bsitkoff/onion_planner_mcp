@@ -123,8 +123,11 @@ server.tool(
 server.tool(
   "read_page",
   "Read one shared page: its manifest, parsed regions (name, x, y, width, height, rows, " +
-    "cols, and absolute ruled-line positions), current ai.svg, and optionally template.svg. " +
-    "Use the regions to target write_underlay — never hard-code coordinates.",
+    "cols, and absolute ruled-line positions), current ai.svg, and a `template` summary, and " +
+    "optionally template.svg. Use the regions to target write_underlay — never hard-code " +
+    "coordinates. `template` reports whether the template already decorates itself " +
+    "(`styled`/`hasLabels`/`hasBanners`/`stickersPresent`) and its own `palette`: if styled, " +
+    "fill quietly in those colours; if bare, go full (theme + banners + art).",
   {
     page: z
       .string()
@@ -208,6 +211,17 @@ const lineSchema = z.object({
       "Wrap long text to the region width instead of overflowing. Continuation " +
         "lines stack just below the baseline (they don't consume the next ruled row).",
     ),
+  heading: z
+    .boolean()
+    .optional()
+    .describe(
+      "Render this line as a SECTION HEADING (bold, letter-spaced, with a hairline " +
+        "rule beneath) instead of body text. Use it to draw dynamic structure into a " +
+        "neutral box region — e.g. carve `notes` into 'Important' / 'Tomorrow' / " +
+        "'Habits' sub-blocks on the days that need them, with the items below. In a box " +
+        "region the lines flow top-down, so a heading + its items stack naturally. " +
+        "`marker`/`wrap` are ignored on a heading.",
+    ),
 });
 
 // Calendar grid for the month region — the server computes each day's cell from
@@ -237,11 +251,23 @@ const calendarSchema = z.object({
 const imageSchema = z.object({
   data: z
     .string()
+    .optional()
     .describe(
-      "Base64-encoded image bytes. The caller supplies the art — this server has no " +
-        "network and generates nothing. Keep it small (≤1536px JPEG); there is a 2MB cap.",
+      "Base64-encoded image bytes (the art — this server has no network and generates " +
+        "nothing). Keep it small (≤1536px); there is a 2MB cap. Give EITHER `data` or `path`.",
     ),
-  format: z.enum(["png", "jpeg"]).describe("Encoding of `data` (png keeps alpha; jpeg for photos)."),
+  path: z
+    .string()
+    .optional()
+    .describe(
+      "Absolute local file path to read the image from instead of inlining `data` — so a " +
+        "generated PNG never passes through the model context (right for overnight/automated " +
+        "writes). Leading `~` is expanded. Give EITHER `data` or `path`, not both.",
+    ),
+  format: z
+    .enum(["png", "jpeg"])
+    .optional()
+    .describe("Encoding (png keeps alpha; jpeg for photos). Optional with `path` — sniffed from the file."),
   name: z
     .string()
     .optional()
@@ -260,6 +286,8 @@ const imageSchema = z.object({
     .describe("Placement within the region box (default center). Ignored if x/y are set."),
   margin: z.number().optional().describe("Inset from the region edge for corner placement (default 8)."),
   opacity: z.number().min(0).max(1).optional().describe("Image opacity, 0–1."),
+}).refine((i) => (i.data === undefined) !== (i.path === undefined), {
+  message: "Provide exactly one of `data` or `path` for an image.",
 });
 
 server.tool(
@@ -280,6 +308,16 @@ server.tool(
           region: z
             .string()
             .describe('Region name from read_page, e.g. "schedule", "todo", "quote".'),
+          label: z
+            .string()
+            .optional()
+            .describe(
+              "A region TITLE banner drawn in the margin above the region (doesn't consume a " +
+                "row) — use to label a region a minimal template left bare (e.g. \"SCHEDULE\", " +
+                "\"TOP 3\"). Themed like headings (colored pill, or label+rule). For a sub-section " +
+                "INSIDE a box region, use a line with `heading` instead.",
+            ),
+          labelFill: z.string().optional().describe("Override the label banner color (default: theme)."),
           lines: z
             .array(lineSchema)
             .optional()
@@ -336,9 +374,18 @@ server.tool(
       .boolean()
       .default(false)
       .describe("Compose and return the result + warnings WITHOUT writing or changing status."),
+    theme: z
+      .enum(["gold", "bright", "cozy", "editorial"])
+      .optional()
+      .describe(
+        "Page palette — colours the section banners, body text, and accents. PICK IT TO " +
+          "FIT THE DAY: 'bright' (lively, saturated — a fun/light day), 'cozy' (warm, " +
+          "hand-painted — a calm or rainy day), 'editorial' (restrained, few accents — a " +
+          "heads-down work day), 'gold' (the quiet monochrome default). Ignored with raw `svg`.",
+      ),
   },
   { idempotentHint: true },
-  async ({ page, regions, svg, status, merge, dryRun }) => {
+  async ({ page, regions, svg, status, merge, dryRun, theme }) => {
     try {
       if ((regions && svg) || (!regions && !svg)) {
         return {
@@ -353,7 +400,7 @@ server.tool(
         };
       }
       const root = await requireLibrary();
-      const res = await writeUnderlay(root, page, { regions, svg, status, merge, dryRun });
+      const res = await writeUnderlay(root, page, { regions, svg, status, merge, dryRun, theme });
       return json({ ok: true, ...res });
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {

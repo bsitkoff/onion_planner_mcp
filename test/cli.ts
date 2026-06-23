@@ -94,6 +94,7 @@ async function main() {
           status,
           merge: body.merge,
           dryRun: body.dryRun,
+          theme: body.theme,
         })),
       });
     }

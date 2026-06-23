@@ -54,11 +54,19 @@ write_underlay         → place text by region/row; server computes coordinates
 ```
 
 `row` aligns to the region's ruled lines (from `read_page`). Use `y`/`x` for explicit
-placement, `marker` (`checkbox`/`bullet`) for a leading mark, or pass a full `svg`
-document for total control. Pass `merge: true` to update only the regions you supply and
+placement, `marker` (`checkbox`/`bullet`) for a leading mark, `time` + `startHour` to place
+a schedule line by the clock, or pass a full `svg` document for total control. A line with
+`heading: true` is drawn as a **section label** (bold, letter-spaced, with a hairline rule)
+and the lines after it flow below as its items — that's how the AI layer adds day-specific
+structure (an "Important" / "Tomorrow" / "Habits" block) into a neutral region without the
+template pre-printing it. Pass `merge: true` to update only the regions you supply and
 leave the rest of the page intact (e.g. slide a new meeting into the schedule without
 clearing the to-dos); pass `dryRun: true` to get the composed SVG plus overflow `warnings`
 back without writing.
+
+**Filling a page well** — pulling her real data, never leaving it blank, and using sections
+to give each day its own shape — is its own craft: see
+[`docs/AUTHORING.md`](docs/AUTHORING.md).
 
 For a monthly page, give the `month` region a `calendar` spec instead of `lines` — the
 server lays out the grid (Sunday-start) from the template, drawing day numbers and a

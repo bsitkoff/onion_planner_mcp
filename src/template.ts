@@ -43,6 +43,77 @@ function parseTranslate(transform: unknown): { x: number; y: number } {
   return { x: Number(m[1]), y: Number(m[2]) };
 }
 
+/** What a template already provides — so the AI can match its level (see AUTHORING). */
+export interface TemplateInfo {
+  /**
+   * True if the template already decorates itself (its own labels, banners, or a
+   * starter sticker layer). On a styled template the AI should fill *quietly* into
+   * the existing slots; only a bare/minimal template (false) invites full decoration.
+   */
+  styled: boolean;
+  /** The template prints its own section labels (any `<text>` in template.svg). */
+  hasLabels: boolean;
+  /** The template draws its own filled banners/decoration (a non-"none" filled rect). */
+  hasBanners: boolean;
+  /** The page ships a non-empty stickers layer. */
+  stickersPresent: boolean;
+  /**
+   * Non-neutral colours the template itself uses (hex, most-saturated first) — the
+   * palette to MATCH when filling a styled template, instead of defaulting to gold.
+   */
+  palette: string[];
+}
+
+/** Expand #abc → #aabbcc, lowercased; null if not a hex colour. */
+function normalizeHex(s: string): string | null {
+  const m = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(s.trim());
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  return "#" + h.toLowerCase();
+}
+
+/** A near-grey, near-white, or near-black colour — template chrome, not an accent. */
+function isNeutral(hex: string): boolean {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return max - min < 28 || min > 225 || max < 30;
+}
+
+/**
+ * Inspect a template.svg (and optional stickers.svg) for what it already provides:
+ * its own labels/banners/stickers and the accent palette it uses. Derived entirely
+ * from the SVG — no dependence on template ids — so a user-authored template (a
+ * future template editor) is read the same way as the shipped catalogue.
+ */
+export function inspectTemplate(templateSvg: string, stickersSvg?: string | null): TemplateInfo {
+  const scored = new Map<string, number>(); // hex -> saturation (max-min)
+  for (const m of templateSvg.matchAll(/(?:fill|stroke)\s*=\s*"(#[0-9a-fA-F]{3,6})"/g)) {
+    const hex = normalizeHex(m[1]);
+    if (!hex || isNeutral(hex)) continue;
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    scored.set(hex, Math.max(r, g, b) - Math.min(r, g, b));
+  }
+  const palette = [...scored.entries()].sort((a, b) => b[1] - a[1]).map(([h]) => h).slice(0, 6);
+  // A real section *label* has letters ("Schedule", "TODAY") — not the schedule's
+  // hour numbers or a month grid's day numbers, which are functional, not decoration.
+  const hasLabels = /<text\b[^>]*>[^<]*[A-Za-z][^<]*<\/text>/.test(templateSvg);
+  const hasBanners = /<rect\b[^>]*\bfill\s*=\s*"#[0-9a-fA-F]{3,6}"/.test(templateSvg);
+  const stickersPresent = !!stickersSvg && /<(rect|path|image|text|circle|line|g)\b/.test(stickersSvg);
+  return {
+    styled: hasLabels || hasBanners || stickersPresent,
+    hasLabels,
+    hasBanners,
+    stickersPresent,
+    palette,
+  };
+}
+
 /** viewBox -> [width, height], or null if unparseable. */
 export function parseViewBox(templateSvg: string): [number, number] | null {
   const m = templateSvg.match(

@@ -35,9 +35,12 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
   (bold, letter-spaced, hairline rule) and box regions now flow top-down, so the AI layer
   composes day-specific structure (Important / Tomorrow / Habits) into a neutral region
   *without* enriching the template — the minimal template stays a neutral scaffold by
-  design. Plus a per-region `xPad` (schedule text clears the hour gutter) and an authoring
-  guide ([`docs/AUTHORING.md`](AUTHORING.md)) for filling pages with real, varied content.
-- **Doc/code gold sync** — `docs/MCP-INTEGRATION.md` now states the shipped `#9C7C1A`.
+  design. Plus a per-region `xPad` (left inset; the schedule's wider margin — templates print no
+  hour gutter, so the schedule is agenda-style) and an authoring guide
+  ([`docs/AUTHORING.md`](AUTHORING.md)) for filling pages with real, varied content.
+- **Gold converged** — `#9C7C1A` is now the single canonical Onionskin gold across app chrome,
+  this server, and the on-device composer; the former `#C9A227` is retired (no longer a
+  divergence). `SHARED-VISUAL-SPEC.md` is **locked** and mirrored into `../onionskin/design/FORMAT.md`.
 - **Phase 1**: `write_underlay` `merge` (region-level patch, preserves the rest verbatim);
   line `marker` (drawn `checkbox`/`bullet`); overflow/fit `warnings` (returned, non-fatal);
   `dryRun` (compose + warnings, no write). All in `svg.ts`/`page.ts`/`index.ts`.

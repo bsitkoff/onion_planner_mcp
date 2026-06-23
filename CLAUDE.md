@@ -1,8 +1,9 @@
 # CLAUDE.md
 
-Guidance for working on this repo. See `README.md` for usage, `docs/MCP-INTEGRATION.md`
-for the Onionskin file-format contract (the authoritative spec is `../onionskin/design/FORMAT.md`),
-and `docs/ROADMAP.md` for what's shipped and what's next.
+Guidance for working on this repo. See `README.md` for usage and `docs/ROADMAP.md` for what's
+shipped and what's next. **The file-format contract is [`../onionskin/design/FORMAT.md`](../onionskin/design/FORMAT.md)
+— the single source of truth;** `docs/MCP-INTEGRATION.md` is the standalone integration quickstart
+that points back to it, and `docs/AUTHORING.md` covers how to fill pages.
 
 ## What this is
 
@@ -15,6 +16,17 @@ high-level `McpServer` + `server.tool()`, `zod` schemas. Onionskin itself is an 
 app**; this server runs on the **Mac** against the iCloud Drive mirror of the app's
 container (synced via the same Apple ID; Mac writes sync back up to the iPad). It stays
 local (not on `mamastuff`) because reaching that mirror needs local macOS filesystem access.
+
+## How to document (keep docs from sprawling)
+
+**Facts live in one place; everywhere else links.** The file-format contract — layers, regions,
+the gold underlay, `manifest.json`, the on-device visual parity — is owned by
+[`../onionskin/design/FORMAT.md`](../onionskin/design/FORMAT.md); link to it rather than restating
+(duplicated facts drift). Owners in this repo: `README.md` (usage), this file
+(architecture · invariants · gotchas), `docs/AUTHORING.md` (authoring underlays + themes),
+`docs/SHARED-VISUAL-SPEC.md` (the detailed visual measurements behind FORMAT.md's summary),
+`docs/ON-DEVICE-UNDERLAY.md` (coexistence with the app's on-device composer). Change a shared fact
+in its owner once; don't copy it across files.
 
 ## Commands
 
@@ -159,12 +171,12 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
 - **Fonts are a closed set** (`Mulish`, `Newsreader`, `IBM Plex Mono`, `Caveat`, `Fredoka`,
   `Phosphor`) — only these render in-app; the shared `FONT_ENUM` in `index.ts` and per-region
   defaults in `svg.ts` (`REGION_DEFAULTS`) encode that. Don't introduce other font families.
-- **Legibility:** the gold default was deepened (`#C9A227 → #9C7C1A`) and text carries a
-  `font-weight` (per-region default 600, 500 for the serif `quote`; per-line `weight` override).
-  `font-weight` is **confirmed honoured** — the app's `Mulish`/`Newsreader` are variable fonts
-  the renderer weights at runtime. The app's authoritative brand gold is still `#C9A227`
-  (`colors.css`, `Palette.swift`, `FORMAT.md`); the server's deepened `#9C7C1A` is an
-  intentional divergence — reconcile only on Bridget's call (don't silently re-sync).
+- **Legibility:** the canonical Onionskin gold is **`#9C7C1A`** (one value, shared by the app
+  chrome, this server, and the on-device composer — `colors.css`, `Palette.swift`, `FORMAT.md`).
+  The former brand gold `#C9A227` is retired (converged 2026-06; design/DECISIONS.md #35), so the
+  server's `GOLD` is no longer a divergence. Text also carries a `font-weight` (per-region default
+  600, 500 for the serif `quote`; per-line `weight` override) — **confirmed honoured**, since the
+  app's `Mulish`/`Newsreader` are variable fonts the renderer weights at runtime.
 - **The app renderer is a custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit):
   it handles `svg, g, rect, line, path, text, image, circle` and silently drops anything else
   (`<circle>` support landed 2026-06-22, so the `bullet` marker now renders on device).

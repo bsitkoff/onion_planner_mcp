@@ -1,69 +1,78 @@
-# Shared visual spec — DRAFT for `FORMAT.md`
+# Shared visual spec — LOCKED (mirrored in `../onionskin/design/FORMAT.md`)
 
 > The contract between the two underlay authors (this MCP + the on-device sibling) is *visual
-> parity*, not a shared engine. This draft pins the MCP's **current** values and flags every
-> cross-author decision as **Q:**. It is **not locked** — the banner/label/theme values are
-> from this session and the widened banners aren't confirmed on device yet. Resolve the Q's,
-> lock, then move the agreed parts into `../onionskin/design/FORMAT.md` and port the on-device
-> composer to match on the regions it fills.
+> parity*, not a shared engine. This pins the canonical values; the cross-author decisions that
+> were open as **Q:** are now **resolved** (see each section + the summary at the end). Resolved
+> 2026-06 against the shipped app (catalogue templates, on-device composer). The agreed parts
+> (§0–4 + markers) are mirrored into `../onionskin/design/FORMAT.md`; §5–6 are MCP-only reference.
 >
-> Scope = the on-device author's subset: **schedule (hourly), to-do list, note band, monthly
-> event markers.** §5–6 (banners/themes) are MCP reference, included only to settle whether
-> the device touches them.
+> Scope = the on-device author's subset: **schedule (agenda), to-do list, note band, monthly
+> event markers.** §5–6 (banners/themes) are MCP behaviour, kept here so the boundary is explicit.
 
 ## 0. Global tokens
 
-- **Gold.** MCP default `#9C7C1A` (deepened for legibility on white). App/brand authoritative
-  `#C9A227` (`colors.css`, `Palette.swift`, `FORMAT.md`).
-  **Q: which is canonical for parity** — converge both authors on one value, or keep `#9C7C1A`
-  as the shared "ink" default and reserve `#C9A227` for brand chrome?
+- **Gold — `#9C7C1A`, canonical.** One value, shared by the app chrome, this MCP, and the
+  on-device composer (`colors.css`, `Palette.swift`, `FORMAT.md`). The former brand gold
+  `#C9A227` is retired (converged 2026-06; `../onionskin/design/DECISIONS.md` #35). It is
+  deepened so small AI text stays legible on the cream page.
 - **Fonts (closed set):** `Mulish` (sans), `Newsreader` (serif), `IBM Plex Mono` (mono),
   `Caveat`, `Fredoka`, `Phosphor` (icons). Unknown families fall back to the serif.
 - **Defaults:** body weight `600`; left inset `24px` from a region's left edge.
 - **Solid fills only** (the renderer has no gradient support).
+- **Two style axes (don't conflate):** a *template's* **style** — `minimal / cozy / colorful`,
+  how rich the printed page is — is independent of the *underlay's* **theme** (§6), the day's
+  mood. They pair naturally (minimal ↔ gold/editorial, cozy ↔ cozy, colorful ↔ bright) but are
+  separate vocabularies on purpose.
 
-## 1. Schedule (hourly)
+## 1. Schedule (agenda)
 
 - Text: **Mulish 15 / weight 600 / gold**.
-- **Left inset 52px** (clears printed hour numbers in the gutter).
+- **Resolved — no template prints hour labels.** Verified across the catalogue (e.g.
+  `daily-minimal` exposes `region-schedule` as ruled rows only, no `HH:00` gutter). So the
+  schedule reads as a **sequential agenda**: place items by `row` (snap to a ruled line), or by
+  clock `time` anchored via the region's `startHour` + `rowsPerHour` when the caller wants clock
+  alignment. There is no printed hour gutter to clear, so the `52px` schedule inset now acts as a
+  plain left margin (kept for breathing room; reduce to the `24px` default if a flush look is
+  wanted — cosmetic, safe either way).
 - Baseline: drop to `ruledLine + 0.40 × row-pitch` below the ruled line it lands on.
-- **Q: do the on-device daily templates print hour labels in a left gutter** (forcing the
-  52px inset), and over what range? (MCP's live daily grid = **7→21**, i.e. 7a–9p, 1 row/hr.)
-- **Q: does the device place items by clock time (snap to nearest hour row) or as a sequential
-  agenda list?** (Templates *without* printed hours read better as an agenda.)
 
 ## 2. To-do list
 
 - Text: **Mulish 15 / 600 / gold**.
+- **Resolved — most templates print their own checkbox squares.** Verified: `todo-*` print a
+  full column of `26×26` boxes; `daily-cozy` / `daily-colorful` print ~7 in their to-do region;
+  `daily-minimal` prints none (ruled rows only). **Rule: inspect the template.** If it prints
+  boxes, the author writes **text only**, aligned to the ruled rows — do *not* also draw a marker
+  (that yields double boxes). If it prints none, the author may draw `marker: "checkbox"`.
 - Checkbox marker (when author-drawn): square, side `round(0.85 × size)`, stroke
   `max(1, round(size/12))`, corner `rx 2`, `fill none`, gold stroke; box top = `baseline −
   side`; text starts at `box + round(0.4 × size)` past the left inset.
-- **Q: does the device draw its own checkboxes, or do the to-do templates already print
-  checkbox squares** (so the device writes only the text, aligned to rows)? (MCP's cozy/minimal
-  templates print their own; the legacy daily did not — drawing both = double boxes.)
 
 ## 3. Note band
 
 - Text: **Mulish 14 / 600 / gold**.
-- Stacking: first-line top pad `≈ 1.2 × size`; line leading `≈ 1.5 × size`; wrapped
-  continuations `≈ 1.3 × size` below the baseline (don't consume the next row).
-- **Q: does the device wrap long notes to the band width, and what is the band geometry**
-  (a single open band vs ruled lines)?
+- **Resolved — wrap is on for free-text regions** (`notes`, `quote`). Stacking: first-line top
+  pad `≈ 1.2 × size`; line leading `≈ 1.5 × size`; wrapped continuations `≈ 1.3 × size` below the
+  baseline (they don't consume the next ruled row). Geometry follows the region `<rect>` (a single
+  open band, or ruled lines when the template draws them).
 
 ## 4. Monthly event markers
 
+- **Resolved — templates ship a blank grid, no printed day numbers.** Verified: `monthly-*`
+  expose `region-month` with `data-cols="7" data-rows="6"` and no numbers. So an author (the app's
+  default seed, or the MCP) draws the numbers **and** the tap targets:
 - Day number: **Mulish 18 / 600 / accent (gold)**, at cell top-left — `x = cellLeft + 8`,
   `baseline = cellTop + 18 + 4`.
 - Event label: **Mulish 12 / 500 / accent**, under the number (`baseline + 12 + 6`).
-- Tap target: `<rect data-date="YYYY-MM-DD" fill="none">` covering the cell (the app's
-  tap-to-day). **Both authors must emit this identically** if either writes the month grid.
-- **Q: do monthly templates already print the day numbers?** If so the device (and the MCP)
-  should add only the event label + `data-date` rect, not re-draw the number (same double-up
-  risk as banners-on-a-styled-template).
-- **Q: event marker style — text label, colored dot, or both; and what color** (gold, or by
-  event type)?
+- Tap target: `<rect data-date="YYYY-MM-DD" fill="none">` covering the cell. **Both authors must
+  emit this identically** — Sunday-start, matching the `SUN…SAT` headers.
+- Event marker style: a small gold **dot** (`r 4`) on days with events, plus the optional text
+  label; gold, not by-event-type (keep it quiet — the page styling carries the colour).
 
-## 5. Banners / labels / headings — MCP region system (reference)
+## 5. Banners / labels / headings — MCP only (reference)
+
+> **Resolved — the on-device sibling draws no banners/labels** (content-only; it relies on the
+> template's printed labels). So this section is MCP behaviour; on-device parity is §0–4 + markers.
 
 - **Heading banner** (themed "banner" style): pill `<rect rx="6">` in the banner color,
   height `round(1.15 × size) + 6`, top `baseline − round(0.82 × size) − 3`; label **weight 700**,
@@ -73,24 +82,28 @@
   drawn in the **margin above** the region (local baseline `y = −12`).
 - Pill width: `round(len × size × 0.82) + 2 × 12` — deliberately generous (the app's bold,
   tracked label renders wider than the body-text width heuristic).
-- **Q: does the on-device author draw any banners/labels at all, or only fill content**
-  (relying on template-printed labels)? If content-only, §5 is MCP-only and parity is just
-  §0–4 + markers.
 
-## 6. Themes (MCP)
+## 6. Themes (MCP underlay mood — the second axis)
 
 Themes are *defaults, not law* — any banner/text color is overridable per element. Current set:
 `gold` (mono, underline headings), `bright` (teal/coral/pink/grape banners, `#3A3A3A` ink),
 `cozy` (rose/sage/gold/plum, `#4A4A4A` ink), `editorial` (terracotta/greige, underline).
-- **Q: does the device pick a theme/mood per day like the MCP, or render one quiet style**
-  (gold, or matched to the template's own palette)?
 
-## Open questions (consolidated)
+> **Resolved — the MCP picks a per-day theme; the on-device sibling renders one quiet style**
+> (the canonical gold, matched to the template). The MCP's theme is the underlay *mood* axis and
+> is independent of the template's *style* (§0). The orchestrator picks the theme to fit the day
+> (see `AUTHORING.md`).
 
-1. Canonical **gold** for parity (`#9C7C1A` vs `#C9A227`)? (§0)
-2. Do daily templates print **hour labels**; clock-snap vs agenda for the schedule? (§1)
-3. Do to-do templates print **checkboxes** (author draws text only)? (§2)
-4. Note band: **wrap** + geometry? (§3)
-5. Do monthly templates print **day numbers**; event marker style/color? (§4)
-6. Does the device draw **banners/labels** at all, or content-only? (§5)
-7. Does the device pick a **theme**, or one quiet/matched style? (§6)
+## Resolved decisions (consolidated)
+
+1. **Gold:** `#9C7C1A` is canonical everywhere; `#C9A227` retired. (§0)
+2. **Schedule:** no template prints hour labels → agenda placement (`row`, or `time` via
+   `startHour`/`rowsPerHour`); the 52px inset is now just a margin. (§1)
+3. **To-do:** most templates print their own checkboxes → author writes **text only** there;
+   draw a marker only when the template prints none. (§2)
+4. **Note band:** wrap **on** for `notes`/`quote`; geometry from the region rect. (§3)
+5. **Monthly:** templates print no day numbers → author draws numbers + `data-date` rects;
+   marker = gold dot (+ optional label). (§4)
+6. **Banners:** MCP draws them; on-device is content-only. (§5)
+7. **Theme:** MCP picks a per-day theme; on-device renders one quiet/matched style. Template
+   *style* and underlay *theme* are independent axes. (§6)

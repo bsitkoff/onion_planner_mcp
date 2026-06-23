@@ -1,9 +1,9 @@
 import type { Region } from "./template.js";
 
 /**
- * The gold layer colour, per the Onionskin contract. Deepened from the original
- * #C9A227 for legibility on white paper (the brand gold read too light/thin on
- * device). One constant — retune here if the brand gold shifts.
+ * The single canonical Onionskin gold, per the contract — one value shared by the
+ * app chrome, this MCP, and the on-device composer (deepened so it stays legible on
+ * white paper). One constant — retune here if the brand gold shifts.
  */
 export const GOLD = "#9C7C1A";
 
@@ -44,7 +44,7 @@ export const THEMES: Record<string, Theme> = {
   // Softer, hand-painted warmth.
   cozy: {
     text: "#4A4A4A", serif: "#7E5A78", accent: "#C56B6B",
-    bannerText: "#FFFFFF", banners: ["#C56B6B", "#7C8A5A", "#C9A227", "#7E5A78"],
+    bannerText: "#FFFFFF", banners: ["#C56B6B", "#7C8A5A", "#9C7C1A", "#7E5A78"],
     headingStyle: "banner",
   },
   // Restrained — one or two accents, quiet labels, lots of whitespace.

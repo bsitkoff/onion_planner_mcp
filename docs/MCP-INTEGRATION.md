@@ -121,9 +121,10 @@ label + rule, with its items flowing below). Don't ask for a richer template; co
 richness into `ai.svg`.
 
 ### c. Write `ai.svg`
-Emit one self-contained SVG on the page's `viewBox`. Gold is `#9C7C1A` — the brand gold
-(`#C9A227`) deepened for legibility on white paper; this is what the reference server emits
-by default. Group your output by region so it's legible:
+Emit one self-contained SVG on the page's `viewBox`. Gold is `#9C7C1A` — the single canonical
+Onionskin gold (shared by the app chrome, this server, and the on-device composer; deepened for
+legibility on white paper). This is what the reference server emits by default. Group your
+output by region so it's legible:
 
 ```xml
 <svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg">

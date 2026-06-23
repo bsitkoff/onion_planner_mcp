@@ -54,10 +54,13 @@ cut-out — the grey-background knockout currently lives only in the MCP-side im
 ## The collaboration point — visual parity
 
 The on-device path doesn't need this MCP's engine; it needs to **look consistent** with MCP
-output on the regions it fills. So: **when the MCP restyle locks, capture the shared visual
-spec in `../onionskin/design/FORMAT.md`** — gold values, fonts, `label`/`heading` style,
-spacing, region layout — and the on-device composer ports to match it on its subset of regions.
-That visual spec, not a shared codebase, is the contract between the two authors.
+output on the regions it fills — gold values, fonts, `label`/`heading` style, spacing, region
+layout. That visual spec, not a shared codebase, is the contract between the two authors.
 
-A working draft — current MCP values pinned, parity decisions marked as questions — is in
-[`SHARED-VISUAL-SPEC.md`](SHARED-VISUAL-SPEC.md), ready to resolve and fold into `FORMAT.md`.
+**The spec is now locked** in [`SHARED-VISUAL-SPEC.md`](SHARED-VISUAL-SPEC.md) (parity decisions
+resolved 2026-06) and its agreed parts (§0–4 + markers) are mirrored into
+`../onionskin/design/FORMAT.md`. The on-device composer matches it on its subset (schedule
+agenda, to-do text, note band, monthly markers) and draws **no banners** (§5 is MCP-only). Key
+resolved points for this author: one canonical gold `#9C7C1A`; schedule is agenda-style (no
+printed hour labels); write to-do **text only** where the template prints its own checkboxes;
+render **one quiet gold style**, not a per-day theme.

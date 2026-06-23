@@ -64,6 +64,14 @@ from a wide-open summer beach day.
 | `editorial` | restrained, quiet labels | a heads-down, focused work day |
 | `gold` | quiet monochrome (default) | when you want the underlay to recede |
 
+> **Two axes — theme vs template style.** Your `theme` is the underlay's *mood* (the day's
+> content). It is independent of the *template's* **style** — `minimal / cozy / colorful`, how
+> rich the printed page already is (visible in the template's id/name, and surfaced as the
+> `styled` flag + `palette` in the page summary). They pair naturally — **minimal ↔
+> `gold`/`editorial`, cozy ↔ `cozy`, colorful ↔ `bright`** — so a sensible default is to echo a
+> styled template with the matching theme (or its own `palette`), then deviate when the day calls
+> for it. A loud theme on an already-colorful template competes; a quiet theme lets it breathe.
+
 Let the rest of the page agree with the theme: a cozy rainy day might run a fuller schedule
 and a tea/umbrella sticker; a bright summer day, a lighter schedule and a beach motif. The
 theme, the content, and the art should tell one story about *that* day.

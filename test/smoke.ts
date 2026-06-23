@@ -26,7 +26,8 @@ import {
   clearUnderlay,
   createPage,
 } from "../src/page.js";
-import { GOLD } from "../src/svg.js";
+import { GOLD, resolveTheme } from "../src/svg.js";
+import { hexToHsl } from "../src/color.js";
 import { inspectTemplate } from "../src/template.js";
 
 let pass = 0;
@@ -230,6 +231,45 @@ async function main() {
   // The gold default is unchanged (back-compat): headings stay underline+rule.
   const goldHead = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "notes", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "notes") ?? "";
   check("default (no theme) keeps the gold underline heading", goldHead.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(goldHead), goldHead);
+
+  console.log("\nadaptive theme contract (harmony / variety / fontPersonality)");
+  // No knobs → the gold default (back-compat for the resolver itself).
+  check("resolveTheme({}) is the gold default", resolveTheme({}).theme.text === GOLD);
+  // harmony=match derives banners FROM the template palette, not a fixed preset.
+  const pal = ["#E2825E", "#8FA98A", "#88B0D4"];
+  const matched = resolveTheme({ harmony: "match", varietyDial: 0.9, templatePalette: pal });
+  check("harmony=match derives multiple banners from the template palette", matched.theme.banners.length >= 2 && matched.theme.banners.every((h) => /^#[0-9a-f]{6}$/.test(h)), JSON.stringify(matched.theme.banners));
+  check("high variety → banner-pill headings", matched.theme.headingStyle === "banner");
+  check("low variety → quiet underline headings", resolveTheme({ harmony: "match", varietyDial: 0.1, templatePalette: pal }).theme.headingStyle === "underline");
+  // Legibility floor: derived BODY text is dark enough to read on cream (solved at
+  // derivation, not warned at runtime — even from a pale template swatch).
+  const pale = resolveTheme({ harmony: "match", templatePalette: ["#F2B8CC"] });
+  check("derived body text is floored dark (legible on cream)", hexToHsl(pale.theme.text).l <= 0.36, `${pale.theme.text} (L=${hexToHsl(pale.theme.text).l.toFixed(2)})`);
+  // Empty palette while harmonising → sticker-palette fallback + a note.
+  check("adaptive with no template palette warns about the fallback", resolveTheme({ harmony: "complement", templatePalette: [] }).warnings.some((w) => w.includes("sticker palette")));
+  // fontPersonality is an orthogonal axis: it swaps fonts but NOT the gold palette.
+  const hand = resolveTheme({ fontPersonality: "handwritten" });
+  check("fontPersonality=handwritten sets Caveat body / keeps gold palette", hand.theme.fonts?.body === "Caveat" && hand.theme.text === GOLD, JSON.stringify(hand.theme.fonts));
+  // End-to-end: fontPersonality flows into the composed text.
+  const written = await writeUnderlay(root, daily, { status: "ready", dryRun: true, fontPersonality: "handwritten", regions: [{ region: "notes", lines: [{ text: "buy milk" }] }] });
+  check("fontPersonality reaches the composed ai.svg (Caveat body text)", (regionGroup(written.aiSvg, "notes") ?? "").includes('font-family="Caveat"'), regionGroup(written.aiSvg, "notes") ?? "");
+
+  console.log("\nchapter .folder.json theme is read as the default (overridable per call)");
+  const dailyFolder = path.join(root, "Shared", "Daily", ".folder.json");
+  const folderJson = JSON.parse(await fs.readFile(dailyFolder, "utf8").catch(() => "{}"));
+  folderJson.theme = { harmony: "match", varietyDial: 0.9, fontPersonality: "handwritten" };
+  await fs.writeFile(dailyFolder, JSON.stringify(folderJson, null, 2) + "\n");
+  const fromChapter = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "notes", lines: [{ text: "Plan", heading: true }, { text: "milk" }] }] });
+  const fcg = regionGroup(fromChapter.aiSvg, "notes") ?? "";
+  check("read_page surfaces the chapter theme", (await readPage(root, daily)).theme?.fontPersonality === "handwritten");
+  check("chapter theme applies with no per-call params (handwritten heading font)", fcg.includes('font-family="Fredoka"'), fcg.slice(0, 200));
+  check("chapter high-variety gives banner-pill headings", /<rect[^>]*rx="6"/.test(fcg), fcg.slice(0, 200));
+  // Per-call preset overrides the chapter's adaptive default.
+  const overridden = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, theme: "gold", regions: [{ region: "notes", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "notes") ?? "";
+  check("per-call theme:gold overrides the chapter's adaptive theme", overridden.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(overridden), overridden.slice(0, 200));
+  // Restore the folder so later assertions see no theme.
+  delete folderJson.theme;
+  await fs.writeFile(dailyFolder, JSON.stringify(folderJson, null, 2) + "\n");
 
   console.log("\nregion label banner (above the box; themed; dry-run)");
   const labeled = await writeUnderlay(root, daily, {

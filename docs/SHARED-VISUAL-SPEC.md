@@ -11,10 +11,15 @@
 
 ## 0. Global tokens
 
-- **Gold — `#9C7C1A`, canonical.** One value, shared by the app chrome, this MCP, and the
-  on-device composer (`colors.css`, `Palette.swift`, `FORMAT.md`). The former brand gold
-  `#C9A227` is retired (converged 2026-06; `../onionskin/design/DECISIONS.md` #35). It is
-  deepened so small AI text stays legible on the cream page.
+- **Gold — `#9C7C1A`, canonical (one value in the underlay).** Shared by the app chrome, this
+  MCP, and the on-device composer (`colors.css`, `Palette.swift`, `FORMAT.md`). The former brand
+  gold `#C9A227` is retired (converged 2026-06; `../onionskin/design/DECISIONS.md` #35). It is
+  deepened so AI text stays legible on the cream page.
+  - *Note (2026-06 redesign review):* the **chrome** additionally defines `--gold-ink #7E5C12`,
+    an AA-tuned gold for *small text on light* (distinct from `--gold-1 #9C7C1A`, used for fills).
+    The **underlay deliberately does not adopt the split** — both authors emit the single
+    `#9C7C1A` here, so visual parity stays trivial. (The underlay text we emit is bold/large
+    enough that `#9C7C1A` clears AA-large on cream; the second token is a chrome concern.)
 - **Fonts (closed set):** `Mulish` (sans), `Newsreader` (serif), `IBM Plex Mono` (mono),
   `Caveat`, `Fredoka`, `Phosphor` (icons). Unknown families fall back to the serif.
 - **Defaults:** body weight `600`; left inset `24px` from a region's left edge.
@@ -85,14 +90,35 @@
 
 ## 6. Themes (MCP underlay mood — the second axis)
 
-Themes are *defaults, not law* — any banner/text color is overridable per element. Current set:
-`gold` (mono, underline headings), `bright` (teal/coral/pink/grape banners, `#3A3A3A` ink),
-`cozy` (rose/sage/gold/plum, `#4A4A4A` ink), `editorial` (terracotta/greige, underline).
+The underlay mood is drivable two ways, both *defaults, not law* (any banner/text color is
+overridable per element):
+
+1. **Named presets** (quick pick / back-compat): `gold` (mono, underline headings), `bright`
+   (teal/coral/pink/grape banners, `#3A3A3A` ink), `cozy` (rose/sage/gold/plum, `#4A4A4A` ink),
+   `editorial` (terracotta/greige, underline).
+2. **The adaptive param block** — `{ harmony, varietyDial, fontPersonality }`, the chapter-theme
+   axis. **The contract keys are owned by the app's `FORMAT.md §4`** (`.folder.json → theme`); not
+   restated here. MCP-side consumption:
+   - **`harmony`** (`match`/`complement`/`warm`/`cool`/`seasonal`) derives the day's palette from
+     the template's **own sampled colours** (`read_page`'s `template.palette`); empty → the
+     Onionskin sticker palette, with a warning. Derived **text** roles are floored dark so they
+     read on cream (legibility solved at derivation, not warned per write); banner fills are banded
+     so white pill text reads.
+   - **`varietyDial`** (0…1) scales banner count + saturation, and picks heading style
+     (`<0.4` → quiet underline, else banner pills).
+   - **`fontPersonality`** (`clean`/`handwritten`/`editorial`) swaps font families only (within the
+     closed set: `clean`=Mulish/Newsreader, `handwritten`=Caveat/Fredoka, `editorial`=Newsreader-led)
+     — an **orthogonal axis**, layered on any palette including the gold default.
+   - **`chromeAccent`** is the app's concern (chrome only) — accepted and ignored.
+
+`write_underlay` reads the chapter theme as the **default** and accepts per-call **overrides**
+(field-by-field; a per-call preset name given alone wins outright). The app passes the same block
+to the on-device composer.
 
 > **Resolved — the MCP picks a per-day theme; the on-device sibling renders one quiet style**
 > (the canonical gold, matched to the template). The MCP's theme is the underlay *mood* axis and
-> is independent of the template's *style* (§0). The orchestrator picks the theme to fit the day
-> (see `AUTHORING.md`).
+> is independent of the template's *style* (§0). The orchestrator picks the theme to fit the day,
+> or sets it once on the chapter (see `AUTHORING.md`).
 
 ## Resolved decisions (consolidated)
 
@@ -105,5 +131,8 @@ Themes are *defaults, not law* — any banner/text color is overridable per elem
 5. **Monthly:** templates print no day numbers → author draws numbers + `data-date` rects;
    marker = gold dot (+ optional label). (§4)
 6. **Banners:** MCP draws them; on-device is content-only. (§5)
-7. **Theme:** MCP picks a per-day theme; on-device renders one quiet/matched style. Template
-   *style* and underlay *theme* are independent axes. (§6)
+7. **Theme:** the underlay mood is set by named presets *or* the adaptive `{ harmony, varietyDial,
+   fontPersonality }` block (chapter `.folder.json → theme`, keys owned by app `FORMAT.md §4`);
+   `write_underlay` reads the chapter theme as default + accepts per-call overrides. MCP picks the
+   per-day theme; on-device renders one quiet/matched style. Template *style* and underlay *theme*
+   stay independent axes. Underlay gold stays the single `#9C7C1A` (no fill/text split). (§0, §6)

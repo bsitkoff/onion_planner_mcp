@@ -4,7 +4,79 @@ import os from "node:os";
 import { createHash } from "node:crypto";
 import { resolvePageRel } from "./paths.js";
 import { parseRegions, parseViewBox, inspectTemplate, type Region, type TemplateInfo } from "./template.js";
-import { composeAiSvg, mergeRegions, emptySvg, imageDims, type RegionInput } from "./svg.js";
+import {
+  composeAiSvg,
+  mergeRegions,
+  emptySvg,
+  imageDims,
+  type RegionInput,
+  type ThemeInput,
+} from "./svg.js";
+
+/**
+ * The underlay-relevant slice of a chapter's `.folder.json → theme` (the app's
+ * `FORMAT.md §4` contract). `chromeAccent` is the app's concern (chrome only); the
+ * other three are the underlay-theme axis this server honours. All optional — an
+ * absent block (or key) just means "fall back to the default" (gold / region fonts).
+ */
+export interface ChapterTheme {
+  chromeAccent?: string;
+  harmony?: "match" | "complement" | "warm" | "cool" | "seasonal";
+  varietyDial?: number;
+  fontPersonality?: "clean" | "handwritten" | "editorial";
+}
+
+/**
+ * Read a page's chapter theme from the parent folder's `.folder.json → theme`.
+ * Returns null when there's no folder file, no theme block, or it's unreadable —
+ * the contract says an absent/garbled theme degrades gracefully to the default.
+ */
+async function readChapterTheme(pageAbs: string): Promise<ChapterTheme | null> {
+  const raw = await readIfExists(path.join(path.dirname(pageAbs), ".folder.json"));
+  if (!raw) return null;
+  try {
+    const t = JSON.parse(raw)?.theme;
+    return t && typeof t === "object" ? (t as ChapterTheme) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the effective theme for a write. The chapter's `.folder.json → theme` is the
+ * **default**; per-call params **override** it field-by-field; the page's own template
+ * colours are sampled as `templatePalette` for harmony. A per-call preset `theme` name
+ * given *without* any adaptive param is an explicit override that wins outright (a
+ * chapter `fontPersonality` still rides along — fonts are an orthogonal axis).
+ */
+async function resolveThemeInput(
+  pageAbs: string,
+  templateSvg: string | null,
+  opts: {
+    theme?: string;
+    harmony?: ChapterTheme["harmony"];
+    varietyDial?: number;
+    fontPersonality?: ChapterTheme["fontPersonality"];
+  },
+): Promise<ThemeInput> {
+  const chapter = await readChapterTheme(pageAbs);
+  const templatePalette = templateSvg ? inspectTemplate(templateSvg).palette : undefined;
+  const callAdaptive =
+    opts.harmony !== undefined ||
+    opts.varietyDial !== undefined ||
+    opts.fontPersonality !== undefined;
+  if (opts.theme && !callAdaptive) {
+    return { name: opts.theme, fontPersonality: chapter?.fontPersonality, templatePalette };
+  }
+  return {
+    name: opts.theme,
+    harmony: opts.harmony ?? chapter?.harmony,
+    varietyDial: opts.varietyDial ?? chapter?.varietyDial,
+    fontPersonality: opts.fontPersonality ?? chapter?.fontPersonality,
+    chromeAccent: chapter?.chromeAccent,
+    templatePalette,
+  };
+}
 
 export type AiStatus = "empty" | "refreshing" | "ready";
 
@@ -189,6 +261,12 @@ export interface PageRead {
    * `styled`, or go full (theme, banners, art) when it's a bare minimal scaffold.
    */
   template: TemplateInfo;
+  /**
+   * The chapter's theme (`.folder.json → theme`), or null if none. Surfaced so an
+   * orchestrator can see the day's harmony/variety/font-personality + chrome accent
+   * before composing — write_underlay applies it as the default, overridable per call.
+   */
+  theme: ChapterTheme | null;
   templateSvg?: string;
 }
 
@@ -205,6 +283,7 @@ export async function readPage(
   const aiSvg = await readIfExists(path.join(abs, "ai.svg"));
   const regions = templateSvg ? parseRegions(templateSvg) : [];
   const size = pageSize(manifest, templateSvg);
+  const theme = await readChapterTheme(abs);
   return {
     page: rel,
     manifest,
@@ -215,6 +294,7 @@ export async function readPage(
     template: templateSvg
       ? inspectTemplate(templateSvg, stickersSvg)
       : { styled: false, hasLabels: false, hasBanners: false, stickersPresent: false, palette: [] },
+    theme,
     ...(includeTemplate && templateSvg ? { templateSvg } : {}),
   };
 }
@@ -266,8 +346,14 @@ export async function writeUnderlay(
     status: AiStatus;
     merge?: boolean;
     dryRun?: boolean;
-    /** Palette name (see svg.ts THEMES); defaults to gold. Ignored with raw `svg`. */
+    /** Named palette preset (gold/bright/cozy/editorial). Ignored with raw `svg`. */
     theme?: string;
+    /** Adaptive palette strategy vs the template's colours. Overrides the chapter default. */
+    harmony?: ChapterTheme["harmony"];
+    /** 0 steady … 1 surprising. Overrides the chapter default. */
+    varietyDial?: number;
+    /** AI-text voice (clean/handwritten/editorial). Overrides the chapter default. */
+    fontPersonality?: ChapterTheme["fontPersonality"];
   },
 ): Promise<WriteResult> {
   const abs = resolvePageRel(root, rel);
@@ -288,7 +374,8 @@ export async function writeUnderlay(
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg) : [];
     const size = pageSize(manifest, templateSvg);
-    const composed = composeAiSvg(size, opts.regions, regions, opts.theme);
+    const themeInput = await resolveThemeInput(abs, templateSvg, opts);
+    const composed = composeAiSvg(size, opts.regions, regions, themeInput);
     warnings = [...composed.warnings, ...imageWarnings];
     if (opts.merge) {
       const existing = await readIfExists(path.join(abs, "ai.svg"));

@@ -70,7 +70,8 @@ to exercise the MCP transport itself.
 | `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under `Shared/`, no traversal). |
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
-| `src/svg.ts` | Compose `ai.svg` from structured region input (text lines, `calendar` grid, `<image>` placement); `imageDims` header parse; gold default `GOLD` (`#9C7C1A`); per-region font/size/weight defaults. |
+| `src/svg.ts` | Compose `ai.svg` from structured region input (text lines, `calendar` grid, `<image>` placement); `imageDims` header parse; gold default `GOLD` (`#9C7C1A`); per-region font/size/weight defaults; theme resolution (named presets + adaptive `{harmony,varietyDial,fontPersonality}` param block → `Theme`). |
+| `src/color.ts` | Pure colour helpers (hex↔HSL) + `harmony` palette derivation from the template's sampled colours, with a lightness floor on derived text so it reads on cream. No deps. |
 | `src/page.ts` | Read a page, **atomic** ai.svg + `media/ai/` image writes (`resolveImages`/`gcOrphanMedia`), manifest status flips, `create_page`. |
 
 The 7 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`,
@@ -98,10 +99,15 @@ for boxes with no rules (e.g. `quote`, `notes`) — line-stacking / vertical-cen
 drawn as a shape — no font dependency) before its text, and `wrap: true` to break long text
 to the region width (continuations stack below the baseline without consuming the next ruled
 row). A line may also be a `heading` (a section label) — `banner` themes draw it as a colored
-pill, `underline` themes as a label + rule. `write_underlay` takes a **`theme`** (palette:
-`gold` default / `bright` / `cozy` / `editorial`) that colors banners, body text, accents, and
-the quote — gold was only ever a default, not a constraint, and the orchestrator is meant to
-pick the theme to fit the day's mood (see `docs/AUTHORING.md`). So callers never compute
+pill, `underline` themes as a label + rule. The page mood is set two ways: a named **`theme`** preset
+(`gold` default / `bright` / `cozy` / `editorial`) **or** the adaptive param block
+**`{ harmony, varietyDial, fontPersonality }`** — the chapter-theme axis whose keys are owned by
+the app's `FORMAT.md §4` (`.folder.json → theme`). `write_underlay` reads the chapter theme as the
+**default** (and `read_page` surfaces it) and accepts **per-call overrides**; `harmony` derives the
+day's palette from the template's *own sampled colours* (`src/color.ts`), `fontPersonality` swaps
+fonts (orthogonal), `varietyDial` scales banner count + heading style. Gold was only ever a default,
+not a constraint, and the orchestrator is meant to pick the mood to fit the day (see
+`docs/AUTHORING.md`). So callers never compute
 coordinates; they reference a region name and a row index from
 `read_page`. An unknown region name throws (listing the valid ones). Raw `svg` bypasses all
 of this — full control, no geometry help. `composeAiSvg` returns `{ svg, warnings }`; the
@@ -171,10 +177,14 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
 - **Fonts are a closed set** (`Mulish`, `Newsreader`, `IBM Plex Mono`, `Caveat`, `Fredoka`,
   `Phosphor`) — only these render in-app; the shared `FONT_ENUM` in `index.ts` and per-region
   defaults in `svg.ts` (`REGION_DEFAULTS`) encode that. Don't introduce other font families.
-- **Legibility:** the canonical Onionskin gold is **`#9C7C1A`** (one value, shared by the app
-  chrome, this server, and the on-device composer — `colors.css`, `Palette.swift`, `FORMAT.md`).
+- **Legibility:** the canonical Onionskin gold is **`#9C7C1A`** (one value in the underlay, shared by
+  the app chrome, this server, and the on-device composer — `colors.css`, `Palette.swift`, `FORMAT.md`).
   The former brand gold `#C9A227` is retired (converged 2026-06; design/DECISIONS.md #35), so the
-  server's `GOLD` is no longer a divergence. Text also carries a `font-weight` (per-region default
+  server's `GOLD` is no longer a divergence. The chrome *also* defines `--gold-ink #7E5C12` (AA-tuned
+  gold for small text) — but the **underlay deliberately does not adopt that fill/text split**; it emits
+  the single `#9C7C1A` so visual parity with the on-device composer stays trivial (SHARED-VISUAL-SPEC §0).
+  Only the `harmony`-**derived** palette deepens text (a lightness floor at derivation, so adaptive text
+  stays legible on cream — not a runtime contrast checker). Text also carries a `font-weight` (per-region default
   600, 500 for the serif `quote`; per-line `weight` override) — **confirmed honoured**, since the
   app's `Mulish`/`Newsreader` are variable fonts the renderer weights at runtime.
 - **The app renderer is a custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit):

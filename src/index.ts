@@ -127,7 +127,9 @@ server.tool(
     "optionally template.svg. Use the regions to target write_underlay — never hard-code " +
     "coordinates. `template` reports whether the template already decorates itself " +
     "(`styled`/`hasLabels`/`hasBanners`/`stickersPresent`) and its own `palette`: if styled, " +
-    "fill quietly in those colours; if bare, go full (theme + banners + art).",
+    "fill quietly in those colours; if bare, go full (theme + banners + art). Also returns " +
+    "the chapter's `theme` (harmony/varietyDial/fontPersonality + chromeAccent), which " +
+    "write_underlay applies as the default palette/fonts unless you override it per call.",
   {
     page: z
       .string()
@@ -378,14 +380,43 @@ server.tool(
       .enum(["gold", "bright", "cozy", "editorial"])
       .optional()
       .describe(
-        "Page palette — colours the section banners, body text, and accents. PICK IT TO " +
-          "FIT THE DAY: 'bright' (lively, saturated — a fun/light day), 'cozy' (warm, " +
+        "Named palette PRESET — colours the section banners, body text, and accents. PICK " +
+          "IT TO FIT THE DAY: 'bright' (lively, saturated — a fun/light day), 'cozy' (warm, " +
           "hand-painted — a calm or rainy day), 'editorial' (restrained, few accents — a " +
-          "heads-down work day), 'gold' (the quiet monochrome default). Ignored with raw `svg`.",
+          "heads-down work day), 'gold' (the quiet monochrome default). For an adaptive " +
+          "palette that harmonises to the template instead, use `harmony`/`varietyDial`. " +
+          "Ignored with raw `svg`.",
+      ),
+    harmony: z
+      .enum(["match", "complement", "warm", "cool", "seasonal"])
+      .optional()
+      .describe(
+        "Adaptive palette strategy vs the template's own colours (sampled server-side): " +
+          "'match' (use the template's swatches), 'complement', 'warm'/'cool' bias, " +
+          "'seasonal'. Overrides the chapter's theme default. Takes precedence over a " +
+          "preset `theme` name. Ignored with raw `svg`.",
+      ),
+    varietyDial: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe(
+        "How much the underlay rotates day-to-day: 0 steady (one quiet accent, underline " +
+          "headings) … 1 surprising (fuller palette, banner pills). Overrides the chapter " +
+          "default; selects an adaptive palette. Ignored with raw `svg`.",
+      ),
+    fontPersonality: z
+      .enum(["clean", "handwritten", "editorial"])
+      .optional()
+      .describe(
+        "AI-text voice: 'clean' (Mulish/Newsreader — the default look), 'handwritten' " +
+          "(Caveat/Fredoka), 'editorial' (Newsreader-led). Independent of the palette. " +
+          "Overrides the chapter default. Ignored with raw `svg`.",
       ),
   },
   { idempotentHint: true },
-  async ({ page, regions, svg, status, merge, dryRun, theme }) => {
+  async ({ page, regions, svg, status, merge, dryRun, theme, harmony, varietyDial, fontPersonality }) => {
     try {
       if ((regions && svg) || (!regions && !svg)) {
         return {
@@ -400,7 +431,17 @@ server.tool(
         };
       }
       const root = await requireLibrary();
-      const res = await writeUnderlay(root, page, { regions, svg, status, merge, dryRun, theme });
+      const res = await writeUnderlay(root, page, {
+        regions,
+        svg,
+        status,
+        merge,
+        dryRun,
+        theme,
+        harmony,
+        varietyDial,
+        fontPersonality,
+      });
       return json({ ok: true, ...res });
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {

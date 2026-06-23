@@ -76,6 +76,25 @@ Let the rest of the page agree with the theme: a cozy rainy day might run a full
 and a tea/umbrella sticker; a bright summer day, a lighter schedule and a beach motif. The
 theme, the content, and the art should tell one story about *that* day.
 
+### Adaptive theme — harmonize to the template, set the variety + font
+
+The named presets are one way to pick a mood; the other is the **adaptive param block**, which
+makes the underlay *belong* to whatever template the user is on. These three knobs live on the
+**chapter** (`.folder.json → theme`, contract owned by the app's `FORMAT.md §4`); `read_page`
+hands them back to you as `theme`, and `write_underlay` applies them as the **default** — pass
+the same names on the call to **override** for a single day.
+
+| Param | Values | What it does |
+|---|---|---|
+| `harmony` | `match` · `complement` · `warm` · `cool` · `seasonal` | Derives the day's palette from the **template's own colours** (the server samples `template.palette` for you — you don't pass colours). `match` uses the template's swatches; `complement` plays off its dominant hue; `warm`/`cool` bias; `seasonal` nudges toward the season. Empty-palette (a minimal template) → the Onionskin sticker palette + a warning. |
+| `varietyDial` | `0`…`1` | How much the surface rotates: `0` steady (one quiet accent, underline headings) … `1` surprising (fuller palette, banner pills). |
+| `fontPersonality` | `clean` · `handwritten` · `editorial` | AI-text voice only (orthogonal to colour): `clean` = the default Mulish/Newsreader; `handwritten` = Caveat/Fredoka; `editorial` = Newsreader-led. |
+
+So the usual flow is: **the chapter carries the mood** (set once), and you only pass theme params
+when a given day wants to deviate. Derived text is always floored dark enough to read on the
+cream page — you don't need to check contrast. `harmony` takes precedence over a preset `theme`
+name; `chromeAccent` in the chapter theme is the app's chrome concern and is ignored here.
+
 **Themes are defaults, not a lock — any color is yours.** Override a banner's color with a
 region's `labelFill` (region title) or a heading line's `fill` (sub-section), and body text
 with a line's `fill` — any hex. So an overnight job can drive an exact palette: e.g. all

@@ -1,24 +1,38 @@
 import type { Region } from "./template.js";
+import { derivePalette, type Harmony } from "./color.js";
 
 /**
  * The single canonical Onionskin gold, per the contract — one value shared by the
  * app chrome, this MCP, and the on-device composer (deepened so it stays legible on
- * white paper). One constant — retune here if the brand gold shifts.
+ * the cream page). One constant — retune here if the brand gold shifts. (`#7E5C12`,
+ * the chrome's AA-tuned *text* gold, is deliberately NOT used in the underlay — the
+ * locked contract emits one gold here; see `docs/SHARED-VISUAL-SPEC.md` §0.)
  */
 export const GOLD = "#9C7C1A";
 
+/** Font roles applied when a `fontPersonality` is chosen (else region defaults stand). */
+export interface ThemeFonts {
+  /** Body lines (schedule, to-do, notes, priorities…). */
+  body: string;
+  /** Heading lines + region-title labels/banners. */
+  heading: string;
+  /** The serif "quote" register. */
+  serif: string;
+}
+
 /**
- * A page palette. Gold was only ever a *default*, not a constraint — the app
- * renderer honours any `fill`, so the AI layer can carry colour. A theme maps the
- * composer's colour roles; callers pick one with `write_underlay({ theme })`.
+ * A resolved page palette + fonts. Gold was only ever a *default*, not a constraint —
+ * the app renderer honours any `fill`, so the AI layer can carry colour. A theme maps
+ * the composer's colour roles; callers pick a named preset *or* the adaptive param
+ * block (`harmony`/`varietyDial`/`fontPersonality`) via `write_underlay`.
  *
  * - `text`/`serif`: body text (serif = the quote region).
  * - `accent`: markers (checkbox/bullet), rules, calendar day numbers.
  * - `banners` + `bannerText`: section-heading banners (a coloured pill behind a
- *   white label), cycled per heading so sections read distinctly — like the
- *   colour-coded banners in a real planner.
- * - `headingStyle`: `banner` (coloured pill) or `underline` (coloured label +
- *   hairline rule — the quieter, original look).
+ *   white label), cycled per heading so sections read distinctly.
+ * - `headingStyle`: `banner` (coloured pill) or `underline` (label + hairline rule).
+ * - `fonts`: optional family overrides from `fontPersonality`; undefined = the
+ *   per-region defaults (`REGION_DEFAULTS`).
  */
 export interface Theme {
   text: string;
@@ -27,6 +41,7 @@ export interface Theme {
   bannerText: string;
   banners: string[];
   headingStyle: "banner" | "underline";
+  fonts?: ThemeFonts;
 }
 
 export const THEMES: Record<string, Theme> = {
@@ -56,9 +71,107 @@ export const THEMES: Record<string, Theme> = {
 
 export const THEME_NAMES = Object.keys(THEMES);
 
-/** Resolve a theme name to a Theme, defaulting to the legacy gold palette. */
-export function resolveTheme(name?: string): Theme {
-  return (name && THEMES[name]) || THEMES.gold;
+export type FontPersonality = "clean" | "handwritten" | "editorial";
+
+/**
+ * `fontPersonality` → font families (all within the closed in-app set). `clean`
+ * reproduces the historical defaults exactly (Mulish body/heading, Newsreader serif),
+ * so an unset/`clean` personality is a no-op on output.
+ */
+const FONT_PERSONALITIES: Record<FontPersonality, ThemeFonts> = {
+  clean: { body: "Mulish", heading: "Mulish", serif: "Newsreader" },
+  handwritten: { body: "Caveat", heading: "Fredoka", serif: "Caveat" },
+  editorial: { body: "Newsreader", heading: "Mulish", serif: "Newsreader" },
+};
+
+/**
+ * The chapter theme contract (`.folder.json → theme`, per the app's `FORMAT.md §4`)
+ * as this server consumes it, plus the back-compat preset `name`. `chromeAccent` is
+ * the app's concern (chrome only) — accepted and ignored here. `templatePalette` is
+ * what we sample from the page's own template (`read_page`'s `template.palette`); the
+ * app doesn't send it (we're not its caller — an orchestrator drives us).
+ */
+export interface ThemeInput {
+  /** Named preset (gold/bright/cozy/editorial) — quick pick / back-compat. */
+  name?: string;
+  /** Palette strategy vs the template's colours. */
+  harmony?: Harmony;
+  /** 0 steady … 1 surprising — banner count + saturation + heading style. */
+  varietyDial?: number;
+  /** AI-text voice. */
+  fontPersonality?: FontPersonality;
+  /** Template colours to harmonise to (most-saturated first). */
+  templatePalette?: string[];
+  /** App-only chrome accent; accepted for contract-completeness, not used here. */
+  chromeAccent?: string;
+  /** Current month (1–12) for `seasonal` harmony; defaults to the real month. */
+  month?: number;
+}
+
+/**
+ * True when the input asks for an adaptive (harmony-derived) *colour* palette. Only
+ * the colour knobs (`harmony`/`varietyDial`) trigger this — `fontPersonality` is a
+ * font axis (layered on any palette below) and the always-sampled `templatePalette`
+ * is mere context, so neither one alone flips a default-gold page into a derived one.
+ */
+function isAdaptive(t: ThemeInput): boolean {
+  return t.harmony !== undefined || t.varietyDial !== undefined;
+}
+
+/** Resolution of a ThemeInput: the Theme plus any non-fatal notes (e.g. palette fallback). */
+export interface ResolvedTheme {
+  theme: Theme;
+  warnings: string[];
+}
+
+/**
+ * Resolve a theme. Precedence: an **adaptive** param block (any of
+ * `harmony`/`varietyDial`/`fontPersonality`/`templatePalette`) derives a palette from
+ * the template's colours; otherwise a named **preset**; otherwise the gold default.
+ * `fontPersonality` always layers its fonts on top of whichever palette path is taken.
+ * A string is treated as a bare preset name (back-compat).
+ */
+export function resolveTheme(input?: ThemeInput | string): ResolvedTheme {
+  const t: ThemeInput = typeof input === "string" ? { name: input } : input ?? {};
+  const warnings: string[] = [];
+
+  let theme: Theme;
+  if (isAdaptive(t)) {
+    const harmony: Harmony = t.harmony ?? "match";
+    const variety = t.varietyDial ?? 0.5;
+    const month = t.month ?? new Date().getMonth() + 1;
+    const base = t.templatePalette ?? [];
+    if (base.length === 0) {
+      warnings.push(
+        `theme: no template palette to harmonise to — used the Onionskin sticker palette.`,
+      );
+    }
+    const p = derivePalette(base, harmony, variety, month);
+    theme = {
+      text: p.text,
+      serif: p.serif,
+      accent: p.accent,
+      bannerText: "#FFFFFF",
+      banners: p.banners,
+      // A steady day stays quiet (underline headings); past the midpoint, banner pills.
+      headingStyle: variety < 0.4 ? "underline" : "banner",
+    };
+  } else {
+    theme = (t.name && THEMES[t.name]) || THEMES.gold;
+  }
+
+  if (t.fontPersonality) {
+    theme = { ...theme, fonts: FONT_PERSONALITIES[t.fontPersonality] };
+  }
+  return { theme, warnings };
+}
+
+/** Font family for a region's lines, honouring a `fontPersonality` override if set. */
+function themeFontFor(theme: Theme, regionName: string, heading: boolean): string | undefined {
+  if (!theme.fonts) return undefined;
+  if (heading) return theme.fonts.heading;
+  if (regionName === "quote" || regionName === "affirmation") return theme.fonts.serif;
+  return theme.fonts.body;
 }
 
 const DEFAULT_X_PAD = 24;
@@ -629,15 +742,15 @@ export function composeAiSvg(
   size: [number, number],
   inputs: RegionInput[],
   regions: Region[],
-  themeName?: string,
+  themeInput?: ThemeInput | string,
 ): ComposeResult {
-  const theme = resolveTheme(themeName);
+  const { theme, warnings: themeWarnings } = resolveTheme(themeInput);
   const byName = new Map(regions.map((r) => [r.name, r]));
   const [w, h] = size;
   const parts: string[] = [
     `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`,
   ];
-  const warnings: string[] = [];
+  const warnings: string[] = [...themeWarnings];
   // Banner heading colours cycle across the whole page so sections read distinctly.
   let bannerIdx = 0;
 
@@ -663,6 +776,7 @@ export function composeAiSvg(
       const ly = -12; // baseline above the region's top edge
       const lx = DEFAULT_X_PAD;
       const lw = bannerLabelWidth(input.label, lsize);
+      const labelFont = themeFontFor(theme, region.name, true) ?? "Mulish";
       if (region.y + ly - lsize < 0) {
         warnings.push(`region "${region.name}": label "${truncate(input.label)}" may sit above the page top.`);
       }
@@ -676,13 +790,13 @@ export function composeAiSvg(
           `    <rect x="${lx}" y="${by}" width="${lw + padX * 2}" height="${bh}" rx="6" fill="${color}"/>`,
         );
         parts.push(
-          `    <text x="${lx + padX}" y="${ly}" font-family="Mulish" font-size="${lsize}" ` +
+          `    <text x="${lx + padX}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
             `font-weight="800" letter-spacing="0.1em" fill="${theme.bannerText}">${escapeXml(input.label)}</text>`,
         );
       } else {
         const lfill = input.labelFill ?? theme.text;
         parts.push(
-          `    <text x="${lx}" y="${ly}" font-family="Mulish" font-size="${lsize}" ` +
+          `    <text x="${lx}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
             `font-weight="800" letter-spacing="0.1em" fill="${lfill}">${escapeXml(input.label)}</text>`,
         );
         parts.push(
@@ -733,7 +847,7 @@ export function composeAiSvg(
         region.ruledLines.length === 0 ? flowBaselines(region, lines, def) : null;
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
-        const font = line.font ?? def.font;
+        const font = line.font ?? themeFontFor(theme, region.name, !!line.heading) ?? def.font;
         const weight = line.weight ?? def.weight;
         const fill = line.fill ?? baseFill;
         let x = line.x ?? def.xPad ?? DEFAULT_X_PAD;

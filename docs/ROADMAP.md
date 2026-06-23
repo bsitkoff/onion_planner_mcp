@@ -31,6 +31,25 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
 
 ## Done (this pass)
 
+- **Theme contract migration (2026-06 UI-redesign handoff)** — reconciled the redesign handoff
+  against the app's already-integrated decisions (`../onionskin` top commit; `DECISIONS.md`
+  #34/#35/#39/#40). The underlay theme is no longer just the named enum: `write_underlay` now also
+  takes the **adaptive param block** `{ harmony, varietyDial, fontPersonality }` — the chapter-theme
+  axis whose **keys are owned by the app's `FORMAT.md §4`** (`.folder.json → theme`). The server
+  **reads the chapter theme as the default** (`read_page` surfaces it) and accepts **per-call
+  overrides**; the four named presets (`gold`/`bright`/`cozy`/`editorial`) are kept as quick picks
+  over the same space. New `src/color.ts` derives the day's palette from the template's **own
+  sampled colours** (`template.palette`) per `harmony` (`match`/`complement`/`warm`/`cool`/`seasonal`),
+  with **derived text floored dark** so it reads on cream (legibility solved at derivation, not a
+  runtime checker). `fontPersonality` swaps fonts within the closed set (clean/handwritten/editorial)
+  as an orthogonal axis. Smoke +12 (118 total). **Reconciliation calls recorded** (so they don't
+  regress): the handoff's *imported-full-colour-Etsy-template-as-core-model* is **rejected** (app
+  ROADMAP G1 — harmony applies to BYO/cozy/colorful palettes, not a neutral-base assumption);
+  **provenance is by layer** (everything in `ai.svg` is AI — no provenance markers to add, app reads
+  authorship from the layer, DECISIONS #40); underlay gold stays the **single `#9C7C1A`** (the
+  chrome's `#7E5C12` AA-text token is *not* adopted in the underlay — parity over a split); the
+  AA-contrast "warning engine" was **dropped** as over-engineering (the background is the template's
+  cream, a constant — not ours to recompute per write). See `docs/AUTHORING.md` + `SHARED-VISUAL-SPEC.md §6`.
 - **Dynamic sections (planner-fidelity)** — a line `heading: true` draws a section label
   (bold, letter-spaced, hairline rule) and box regions now flow top-down, so the AI layer
   composes day-specific structure (Important / Tomorrow / Habits) into a neutral region
@@ -98,7 +117,11 @@ The "umbrella in the corner." `Phosphor` is in `FONT_ENUM` but otherwise unused.
 `icon` on a line/element mapping a friendly name (`umbrella`, `sun`, `cloud`, `check`,
 `star`) to its Phosphor codepoint. **Needs** the codepoint map and confirmation the app
 ships the Phosphor cut; drawn-shape fallback otherwise. (Markers already prove the
-drawn-shape path.)
+drawn-shape path.) **Now unblocked on the app side:** the 2026-06 handoff's icon-set request
+was resolved to **map glyphs to the bundled Phosphor webfont** (no bespoke commission) — the
+canonical name→codepoint mapping is published at
+`../onionskin/design/design-system/readme.md` § Iconography (`Phosphor.swift`). Pull our
+codepoints from there rather than guessing (wrong ones render tofu).
 
 ### 2.2 Embed generated images into `ai.svg` — ✅ shipped (see Done above)
 A region may carry `images` (base64 art the caller supplies). **Design settled by reading the
@@ -168,6 +191,6 @@ ruled row. Vertical-fit warning replaces the width-overflow warning when wrappin
 
 ## Verification
 
-`npm run smoke` (self-seeding e2e, 84 checks) · `npm run call -- <tool> [args]` (drive a
+`npm run smoke` (self-seeding e2e, 118 checks) · `npm run call -- <tool> [args]` (drive a
 tool in a fresh process) · `npx tsc --noEmit`. Keep the smoke test deriving coordinates and
 region names from parsed geometry — the fixtures keep changing.

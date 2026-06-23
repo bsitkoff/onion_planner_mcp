@@ -3,7 +3,8 @@
 Guidance for working on this repo. See `README.md` for usage and `docs/ROADMAP.md` for what's
 shipped and what's next. **The file-format contract is [`../onionskin/design/FORMAT.md`](../onionskin/design/FORMAT.md)
 — the single source of truth;** `docs/MCP-INTEGRATION.md` is the standalone integration quickstart
-that points back to it, and `docs/AUTHORING.md` covers how to fill pages.
+that points back to it, `docs/AUTHORING.md` covers how to fill pages, and
+`docs/COWORK-WORKFLOW.md` is the nightly CoWork runbook (how this gets driven in production).
 
 ## What this is
 
@@ -24,6 +25,7 @@ the gold underlay, `manifest.json`, the on-device visual parity — is owned by
 [`../onionskin/design/FORMAT.md`](../onionskin/design/FORMAT.md); link to it rather than restating
 (duplicated facts drift). Owners in this repo: `README.md` (usage), this file
 (architecture · invariants · gotchas), `docs/AUTHORING.md` (authoring underlays + themes),
+`docs/COWORK-WORKFLOW.md` (the nightly CoWork runbook — the operational layer above AUTHORING),
 `docs/SHARED-VISUAL-SPEC.md` (the detailed visual measurements behind FORMAT.md's summary),
 `docs/ON-DEVICE-UNDERLAY.md` (coexistence with the app's on-device composer). Change a shared fact
 in its owner once; don't copy it across files.

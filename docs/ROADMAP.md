@@ -50,6 +50,10 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
   chrome's `#7E5C12` AA-text token is *not* adopted in the underlay — parity over a split); the
   AA-contrast "warning engine" was **dropped** as over-engineering (the background is the template's
   cream, a constant — not ours to recompute per write). See `docs/AUTHORING.md` + `SHARED-VISUAL-SPEC.md §6`.
+- **Nightly CoWork runbook** — [`docs/COWORK-WORKFLOW.md`](COWORK-WORKFLOW.md): the operational
+  layer above `AUTHORING.md` for driving this server in production (end-of-day builds tomorrow's
+  page, start-of-day `merge`-refreshes today's; Fantastical/Spark/Obsidian/weather source map;
+  health-check/degradation rules; an iteration loop; paste-in task prompts). No code change.
 - **Dynamic sections (planner-fidelity)** — a line `heading: true` draws a section label
   (bold, letter-spaced, hairline rule) and box regions now flow top-down, so the AI layer
   composes day-specific structure (Important / Tomorrow / Habits) into a neutral region

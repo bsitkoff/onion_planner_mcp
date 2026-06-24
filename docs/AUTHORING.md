@@ -149,13 +149,12 @@ page's `media/ai/` folder, so a ~1 MB PNG never passes through the model context
 Constraints: PNG/JPEG only, **≤ 2 MB** (no webp — the app rejects it), tucked into `notes`
 or an empty corner like a sticker. Generation lives outside this server (it has no network).
 
-**The sourcing recipe (gemini-image is remote on mamastuff → generate, scp down, embed):**
+**The sourcing recipe (generate the image however you like, land it on the Mac, embed by path):**
 
-1. `generate_image(prompt, quality="fast", image_size="small", aspect_ratio="1:1")` — do
-   **not** set `return_base64` (keep the bytes off the wire). It saves on mamastuff and
-   returns `image_path`, e.g. `/home/bridget/Pictures/ai-generated-images/gemini_image_*.png`.
-   Prompt for the planner look: soft watercolour / doodle / washi-sticker, simple subject.
-2. `scp mamastuff:<image_path> /tmp/onionskin-img.png` — pull it onto this Mac.
+1. Generate a small square image with whatever image tool you use. Prompt for the planner
+   look: soft watercolour / doodle / washi-sticker, simple subject. Prefer a tool that returns
+   a **file path**, not base64, so a ~1 MB PNG never rides through the model context.
+2. Make sure the file is on this Mac (e.g. saved or copied to `/tmp/onionskin-img.png`).
 3. `write_underlay(page, regions=[{ region:"notes",
    images:[{ path:"/tmp/onionskin-img.png", width:140, corner:"bottom-right" }] }])` —
    `format` is sniffed; the server validates (≤2 MB) and copies it into `media/ai/`.

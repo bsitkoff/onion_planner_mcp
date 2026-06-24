@@ -13,11 +13,11 @@ A **local stdio** MCP server (TypeScript, run via `tsx`) that writes the gold `a
 underlay into [Onionskin](https://onionskin.sitkoff.net) planner pages. Integration is **filesystem-only** —
 it reads/writes plain SVG + JSON in the app's iCloud container. There is no network API.
 
-Matches the fleet convention (`../CommonPlannerMCP`): official `@modelcontextprotocol/sdk`,
-high-level `McpServer` + `server.tool()`, `zod` schemas. Onionskin itself is an **iPad/iOS
-app**; this server runs on the **Mac** against the iCloud Drive mirror of the app's
-container (synced via the same Apple ID; Mac writes sync back up to the iPad). It stays
-local (not on `mamastuff`) because reaching that mirror needs local macOS filesystem access.
+Built on the official `@modelcontextprotocol/sdk`: high-level `McpServer` + `server.tool()`,
+`zod` schemas. Onionskin itself is an **iPad/iOS app**; this server runs on the **Mac** against
+the iCloud Drive mirror of the app's container (synced via the same Apple ID; Mac writes sync
+back up to the iPad). It runs locally because reaching that mirror needs local macOS filesystem
+access.
 
 ## How to document (keep docs from sprawling)
 

@@ -103,10 +103,10 @@ and runs the full read→write→clear→create flow plus the Private/traversal 
 
 ## Why local stdio
 
-The Onionskin app is on iPad; its library reaches this Mac only as an **iCloud Drive
-mirror**. Touching it needs local macOS filesystem access, which the `mamastuff` Linux host
-doesn't have — so, unlike most of the fleet, this stays a **local stdio** server alongside
-the Obsidian ones. (MCPB bundling is the future path if it ever needs distribution.)
+The Onionskin app is on iPad; its library reaches your Mac only as an **iCloud Drive
+mirror**. Touching it needs local macOS filesystem access — which a remote/Linux MCP host
+wouldn't have — so this stays a **local stdio** server running on the Mac. (MCPB bundling is
+the future path if it ever needs distribution.)
 
 ## Safety
 

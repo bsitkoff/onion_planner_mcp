@@ -201,7 +201,7 @@ the user create pages and just filling the underlay unless you have a reason.
 ## 6. Build it in its own repo
 
 This server is intentionally **not** part of the Onionskin app. Build it wherever your
-MCP servers live (this is Bridget's `mcp-infra` fleet pattern). It needs nothing from the
-app — just filesystem access to the iCloud container above. Keep this doc (or a copy)
+MCP servers live. It needs nothing from the app — just filesystem access to the iCloud
+container above. Keep this doc (or a copy)
 next to it as the integration reference, and point back to `design/FORMAT.md` for the
 full contract.

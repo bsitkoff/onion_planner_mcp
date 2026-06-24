@@ -118,9 +118,9 @@ and match its level** — this live `daily` is `styled:false` with an empty pale
 scaffold: go fuller, label the bare regions. Don't over-decorate a template that styles itself.
 
 ### 8. Optional art
-For a sticker/illustration, follow the **gemini-image → `scp` → `path`** recipe in AUTHORING
-(generate on mamastuff, pull the file down, pass a local `path` so ~1 MB never rides through the
-model context). Guardrails: **PNG/JPEG only, ≤ 2 MB, no webp**, tucked into a corner of `notes`.
+For a sticker/illustration, follow the **generate → local file → `path`** recipe in AUTHORING
+(make the image with any tool, land it on the Mac, pass a local `path` so ~1 MB never rides through
+the model context). Guardrails: **PNG/JPEG only, ≤ 2 MB, no webp**, tucked into a corner of `notes`.
 
 ---
 

@@ -35,6 +35,23 @@ export function sharedDir(root: string): string {
 }
 
 /**
+ * Normalize a caller-supplied chapter reference to the bare chapter name.
+ *
+ * `get_library` advertises each chapter as `{ name: "2026-06", path: "Shared/2026-06" }`,
+ * and callers naturally feed either form back into the `chapter` argument. The internals
+ * prepend `Shared/` themselves, so a `Shared/2026-06` value would double the prefix
+ * (`Shared/Shared/2026-06`) and silently match nothing. Strip a leading `Shared/` (and
+ * surrounding slashes) so both the `name` and the `path` work.
+ */
+export function normalizeChapter(chapter: string): string {
+  return chapter
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/^Shared\//, "")
+    .replace(/\/+$/, "");
+}
+
+/**
  * Validate a caller-supplied page-relative path and return its absolute path.
  *
  * The relative path is the page "id" handed back by list_pages, e.g.

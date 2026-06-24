@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
-import { resolvePageRel } from "./paths.js";
+import { resolvePageRel, normalizeChapter } from "./paths.js";
 import { parseRegions, parseViewBox, inspectTemplate, type Region, type TemplateInfo } from "./template.js";
 import {
   composeAiSvg,
@@ -508,7 +508,7 @@ export async function createPage(
   root: string,
   opts: { chapter: string; name: string; title?: string; template?: string },
 ): Promise<CreateResult> {
-  const chapterRel = `Shared/${opts.chapter}`;
+  const chapterRel = `Shared/${normalizeChapter(opts.chapter)}`;
   const chapterAbs = resolvePageRel(root, chapterRel);
   const newRel = `${chapterRel}/${opts.name}`;
   const newAbs = resolvePageRel(root, newRel); // also validates name has no traversal

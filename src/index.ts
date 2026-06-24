@@ -75,7 +75,10 @@ server.tool(
     chapter: z
       .string()
       .optional()
-      .describe('Optional chapter name to filter by, e.g. "Daily". Omit for all chapters.'),
+      .describe(
+        'Optional chapter to filter by. Either the bare name ("2026-06") or the path ' +
+          'get_library returns ("Shared/2026-06") works. Omit for all chapters.',
+      ),
     template: z
       .string()
       .optional()
@@ -507,7 +510,12 @@ server.tool(
     "Writes manifest + layers + media/ and adds it to the chapter order. Prefer letting the " +
     "user create pages in the app; use this only when asked.",
   {
-    chapter: z.string().describe('Chapter name under Shared/, e.g. "Daily".'),
+    chapter: z
+      .string()
+      .describe(
+        'Chapter under Shared/. Either the bare name ("2026-06") or the path ' +
+          'get_library returns ("Shared/2026-06") works.',
+      ),
     name: z
       .string()
       .describe('New page folder name — a human date/slug, e.g. "2026-06-14". No slashes.'),

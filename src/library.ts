@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveRoot, sharedDir } from "./paths.js";
+import { resolveRoot, sharedDir, normalizeChapter } from "./paths.js";
 import { readPage, type AiStatus } from "./page.js";
 
 /** Thrown when the iCloud library / Shared folder isn't present yet. */
@@ -104,7 +104,7 @@ export async function findPages(root: string, relDir: string): Promise<string[]>
 
 /** All shared pages, optionally restricted to a single chapter name. */
 export async function listPages(root: string, chapter?: string): Promise<string[]> {
-  const base = chapter ? path.join("Shared", chapter) : "Shared";
+  const base = chapter ? path.join("Shared", normalizeChapter(chapter)) : "Shared";
   const pages = await findPages(root, base);
   pages.sort();
   return pages;

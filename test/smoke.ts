@@ -396,6 +396,11 @@ async function main() {
   check("titleContains is case-insensitive", titled.length === 1 && titled[0].title === "February", JSON.stringify(titled.map((r) => r.title)));
   const combined = await listPageRows(root, { chapter: "Daily", template: "daily-minimal" });
   check("filters AND together (chapter + template)", combined.length === 2 && combined.every((r) => r.page.startsWith("Shared/Daily/")), JSON.stringify(combined.map((r) => r.page)));
+  // Regression: the `chapter` filter accepts both the bare name and the "Shared/<name>"
+  // path get_library hands back (callers feed the path back; the prefix must not double).
+  const byBareName = await listPageRows(root, { chapter: "Daily" });
+  const byPath = await listPageRows(root, { chapter: "Shared/Daily" });
+  check("chapter filter accepts the get_library path form, not just the bare name", byPath.length === byBareName.length && byBareName.length >= 2, `bare=${byBareName.length} path=${byPath.length}`);
   const beforeFuture = await listPageRows(root, { modifiedBefore: "2999-01-01" });
   check("modifiedBefore far-future keeps all dated pages", beforeFuture.length === total, `${beforeFuture.length}/${total}`);
   const afterFuture = await listPageRows(root, { modifiedAfter: "2999-01-01" });

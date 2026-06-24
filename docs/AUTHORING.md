@@ -5,7 +5,7 @@ This is guidance for whatever **orchestrates** this server (a session, a nightly
 exactly what you hand it. A page feels right or wrong based on *what you choose to put in
 it*. This doc is how to choose.
 
-The north star is Bridget's real Noteful planner: a day that's **full, specific, and hers**
+The north star is a real, lived-in paper planner: a day that's **full, specific, and the user's own**
 — a scheduled day, a few real priorities, things that actually matter, a habit check, a
 look at tomorrow, a genuine note. Not a sparse page of generic placeholders.
 
@@ -29,20 +29,20 @@ When in doubt, under-decorate — the user chose that template on purpose.
 
 ## Two principles
 
-**1. Pull her real data — don't invent it.** Generic content ("Try Elicit", a stock
-affirmation, weather you guessed) is the tell that a page is machine-made. Source each
+**1. Pull the user's real data — don't invent it.** Generic content (a stock suggestion, a
+canned affirmation, weather you guessed) is the tell that a page is machine-made. Source each
 region from the MCPs the orchestrator already has:
 
 | Region / section | Source |
 |---|---|
-| `schedule` | Google Calendar — the day's events (use `time` + `startHour`, below) |
-| `priorities` | the 2–3 things that matter today — from tasks, email, her own steer |
-| `todo` | obsidian-tasks / Noah / Leona task sources — concrete, checkable items |
-| `notes` → weather | the weather MCP for *her* location, today (not a guess) |
+| `schedule` | the user's calendar — the day's events (use `time` + `startHour`, below) |
+| `priorities` | the 2–3 things that matter today — from tasks, email, the user's own steer |
+| `todo` | whatever task sources the orchestrator has — concrete, checkable items |
+| `notes` → weather | a weather source for *the user's* location, today (not a guess) |
 | `notes` → "Important" | time-sensitive, real stakes (a bill, an order, a check-in) |
 | `notes` → "Tomorrow" | tomorrow's calendar — a 2–3 line preview |
 | `notes` → "Habits" | a fixed personal list (PT / Water / Food / Create …) as checkboxes |
-| `quote` | something that fits *her* day, not a fortune-cookie line |
+| `quote` | something that fits *the user's* day, not a fortune-cookie line |
 
 **2. Never let the page read as blank.** A light day is honest — summer, a weekend, a quiet
 schedule — but an *empty page* looks broken. If the schedule is thin, lean into the other
@@ -116,7 +116,7 @@ content — no "Habits" header on a day you're not tracking habits.
   { "text": "Important",  "heading": true },
   { "text": "Renew the parking pass", "marker": "bullet" },
   { "text": "Tomorrow",   "heading": true },
-  { "text": "9:00 dentist; pack Leona's forms", "wrap": true },
+  { "text": "9:00 dentist; pack the forms", "wrap": true },
   { "text": "Habits",     "heading": true },
   { "text": "PT",    "marker": "checkbox" },
   { "text": "Water", "marker": "checkbox" }
@@ -165,7 +165,7 @@ WordPress). More detail in the project memory (`onionskin-image-gen-pipeline`).
 
 ## Smell test before `ready`
 
-- Could this page belong to *anyone*, or is it clearly Bridget's day? (Names, real stakes.)
+- Could this page belong to *anyone*, or is it clearly this person's day? (Names, real stakes.)
 - If the schedule is light, does the rest of the page still make it feel full?
 - Did any region come back with overflow `warnings`?
 - Is every section here because the day actually needed it — or is it furniture?

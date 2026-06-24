@@ -64,10 +64,9 @@ leave the rest of the page intact (e.g. slide a new meeting into the schedule wi
 clearing the to-dos); pass `dryRun: true` to get the composed SVG plus overflow `warnings`
 back without writing.
 
-**Filling a page well** — pulling her real data, never leaving it blank, and using sections
+**Filling a page well** — pulling your real data, never leaving it blank, and using sections
 to give each day its own shape — is its own craft: see
-[`docs/AUTHORING.md`](docs/AUTHORING.md). For running this nightly from Claude CoWork (the
-operational runbook + paste-in task prompts), see [`docs/COWORK-WORKFLOW.md`](docs/COWORK-WORKFLOW.md).
+[`docs/AUTHORING.md`](docs/AUTHORING.md).
 
 For a monthly page, give the `month` region a `calendar` spec instead of `lines` — the
 server lays out the grid (Sunday-start) from the template, drawing day numbers and a

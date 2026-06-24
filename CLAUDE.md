@@ -4,8 +4,7 @@ Guidance for working on this repo. See `README.md` for usage and `docs/ROADMAP.m
 shipped and what's next. **The file-format contract lives in the Onionskin app repo at
 `design/FORMAT.md` — the single source of truth;** `docs/MCP-INTEGRATION.md` is the standalone
 integration quickstart
-that points back to it, `docs/AUTHORING.md` covers how to fill pages, and
-`docs/COWORK-WORKFLOW.md` is the nightly CoWork runbook (how this gets driven in production).
+that points back to it, and `docs/AUTHORING.md` covers how to fill pages.
 
 ## What this is
 
@@ -26,7 +25,6 @@ the gold underlay, `manifest.json`, the on-device visual parity — is owned by
 the Onionskin app repo's `design/FORMAT.md`; link to it rather than restating
 (duplicated facts drift). Owners in this repo: `README.md` (usage), this file
 (architecture · invariants · gotchas), `docs/AUTHORING.md` (authoring underlays + themes),
-`docs/COWORK-WORKFLOW.md` (the nightly CoWork runbook — the operational layer above AUTHORING),
 `docs/SHARED-VISUAL-SPEC.md` (the detailed visual measurements behind FORMAT.md's summary),
 `docs/ON-DEVICE-UNDERLAY.md` (coexistence with the app's on-device composer). Change a shared fact
 in its owner once; don't copy it across files.
@@ -165,7 +163,7 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
 
 ## Gotchas
 
-- The Onionskin **fixtures change** as Bridget develops the app — and substantially: the
+- The Onionskin **fixtures change** as the app develops — and substantially: the
   current fixtures are a **fresh library** (a `Templates/` + `Stickers/` catalogue, no seeded
   `Shared/` pages), daily regions were **renamed** (`affirmation → quote`, plus a new
   `header`), `todo` gained ruled lines, and the `month` grid now draws only interior dividers

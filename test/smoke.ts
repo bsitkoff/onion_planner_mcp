@@ -192,8 +192,8 @@ async function main() {
     status: "ready", dryRun: true,
     regions: [{ region: "notes", lines: [
       { text: "Important", heading: true },
-      { text: "Leona planner check", marker: "bullet" },
-      { text: "VEX order", marker: "bullet" },
+      { text: "Sample item one", marker: "bullet" },
+      { text: "Sample item two", marker: "bullet" },
       { text: "Tomorrow", heading: true },
       { text: "Prep slides", marker: "checkbox" },
       { text: "Habits", heading: true },
@@ -206,12 +206,12 @@ async function main() {
   check("each of the 3 headings draws a hairline rule", headingRules === 3, `rules=${headingRules}`);
   // Flow order: headings and their items stack top-down in the order given.
   const yImp = yOf(sectioned.aiSvg, ">Important</text>");
-  const yLeona = yOf(sectioned.aiSvg, ">Leona planner check</text>");
-  const yVex = yOf(sectioned.aiSvg, ">VEX order</text>");
+  const ySample1 = yOf(sectioned.aiSvg, ">Sample item one</text>");
+  const ySample2 = yOf(sectioned.aiSvg, ">Sample item two</text>");
   const yTom = yOf(sectioned.aiSvg, ">Tomorrow</text>");
   const yHab = yOf(sectioned.aiSvg, ">Habits</text>");
-  check("sections flow top-down in order", yImp < yLeona && yLeona < yTom && yTom < yHab, `${yImp} < ${yLeona} < ${yTom} < ${yHab}`);
-  check("a heading takes more vertical room than a body item", yLeona - yImp > yVex - yLeona, `heading advance=${yLeona - yImp}, item advance=${yVex - yLeona}`);
+  check("sections flow top-down in order", yImp < ySample1 && ySample1 < yTom && yTom < yHab, `${yImp} < ${ySample1} < ${yTom} < ${yHab}`);
+  check("a heading takes more vertical room than a body item", ySample1 - yImp > ySample2 - ySample1, `heading advance=${ySample1 - yImp}, item advance=${ySample2 - ySample1}`);
 
   console.log("\nthemed output (colored banners + accents; dry-run)");
   const themed = await writeUnderlay(root, daily, {

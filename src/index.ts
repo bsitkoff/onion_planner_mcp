@@ -263,7 +263,7 @@ const lineSchema = z.object({
         "region the lines flow top-down, so a heading + its items stack naturally. " +
         "`marker`/`wrap` are ignored on a heading.",
     ),
-});
+}).strict();
 
 // Calendar grid for the month region — the server computes each day's cell from
 // the template's column/row lines and emits day numbers + data-date tap targets.
@@ -278,14 +278,14 @@ const calendarSchema = z.object({
         size: z.number().optional(),
         weight: z.number().int().optional(),
         fill: z.string().optional(),
-      }),
+      }).strict(),
     )
     .optional()
     .describe("Optional per-day event labels / styling."),
   numberSize: z.number().optional().describe("Day-number font size (default 18)."),
   numberWeight: z.number().int().optional().describe("Day-number weight (default 600)."),
   fill: z.string().optional().describe("Override gold for the day numbers."),
-});
+}).strict();
 
 // An AI-owned image placed in a region — the caller supplies the bytes (base64);
 // the server writes them to the page's media/ai/ folder and references them by href.
@@ -327,7 +327,7 @@ const imageSchema = z.object({
     .describe("Placement within the region box (default center). Ignored if x/y are set."),
   margin: z.number().optional().describe("Inset from the region edge for corner placement (default 8)."),
   opacity: z.number().min(0).max(1).optional().describe("Image opacity, 0–1."),
-}).refine((i) => (i.data === undefined) !== (i.path === undefined), {
+}).strict().refine((i) => (i.data === undefined) !== (i.path === undefined), {
   message: "Provide exactly one of `data` or `path` for an image.",
 });
 
@@ -362,12 +362,23 @@ server.tool(
           lines: z
             .array(lineSchema)
             .optional()
-            .describe("Text lines to place in this region. Mutually exclusive with `calendar`."),
+            .describe("Text lines to place in this region. Mutually exclusive with `calendar`/`svg`."),
           calendar: calendarSchema
             .optional()
             .describe(
               "Calendar grid for the month region — emits day numbers + data-date tap " +
-                "targets from the template grid. Mutually exclusive with `lines`.",
+                "targets from the template grid. Mutually exclusive with `lines`/`svg`.",
+            ),
+          svg: z
+            .string()
+            .optional()
+            .describe(
+              "Raw SVG fragment emitted VERBATIM inside this region's <g> — an escape " +
+                "hatch for hand-placed <text>/shapes when `lines` placement isn't enough. " +
+                "Composes and merges like any region. Mutually exclusive with " +
+                "`lines`/`calendar`. Stay within the renderer's elements (svg/g/rect/line/" +
+                "path/text/image/circle); others warn. NOTE: an <image href> here is NOT " +
+                "media-resolved — use the `images` array for app-rendered art.",
             ),
           images: z
             .array(imageSchema)
@@ -391,7 +402,7 @@ server.tool(
             .positive()
             .optional()
             .describe("Ruled rows per hour (default 1; 2 = a half-hour grid). Anchors `time`."),
-        }),
+        }).strict(),
       )
       .optional()
       .describe("Structured content. Mutually exclusive with `svg`."),

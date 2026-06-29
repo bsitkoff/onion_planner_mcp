@@ -82,6 +82,12 @@ region from the MCPs the orchestrator already has:
 | `notes` → "Habits" | a fixed personal list (PT / Water / Food / Create …) as checkboxes |
 | `quote` | something that fits *the user's* day, not a fortune-cookie line |
 
+This table is the *intent*, not a guarantee — it's how these regions are typically used, not what
+each template marks them as. The live `daily` template, for instance, marks `notes` `shared` (a
+handwriting surface the user keeps for themselves). So **read each region's `fill` from
+`read_page` and `read_ink` first** (see "Who fills a region" above) rather than assuming `notes`
+is yours to fill; on a `shared` region, seed in the whitespace and leave the ruled lines for ink.
+
 **2. Never let the page read as blank.** A light day is honest — summer, a weekend, a quiet
 schedule — but an *empty page* looks broken. If the schedule is thin, lean into the other
 sections: fill todos, run the habit row, preview tomorrow, write a real note. A near-empty
@@ -173,6 +179,12 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
   dependency.
 - **`wrap: true`** — long notes/previews wrap to the region width instead of overflowing.
+- **Raw per-region `svg`** — when `lines` placement isn't enough, give a region a raw `svg`
+  string instead; it's emitted verbatim inside that region's group and composes/merges like
+  any region (mutually exclusive with `lines`/`calendar`). Stay within the renderer's
+  elements (svg/g/rect/line/path/text/image/circle); an `<image href>` here is **not**
+  media-resolved, so use the structured `images` array for art. Reach for this rarely — the
+  structured placement above is what keeps you aligned to the geometry.
 - **`merge: true`** — a mid-day "update my planner" patches only the regions you pass and
   leaves the rest verbatim (slide a new meeting in without clearing the to-dos).
 - **Write once, then check `warnings`.** A real `write_underlay` returns the same `warnings`

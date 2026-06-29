@@ -459,6 +459,42 @@ async function main() {
   }
   check("rejects merge with raw svg", rejectedMergeSvg);
 
+  console.log("\nper-region svg (verbatim escape hatch) + empty-region backstop");
+  // The bug this fixes: a region carrying raw `svg` used to be silently dropped.
+  const perRegion = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "priorities", svg: '<text x="24" y="20" font-family="Mulish" font-size="12">PRSVG</text>' }],
+  });
+  const prg = regionGroup(perRegion.aiSvg, "priorities") ?? "";
+  check("per-region svg is emitted verbatim inside the group", prg.includes(">PRSVG</text>"), prg.slice(0, 200));
+  check("supported per-region svg produces no element warning", !perRegion.warningDetails.some((w) => w.code === "raw_svg_unsupported_element"), JSON.stringify(perRegion.warningDetails));
+  const perRegionBad = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "priorities", svg: '<foreignObject x="0" y="0" width="10" height="10"/>' }],
+  });
+  check("per-region svg warns on unsupported app-renderer elements", perRegionBad.warningDetails.some((w) => w.code === "raw_svg_unsupported_element" && w.region === "priorities"), JSON.stringify(perRegionBad.warningDetails));
+  // Backstop: a region named but given nothing renderable surfaces a warning (never
+  // a silent ok) — this is what catches a stray/typo'd key on the direct/CLI path.
+  const emptyReg = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true, regions: [{ region: "notes" }],
+  });
+  check("a content-less region warns empty_region", emptyReg.warningDetails.some((w) => w.code === "empty_region" && w.region === "notes"), JSON.stringify(emptyReg.warningDetails));
+  // svg is one of three mutually-exclusive bodies (lines / calendar / svg).
+  let rejectedSvgLines = false;
+  try {
+    await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "notes", svg: "<text/>", lines: [{ text: "x" }] }] });
+  } catch { rejectedSvgLines = true; }
+  check("rejects a region with both svg and lines", rejectedSvgLines);
+  // Composes + merges like any region: a per-region svg survives a merge of another region.
+  await writeUnderlay(root, daily, { status: "ready", regions: [
+    { region: "priorities", svg: '<text x="24" y="20" font-family="Mulish" font-size="12">PRSVG</text>' },
+    { region: "notes", lines: [{ text: "keep me" }] },
+  ]});
+  await writeUnderlay(root, daily, { status: "ready", merge: true, regions: [{ region: "notes", lines: [{ text: "updated notes" }] }] });
+  const aiPerRegion = await fs.readFile(aiPath, "utf8");
+  check("per-region svg persists to disk verbatim", aiPerRegion.includes(">PRSVG</text>"));
+  check("merge of another region keeps the per-region svg", aiPerRegion.includes(">PRSVG</text>") && aiPerRegion.includes(">updated notes</text>"));
+
   console.log("\nset_underlay_status / clear_underlay");
   await setStatus(root, daily, "refreshing");
   check("status set to refreshing", JSON.parse(await fs.readFile(path.join(root, daily, "manifest.json"), "utf8")).layers.ai.status === "refreshing");

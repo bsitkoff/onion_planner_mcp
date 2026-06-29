@@ -10,6 +10,7 @@ import {
   mergeRegions,
   emptySvg,
   imageDims,
+  scanRawSvgElements,
   type RegionInput,
   type ThemeInput,
   type WarningDetail,
@@ -452,17 +453,6 @@ export interface WriteResult {
   dryRun: boolean;
 }
 
-const RAW_SVG_ALLOWED_ELEMENTS = new Set([
-  "svg",
-  "g",
-  "rect",
-  "line",
-  "path",
-  "text",
-  "image",
-  "circle",
-]);
-
 function rawSvgWarnings(svg: string, size: [number, number]): {
   warnings: string[];
   warningDetails: WarningDetail[];
@@ -474,15 +464,11 @@ function rawSvgWarnings(svg: string, size: [number, number]): {
     warningDetails.push({ code, severity: "warning", message });
   };
 
-  const unsupported = new Set<string>();
-  for (const m of svg.matchAll(/<\s*\/?\s*([A-Za-z][A-Za-z0-9:_-]*)\b/g)) {
-    const tag = m[1].toLowerCase();
-    if (!RAW_SVG_ALLOWED_ELEMENTS.has(tag)) unsupported.add(tag);
-  }
-  if (unsupported.size > 0) {
+  const unsupported = scanRawSvgElements(svg);
+  if (unsupported.length > 0) {
     warn(
       "raw_svg_unsupported_element",
-      `raw svg uses unsupported element(s) for the app renderer: ${[...unsupported].sort().join(", ")}.`,
+      `raw svg uses unsupported element(s) for the app renderer: ${unsupported.join(", ")}.`,
     );
   }
 

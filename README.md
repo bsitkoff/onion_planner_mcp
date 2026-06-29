@@ -59,7 +59,10 @@ write_underlay         → place text by region/row; server computes coordinates
 
 `row` aligns to the region's ruled lines (from `read_page`). Use `y`/`x` for explicit
 placement, `marker` (`checkbox`/`bullet`) for a leading mark, `time` + `startHour` to place
-a schedule line by the clock, or pass a full `svg` document for total control. A line with
+a schedule line by the clock. For hand-placed content in a single region, give it a raw
+`svg` string (emitted verbatim inside that region's group, composes/merges like any
+region; mutually exclusive with `lines`/`calendar`) — or pass a full top-level `svg`
+document for total control. A line with
 `heading: true` is drawn as a **section label** (bold, letter-spaced, with a hairline rule)
 and the lines after it flow below as its items — that's how the AI layer adds day-specific
 structure (an "Important" / "Tomorrow" / "Habits" block) into a neutral region without the

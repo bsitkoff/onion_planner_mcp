@@ -10,6 +10,33 @@ import { derivePalette, type Harmony } from "./color.js";
  */
 export const GOLD = "#9C7C1A";
 
+/**
+ * The SVG elements the app's custom renderer handles (SwiftUI `Canvas` + `XMLParser`,
+ * no WebKit) — anything else is silently dropped on device. The single source of truth
+ * for both raw escape hatches: the top-level `svg` param (`page.ts`) and a region's
+ * verbatim `svg` fragment (`composeAiSvg` below).
+ */
+export const RAW_SVG_ALLOWED_ELEMENTS = new Set([
+  "svg",
+  "g",
+  "rect",
+  "line",
+  "path",
+  "text",
+  "image",
+  "circle",
+]);
+
+/** Element names used in `svg` that fall outside the renderer's set (sorted, unique). */
+export function scanRawSvgElements(svg: string): string[] {
+  const unsupported = new Set<string>();
+  for (const m of svg.matchAll(/<\s*\/?\s*([A-Za-z][A-Za-z0-9:_-]*)\b/g)) {
+    const tag = m[1].toLowerCase();
+    if (!RAW_SVG_ALLOWED_ELEMENTS.has(tag)) unsupported.add(tag);
+  }
+  return [...unsupported].sort();
+}
+
 /** Font roles applied when a `fontPersonality` is chosen (else region defaults stand). */
 export interface ThemeFonts {
   /** Body lines (schedule, to-do, notes, priorities…). */
@@ -330,10 +357,19 @@ export interface RegionInput {
   label?: string;
   /** Override the label banner color (defaults to the theme's cycled banner color). */
   labelFill?: string;
-  /** Text lines (ruled/box regions). Mutually exclusive with `calendar`. */
+  /** Text lines (ruled/box regions). Mutually exclusive with `calendar`/`svg`. */
   lines?: LineInput[];
-  /** Calendar grid (the month region). Mutually exclusive with `lines`. */
+  /** Calendar grid (the month region). Mutually exclusive with `lines`/`svg`. */
   calendar?: CalendarSpec;
+  /**
+   * A raw SVG fragment emitted **verbatim** inside this region's `<g>` (an escape
+   * hatch for hand-placed `<text>`/shapes when the structured `lines` placement isn't
+   * enough). Composes and merges like any region. Mutually exclusive with
+   * `lines`/`calendar`. Element names are checked against the app renderer's set
+   * (`RAW_SVG_ALLOWED_ELEMENTS`); unsupported ones warn. NOTE: an `<image href>` here
+   * is NOT media-resolved — use the structured `images` array for app-rendered art.
+   */
+  svg?: string;
   /** AI-owned images placed in this region (written to `media/ai/`). */
   images?: ImageInput[];
   /**
@@ -787,9 +823,15 @@ export function composeAiSvg(
         `Unknown region "${input.region}". This page exposes: ${valid || "(none)"}.`,
       );
     }
-    if (input.lines && input.calendar) {
+    const bodyKinds = [
+      input.lines !== undefined ? "lines" : null,
+      input.calendar !== undefined ? "calendar" : null,
+      input.svg !== undefined ? "svg" : null,
+    ].filter(Boolean);
+    if (bodyKinds.length > 1) {
       throw new Error(
-        `Region "${input.region}": provide either \`lines\` or \`calendar\`, not both.`,
+        `Region "${input.region}": provide only one of \`lines\`, \`calendar\`, or ` +
+          `\`svg\` (got ${bodyKinds.join(" + ")}).`,
       );
     }
     parts.push(
@@ -858,7 +900,23 @@ export function composeAiSvg(
         );
       }
     }
-    if (input.calendar) {
+    if (input.svg !== undefined) {
+      // Raw fragment, emitted verbatim inside the region group (escape hatch).
+      const frag = input.svg.trim();
+      if (frag) {
+        const unsupported = scanRawSvgElements(frag);
+        if (unsupported.length > 0) {
+          warn(
+            "raw_svg_unsupported_element",
+            `region "${region.name}": raw svg uses unsupported element(s) for the app ` +
+              `renderer: ${unsupported.join(", ")}.`,
+            "warning",
+            region.name,
+          );
+        }
+        parts.push(`    ${frag}`);
+      }
+    } else if (input.calendar) {
       parts.push(...composeCalendar(region, input.calendar, theme));
     } else {
       const def = REGION_DEFAULTS[region.name] ?? FALLBACK_DEFAULT;
@@ -1035,6 +1093,24 @@ export function composeAiSvg(
           }
         }
       });
+    }
+    // Backstop: a region the caller named but gave nothing to draw. Catches the whole
+    // "content silently dropped" class (a stray/typo'd key, `lines: []`, an empty svg)
+    // — and in merge mode an empty group REPLACES (clears) the prior region, so flag it.
+    const drewNothing =
+      !input.label &&
+      (input.images?.length ?? 0) === 0 &&
+      input.calendar === undefined &&
+      (input.svg === undefined || input.svg.trim() === "") &&
+      (input.lines?.length ?? 0) === 0;
+    if (drewNothing) {
+      warn(
+        "empty_region",
+        `region "${region.name}": no svg/lines/calendar/images/label — nothing was ` +
+          `drawn (in merge mode this clears the region).`,
+        "warning",
+        region.name,
+      );
     }
     parts.push(`  </g>`);
   }

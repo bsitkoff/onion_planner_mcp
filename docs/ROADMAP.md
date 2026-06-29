@@ -34,6 +34,22 @@ to render everything beautifully and safely into `ai.svg`. The north-star scenar
 
 ## Done (this pass)
 
+- **Match the 2026-06 template/region redesign** — brought the server's vocabulary and grid
+  handling in line with the app's committed redesign (`../onionskin` `seed.version
+  12-template-redesign`):
+  - **Self-describing schedule grid.** `parseRegions` now reads `data-start-hour` /
+    `data-rows-per-hour` (+ the advisory `data-list` bucket) onto `Region`
+    (`startHour`/`rowsPerHour`/`list`), surfaced by `read_page`; `composeAiSvg` anchors a
+    clock `time` to the region's own grid when the caller omits `startHour` (a per-call value
+    still overrides). So callers no longer hard-code the hour.
+  - **New region vocabulary.** `FILL_BY_NAME`/`REGION_DEFAULTS` updated — `ainotes` (`ai`,
+    serif AI-voice home), `focus` (`shared`, was `goals`); `notes` is `ink` everywhere;
+    `last`→`ai`; `morning`/`afternoon`/`evening`/`photos`→`shared`. Retired names
+    (`quote`/`affirmation`/`priorities`/`goals`/`summary`) kept as **legacy fallbacks** so
+    older un-tagged live pages still derive sanely. The serif register is `ainotes`. The
+    to-do "priority" star is a **typographic ★** (no marker primitive).
+  - Docs (`README`, `CLAUDE.md`, `AUTHORING`, `MCP-INTEGRATION`, `SHARED-VISUAL-SPEC`) and the
+    self-seeding smoke test retargeted to the new vocabulary (153 checks).
 - **Region intent — `fill` + free-text `intent` (who fills, and what for)** — each parsed
   region now carries two signals, surfaced by `read_page`, so an open-ended template ecosystem
   can express designer intent without the server pre-coding every region type:
@@ -131,7 +147,7 @@ to render everything beautifully and safely into `ai.svg`. The north-star scenar
   ruled row**, so a caller's row→content mapping is preserved. When wrapping, the width-overflow
   warning is suppressed and replaced by a vertical-fit warning if the stacked block collides
   with the next row or runs past the region box. `wrapText` in `svg.ts`. (Possible follow-up:
-  default-on for the free-text box regions `quote`/`notes`, where there's no row to disturb.)
+  default-on for the free-text box region `ainotes`, where there's no row to disturb.)
   Smoke test +11 checks (71 total).
 
 ---
@@ -181,6 +197,35 @@ Opt-in `wrap: true` per line breaks long text to the region width (reusing the P
 overflow estimator), stacking continuations below the baseline without consuming the next
 ruled row. Vertical-fit warning replaces the width-overflow warning when wrapping.
 
+### 2.6 Washi-tape schedule blocks (drawn, not a sticker) · Effort M · Feasibility HIGH · **PARKED**
+**Park until the app is stable** — Claude Code is still implementing the template redesign;
+do not start this while the app is in flux. Roadmap-only for now.
+
+Today the schedule shows time via a **sticker** (the user's current MCP approach). The goal is
+to draw **washi-tape-style time-blocks** directly in `ai.svg`: a soft, rounded, semi-opaque
+filled box spanning an event's start→end on the grid, with the label inside — the paper-planner
+"washi over the hours" look, instead of text-on-a-line or a sticker glyph. This is exactly what
+the **redesigned templates already ask for**: `schedule`/`agenda` carry
+`data-start-hour`/`data-rows-per-hour` and an intent of *"AI places **bars by clock**, not text
+on lines"* (`../onionskin` Templates, 2026-06 redesign). The grid is already self-describing —
+the server now parses those attributes and anchors `time` to them (see Done) — so what's left is
+the *drawing*, which is why this stays parked separately from the contract match.
+
+Shape of the work (all server-side, renderer-safe):
+- **A duration primitive.** A schedule line needs an end as well as a start — e.g. `time` +
+  `endTime` (or `durationMin`) → a block from start-row to end-row, vs. today's single-baseline
+  `time` snap (`rowForTime`, `svg.ts`). Precedence and the existing `time`-only behaviour stay.
+  The start/end → row math reuses the parsed `startHour`/`rowsPerHour` already on the region.
+- **Washi styling within the renderer subset.** A rounded `<rect>` (`rx`) + low-opacity solid
+  fill + the label `<text>`; **solid fills only — no gradients** (renderer limitation), so a
+  washi "tint" is one translucent solid, palette-derived (`harmony`) or per-block `fill`.
+  Confirm the renderer honours `rx`/`fill-opacity`; drawn-shape fallback (plain rect) otherwise.
+- **Overflow/fit warnings** reuse the existing machinery (block past the region box, zero/negative
+  duration, a `time`/`endTime` outside the grid).
+
+Out of scope here: a `star` *marker primitive* — the contract uses a typographic ★ in the to-do
+text, which needs no new code.
+
 ---
 
 ## Phase 3 — parked / app-dependent
@@ -212,8 +257,9 @@ ruled row. Vertical-fit warning replaces the width-overflow warning when wrappin
 2. Does the app ship a Phosphor font cut and honor `font-weight`? **font-weight: confirmed**
    (Mulish/Newsreader are variable fonts the renderer weights). Phosphor cut: bundled
    (`Phosphor.ttf`) — but no decoration feature is built, so this is informational.
-3. ~~How is schedule hour-anchoring encoded?~~ Resolved (2.3): no template carries hour
-   labels, so the caller passes `startHour` + `rowsPerHour`. No app dependency.
+3. ~~How is schedule hour-anchoring encoded?~~ Resolved: the `schedule`/`agenda` regions now
+   carry `data-start-hour`/`data-rows-per-hour` in the template; the server parses them and
+   anchors `time` to that grid (a per-call `startHour` still overrides). No printed hour labels.
 
 ## Verification
 

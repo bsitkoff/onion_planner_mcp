@@ -26,8 +26,8 @@ const server = new McpServer(
   {
     instructions:
       "Onionskin is a planner whose pages are folders of SVG layers in an iCloud " +
-      "folder. You write the gold 'ai.svg' underlay (schedule, to-dos, priorities, " +
-      "notes, quote) into pages under Shared/, then mark it ready — the app " +
+      "folder. You write the gold 'ai.svg' underlay (schedule, to-dos, focus, and the " +
+      "ainotes AI-voice block) into pages under Shared/, then mark it ready — the app " +
       "composites it on next foreground. Always call get_library first, then read_page " +
       "to learn a page's regions before write_underlay (region names vary by template). " +
       "You can ONLY touch Shared/ pages; Private/ is invisible, and you never write the " +
@@ -128,7 +128,8 @@ server.tool(
 server.tool(
   "read_page",
   "Read one shared page: its manifest, parsed regions (name, x, y, width, height, rows, " +
-    "cols, absolute ruled-line positions, a `fill`, and a free-text `intent`), current ai.svg, " +
+    "cols, startHour/rowsPerHour for timed grids, a `list` bucket, absolute ruled-line " +
+    "positions, a `fill`, and a free-text `intent`), current ai.svg, " +
     "and a `template` summary, and optionally template.svg. Use the regions to target " +
     "write_underlay — never hard-code coordinates. Each region's `fill` says who fills it: " +
     "`ai` (you own it — fill it), `shared` (you seed it — calendar/tasks — but read_ink first " +
@@ -137,7 +138,7 @@ server.tool(
     "text). `intent` is the designer's free-text note on what the region is for (e.g. \"this " +
     "week's dinners, one row per day\") — read it to fill the region as imagined, but you're " +
     "free to repurpose; it's null when the template set none. Honour each region by its `fill` " +
-    "+ `intent` rather than expecting specific names (not every template has quote/todo). " +
+    "+ `intent` rather than expecting specific names (not every template has ainotes/todo). " +
     "`template` reports whether the template already decorates itself " +
     "(`styled`/`hasLabels`/`hasBanners`/`stickersPresent`) and its own `palette`: if styled, " +
     "fill quietly in those colours; if bare, go full (theme + banners + art). Also returns " +
@@ -229,14 +230,14 @@ const lineSchema = z.object({
     .describe("Explicit baseline y, local to the region's top-left. Overrides `row`."),
   x: z.number().optional().describe("Local x offset from the region's left edge. Default 24."),
   font: FONT_ENUM.optional().describe(
-    "Font family. Defaults per region (Mulish; Newsreader for the quote).",
+    "Font family. Defaults per region (Mulish; Newsreader for the serif ainotes block).",
   ),
   size: z.number().optional().describe("Font size in px. Sensible per-region default."),
   weight: z
     .number()
     .int()
     .optional()
-    .describe("SVG font-weight (100–900). Defaults per region (600; 500 for the quote)."),
+    .describe("SVG font-weight (100–900). Defaults per region (600; 500 for the serif ainotes)."),
   fill: z.string().optional().describe("Override colour. Defaults to the gold default."),
   marker: z
     .enum(["checkbox", "bullet"])
@@ -348,7 +349,7 @@ server.tool(
         z.object({
           region: z
             .string()
-            .describe('Region name from read_page, e.g. "schedule", "todo", "quote".'),
+            .describe('Region name from read_page, e.g. "schedule", "todo", "ainotes".'),
           label: z
             .string()
             .optional()
@@ -395,13 +396,18 @@ server.tool(
             .optional()
             .describe(
               "Clock hour (0–23) of ruled row 0 in this region — anchors each line's " +
-                "`time` to the grid. Required for `time` to take effect.",
+                "`time` to the grid. Defaults to the template's `data-start-hour` when the " +
+                "region declares one (so you can omit it); pass it to override. Without " +
+                "either, a `time` line falls back to order with a warning.",
             ),
           rowsPerHour: z
             .number()
             .positive()
             .optional()
-            .describe("Ruled rows per hour (default 1; 2 = a half-hour grid). Anchors `time`."),
+            .describe(
+              "Ruled rows per hour (2 = a half-hour grid). Defaults to the template's " +
+                "`data-rows-per-hour`, else 1. Anchors `time`.",
+            ),
         }).strict(),
       )
       .optional()

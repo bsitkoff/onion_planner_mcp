@@ -56,7 +56,7 @@
 ## 3. Note band
 
 - Text: **Mulish 14 / 600 / gold**.
-- **Resolved — wrap is on for free-text regions** (`notes`, `quote`). Stacking: first-line top
+- **Resolved — wrap is on for free-text regions** (`ainotes`, and any unruled AI box). Stacking: first-line top
   pad `≈ 1.2 × size`; line leading `≈ 1.5 × size`; wrapped continuations `≈ 1.3 × size` below the
   baseline (they don't consume the next ruled row). Geometry follows the region `<rect>` (a single
   open band, or ruled lines when the template draws them).
@@ -127,7 +127,7 @@ to the on-device composer.
    `startHour`/`rowsPerHour`); the 52px inset is now just a margin. (§1)
 3. **To-do:** most templates print their own checkboxes → author writes **text only** there;
    draw a marker only when the template prints none. (§2)
-4. **Note band:** wrap **on** for `notes`/`quote`; geometry from the region rect. (§3)
+4. **Note band:** wrap **on** for `ainotes` (free-text AI box); geometry from the region rect. (§3)
 5. **Monthly:** templates print no day numbers → author draws numbers + `data-date` rects;
    marker = gold dot (+ optional label). (§4)
 6. **Banners:** MCP draws them; on-device is content-only. (§5)

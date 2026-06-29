@@ -32,7 +32,7 @@ When in doubt, under-decorate — the user chose that template on purpose.
 Ownership in Onionskin is by *layer* — you write `ai.svg`, the user owns `ink.svg`
 (handwriting) and `stickers.svg`, and they composite on top of you, so you never collide on
 disk. But not every region is yours to fill, and **you can't assume any particular region
-exists** — a template may have a `schedule` and a `quote`, or it may be a meal planner, a mood
+exists** — a template may have a `schedule` and an `ainotes`, or it may be a meal planner, a mood
 tracker, a sketchbook page with regions you've never seen. So **don't look for known names;
 read each region's `fill` and `intent`** (`read_page` hands you both) and honour what's there.
 
@@ -73,20 +73,21 @@ region from the MCPs the orchestrator already has:
 
 | Region / section | Source |
 |---|---|
-| `schedule` | the user's calendar — the day's events (use `time` + `startHour`, below) |
-| `priorities` | the 2–3 things that matter today — from tasks, email, the user's own steer |
-| `todo` | whatever task sources the orchestrator has — concrete, checkable items |
-| `notes` → weather | a weather source for *the user's* location, today (not a guess) |
-| `notes` → "Important" | time-sensitive, real stakes (a bill, an order, a check-in) |
-| `notes` → "Tomorrow" | tomorrow's calendar — a 2–3 line preview |
-| `notes` → "Habits" | a fixed personal list (PT / Water / Food / Create …) as checkboxes |
-| `quote` | something that fits *the user's* day, not a fortune-cookie line |
+| `schedule` | the user's calendar — the day's events (use `time`; the template's `data-start-hour` anchors it) |
+| `todo` | whatever task sources the orchestrator has — concrete, checkable items; **star the 2–3 that matter most** with a leading ★ in the text (priorities are folded in here, no separate region) |
+| `ainotes` → weather | a weather source for *the user's* location, today (not a guess) |
+| `ainotes` → "Important" | time-sensitive, real stakes (a bill, an order, a check-in) |
+| `ainotes` → "Tomorrow" | tomorrow's calendar — a 2–3 line preview |
+| `ainotes` → "Habits" | a fixed personal list (PT / Water / Food / Create …) as checkboxes |
+| `ainotes` → affirmation | a line that fits *the user's* day, not a fortune-cookie one |
+| `focus` (monthly) | the month's goals/intentions — from the user's own steer |
 
 This table is the *intent*, not a guarantee — it's how these regions are typically used, not what
-each template marks them as. The live `daily` template, for instance, marks `notes` `shared` (a
-handwriting surface the user keeps for themselves). So **read each region's `fill` from
-`read_page` and `read_ink` first** (see "Who fills a region" above) rather than assuming `notes`
-is yours to fill; on a `shared` region, seed in the whitespace and leave the ruled lines for ink.
+each template marks them as. Since the 2026-06 redesign, **`notes` is the user's handwriting
+surface (`fill: ink`) on every template** — don't write into it; the AI's text home is `ainotes`
+(`fill: ai`). So **read each region's `fill` from `read_page` and `read_ink` first** (see "Who
+fills a region" above) rather than assuming any region is yours; on a `shared` region, seed in the
+whitespace and leave the ruled lines for ink.
 
 **2. Never let the page read as blank.** A light day is honest — summer, a weekend, a quiet
 schedule — but an *empty page* looks broken. If the schedule is thin, lean into the other
@@ -97,7 +98,7 @@ a 15-hour grid does not.
 ## Pick a theme to fit the day
 
 `write_underlay` takes a `theme` — the page palette (colored section banners, body ink,
-accents, the quote color). **It is a per-day creative choice, not a fixed setting:** read
+accents, the ainotes serif color). **It is a per-day creative choice, not a fixed setting:** read
 the day and pick the mood. A rainy December packed with meetings wants something different
 from a wide-open summer beach day.
 
@@ -172,10 +173,12 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
 
 ## Use the placement the server already does for you
 
-- **Schedule by clock time, not coordinates.** Pass `startHour` (the hour at ruled row 0 —
-  `7` on the current daily) and each line's `time: "HH:MM"`; the server snaps it to the
-  right row. Use `rowsPerHour: 2` if the grid is half-hourly. Don't hand-compute `row`/`y`,
-  and don't bake the time into the text — the grid already shows the hour.
+- **Schedule by clock time, not coordinates.** Give each line a `time: "HH:MM"`; the server
+  snaps it to the right row using the template's own `data-start-hour`/`data-rows-per-hour`
+  (the `schedule`/`agenda` regions self-describe their grid — `7`/`1` on the current daily),
+  surfaced as `startHour`/`rowsPerHour` on the region from `read_page`. Pass a per-call
+  `startHour`/`rowsPerHour` only to override. Don't hand-compute `row`/`y`, and don't bake the
+  time into the text — the grid already shows the hour.
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
   dependency.
 - **`wrap: true`** — long notes/previews wrap to the region width instead of overflowing.

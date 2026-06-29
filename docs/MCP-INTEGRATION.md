@@ -98,18 +98,19 @@ portrait points). All your geometry is in this space.
     <rect x="0" y="0" width="540" height="870" fill="none"/>
     <!-- ruled hour lines + labels … -->
   </g>
-  <g id="region-quote" data-region="quote" transform="translate(56,1148)">…</g>
+  <g id="region-ainotes" data-region="ainotes" data-fill="ai" transform="translate(678,734)">…</g>
   <g id="region-todo"        data-region="todo"        transform="translate(636,520)">…</g>
 </svg>
 ```
 
 To write "the schedule", read `region-schedule`'s `transform` (and its rect size) and
 emit elements positioned to match. The daily template exposes:
-`region-header`, `region-schedule`, `region-priorities`, `region-todo`,
-`region-notes`, `region-quote` (the serif quote/affirmation box). Monthly templates
-expose `region-header`, `region-month`, `region-weekdays`, `region-goals`,
-`region-notes`. **Region names vary by template and change as templates evolve — read
-them from `read_page`/the template, don't hard-code.**
+`region-header`, `region-schedule` (timed: carries `data-start-hour`/`data-rows-per-hour`),
+`region-todo`, `region-notes` (the user's ink), and `region-ainotes` (the serif AI-voice
+box — weather/context/affirmation/a small image). Monthly templates expose `region-header`,
+`region-month`, `region-weekdays`, `region-focus` (the old `goals`), `region-notes`, and
+`region-ainotes`. **Region names vary by template and change as templates evolve — read
+them from `read_page`/the template (and honour each region's `fill`), don't hard-code.**
 
 **Templates stay deliberately minimal — draw structure yourself.** A daily template is a
 neutral scaffold (a schedule grid, a couple of labelled boxes, a notes area), *not* a
@@ -132,7 +133,7 @@ output by region so it's legible:
     <text x="86" y="284" font-family="Mulish" font-size="14" fill="#9C7C1A">04:00  pill alarm</text>
     <text x="86" y="362" font-family="Mulish" font-size="14" fill="#9C7C1A">09:00  standup</text>
   </g>
-  <g data-region="quote">
+  <g data-region="ainotes">
     <text x="80" y="1204" font-family="Newsreader" font-size="26" fill="#9C7C1A">I am capable of embracing change.</text>
   </g>
 </svg>

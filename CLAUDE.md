@@ -92,10 +92,12 @@ containing `manifest.json`" (`library.findPages`), recursing under `Shared/` onl
 
 `template.svg` carries the geometry. Each addressable region is a `<g id="region-<name>"
 data-region="<name>" transform="translate(x,y)">`; `template.parseRegions` turns these into
-`Region[]` with the group origin, optional `<rect>` box, `data-rows`/`data-cols` hints, and
-the **absolute positions of ruled lines** (`ruledLines` = horizontal rules, `colLines` =
-vertical). Those ruled lines are the writable "rows." Each region also carries two intent
-signals: **`fill`** (`ink`/`ai`/`shared`) — who fills it, from `data-fill` else derived
+`Region[]` with the group origin, optional `<rect>` box, `data-rows`/`data-cols` hints, a
+timed-grid's `data-start-hour`/`data-rows-per-hour` (parsed onto `startHour`/`rowsPerHour` so
+the `schedule`/`agenda` grid self-describes — a caller needn't pass `startHour`), the advisory
+`data-list` bucket, and the **absolute positions of ruled lines** (`ruledLines` = horizontal
+rules, `colLines` = vertical). Those ruled lines are the writable "rows." Each region also
+carries two intent signals: **`fill`** (`ink`/`ai`/`shared`) — who fills it, from `data-fill` else derived
 name → template type → geometry (`template.deriveFill`); and **`intent`** — the designer's
 free-text purpose from `data-intent` (e.g. "this week's dinners"), or `null`. `fill` drives
 behaviour (`shared`/`ai` are yours; an `ink` region is the user's — filling its body trips an
@@ -106,8 +108,9 @@ only a *default* for `fill`, not a contract — novel templates set the attribut
 `write_underlay`'s structured `regions` input is the normal path: `svg.composeAiSvg` looks
 up each region by name and places each line's baseline via `row` (snap to a ruled line +
 `~0.4 × row-pitch`), or a clock `time` (`"HH:MM"` → nearest row, anchored by the region's
-`startHour` + `rowsPerHour` since no template carries hour labels), or explicit `y`, or —
-for boxes with no rules (e.g. `quote`, `notes`) — line-stacking / vertical-centering
+`startHour` + `rowsPerHour` — read from the template's `data-start-hour`/`data-rows-per-hour`,
+with a per-call override), or explicit `y`, or —
+for boxes with no rules (e.g. `ainotes`) — line-stacking / vertical-centering
 (precedence `y > row > time > order`). A line may carry a `marker` (`checkbox`/`bullet`,
 drawn as a shape — no font dependency) before its text, and `wrap: true` to break long text
 to the region width (continuations stack below the baseline without consuming the next ruled
@@ -175,13 +178,17 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
 
 ## Gotchas
 
-- The Onionskin **fixtures change** as the app develops — and substantially: the
-  current fixtures are a **fresh library** (a `Templates/` + `Stickers/` catalogue, no seeded
-  `Shared/` pages), daily regions were **renamed** (`affirmation → quote`, plus a new
-  `header`), `todo` gained ruled lines, and the `month` grid now draws only interior dividers
-  inside a `<rect>` box. The smoke test therefore **seeds its own chapters and creates pages
-  from the catalogue**, and derives expected coordinates and region names from parsed geometry
-  rather than hard-coding them — keep it that way.
+- The Onionskin **fixtures change** as the app develops — and substantially. The current
+  fixtures are a **fresh library** (a `Templates/` + `Stickers/` catalogue, no seeded
+  `Shared/` pages). The **2026-06 region redesign** is the latest big shift: `ainotes` is the
+  new AI-voice region (`fill: ai`); **`notes` is `ink` everywhere** (handwriting only — the AI
+  never fills it); `goals → focus`; Daily `priorities` folded into `todo` (star the few that
+  matter with a typographic ★); Agenda `summary` removed; `quote`/`affirmation` retired (→
+  `ainotes`, kept only as legacy fallbacks in `FILL_BY_NAME`/`REGION_DEFAULTS`); `schedule`/
+  `agenda` now self-describe their hour grid via `data-start-hour`/`data-rows-per-hour`; the
+  `month` grid draws only interior dividers inside a `<rect>` box. The smoke test therefore
+  **seeds its own chapters and creates pages from the catalogue**, and derives expected
+  coordinates and region names from parsed geometry rather than hard-coding them — keep it that way.
 - The iCloud Drive mirror may be absent on a given Mac until the iPad app has run with
   iCloud on and synced down; tools must degrade to a setup message (`LibraryMissingError`),
   never crash. (iCloud also adds sync latency in both directions — Mac write → iPad pickup
@@ -198,7 +205,7 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
   the single `#9C7C1A` so visual parity with the on-device composer stays trivial (SHARED-VISUAL-SPEC §0).
   Only the `harmony`-**derived** palette deepens text (a lightness floor at derivation, so adaptive text
   stays legible on cream — not a runtime contrast checker). Text also carries a `font-weight` (per-region default
-  600, 500 for the serif `quote`; per-line `weight` override) — **confirmed honoured**, since the
+  600, 500 for the serif `ainotes`; per-line `weight` override) — **confirmed honoured**, since the
   app's `Mulish`/`Newsreader` are variable fonts the renderer weights at runtime.
 - **The app renderer is a custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit):
   it handles `svg, g, rect, line, path, text, image, circle` and silently drops anything else

@@ -28,7 +28,7 @@ import {
   createPage,
   fetchImageToTemp,
 } from "../src/page.js";
-import { GOLD, resolveTheme } from "../src/svg.js";
+import { GOLD, resolveTheme, composeAiSvg } from "../src/svg.js";
 import { hexToHsl } from "../src/color.js";
 import { inspectTemplate, parseRegions } from "../src/template.js";
 
@@ -103,28 +103,30 @@ async function main() {
   console.log("\nread_page (region geometry, current names)");
   const read = await readPage(root, daily);
   const schedule = read.regions.find((r) => r.name === "schedule");
-  const quote = read.regions.find((r) => r.name === "quote");
+  const ainotes = read.regions.find((r) => r.name === "ainotes");
   const todo = read.regions.find((r) => r.name === "todo");
   check("size is 1024x1366", read.size[0] === 1024 && read.size[1] === 1366, JSON.stringify(read.size));
   check("schedule region parsed with ruled lines", (schedule?.ruledLines.length ?? 0) >= 8, String(schedule?.ruledLines.length));
-  check("quote region parsed (no-ruled box)", !!quote && quote.ruledLines.length === 0, String(quote?.ruledLines.length));
+  check("ainotes region parsed (no-ruled box)", !!ainotes && ainotes.ruledLines.length === 0, String(ainotes?.ruledLines.length));
   check("todo region parsed", !!todo);
-  // Template inspection: minimal is a bare scaffold (go full); cozy is styled (fill quietly).
-  check("template info: minimal is not styled", read.template.styled === false && !read.template.hasLabels && read.template.palette.length === 0, JSON.stringify(read.template));
+  // Template inspection: minimal now prints a faint "TODAY" header label (so the
+  // hasLabels heuristic marks it styled) but ships no banners/art/palette; cozy is
+  // fully styled (fill quietly into its own colours).
+  check("template info: minimal has a label but no banners/palette", read.template.hasLabels === true && !read.template.hasBanners && read.template.palette.length === 0, JSON.stringify(read.template));
   const cozyInfo = inspectTemplate(await fs.readFile(path.join(root, "Templates", "daily-cozy", "template.svg"), "utf8"));
   check("template info: cozy is styled with its own banners", cozyInfo.styled && cozyInfo.hasBanners && cozyInfo.hasLabels, JSON.stringify(cozyInfo));
   check("template info: cozy palette is non-empty and non-neutral", cozyInfo.palette.length > 0 && cozyInfo.palette.every((h) => /^#[0-9a-f]{6}$/.test(h)), JSON.stringify(cozyInfo.palette));
 
   console.log("\nregion fill (who fills each region: ink / ai / shared) + designer intent");
   // Derived from the region name: schedule is shared (AI seeds, user augments), the
-  // quote box is the AI's. Geometry does NOT decide this (schedule is ruled, quote is not).
+  // ainotes box is the AI's. Geometry does NOT decide this (schedule is ruled, ainotes is not).
   check("schedule fill is shared", schedule?.fill === "shared", schedule?.fill);
-  check("quote fill is ai", quote?.fill === "ai", quote?.fill);
-  // A reflection template's ruled regions are the user's handwriting (ink), not the AI's —
-  // the counterexample to "lined = AI". Found by fill, not by hard-coded name.
+  check("ainotes fill is ai", ainotes?.fill === "ai", ainotes?.fill);
+  // A reflection template proves fill is per-region intent, not geometry: side by side
+  // it carries an ink handwriting surface (joys) AND an AI-owned block (last).
   const reflectionSvg = await fs.readFile(path.join(root, "Templates", "reflection-minimal", "template.svg"), "utf8");
   const reflectionRegions = parseRegions(reflectionSvg, "reflection-minimal");
-  check("a ruled reflection region derives fill=ink", reflectionRegions.some((r) => r.fill === "ink" && r.ruledLines.length > 0), JSON.stringify(reflectionRegions.map((r) => [r.name, r.fill])));
+  check("reflection mixes ink + ai fills (fill is intent, not geometry)", reflectionRegions.find((r) => r.name === "joys")?.fill === "ink" && reflectionRegions.find((r) => r.name === "last")?.fill === "ai", JSON.stringify(reflectionRegions.map((r) => [r.name, r.fill])));
   // Geometry fallback (unknown name, no template type): ruled → ink, blank box → ai.
   const fbSvg =
     '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg">' +
@@ -144,7 +146,11 @@ async function main() {
   const over = parseRegions(overrideSvg)[0];
   check("explicit data-fill overrides the derived fill", over?.fill === "ink", over?.fill);
   check("free-text data-intent is parsed as the designer's purpose", over?.intent === "this week's dinners, one row per day", over?.intent ?? "null");
-  check("a region with no data-intent has null intent", schedule?.intent === null, String(schedule?.intent));
+  const bare = parseRegions('<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg"><g id="region-bare" data-region="bare" transform="translate(0,0)"><rect width="10" height="10" fill="none"/></g></svg>')[0];
+  check("a region with no data-intent has null intent", bare?.intent === null, String(bare?.intent));
+  // data-list buckets on the to-do columns parse as advisory routing context.
+  const todoCols = parseRegions(await fs.readFile(path.join(root, "Templates", "todo-minimal", "template.svg"), "utf8"), "todo-minimal");
+  check("data-list buckets parse on the to-do columns", todoCols.find((r) => r.name === "list-1")?.list === "today" && todoCols.find((r) => r.name === "list-3")?.list === "later", JSON.stringify(todoCols.map((r) => [r.name, r.list])));
 
   console.log("\nink_region_filled warning (a handwriting surface wants scaffolding, not fill)");
   const reflectPage = "Shared/Daily/2026-06-25";
@@ -157,7 +163,7 @@ async function main() {
   const scaffoldInk = await writeUnderlay(root, reflectPage, { status: "ready", dryRun: true, regions: [{ region: inkReg!.name, lines: [{ text: "Morning", heading: true }] }] });
   check("heading-only scaffolding into an ink region does NOT warn", !scaffoldInk.warningDetails.some((w) => w.code === "ink_region_filled"), JSON.stringify(scaffoldInk.warningDetails));
 
-  console.log("\nwrite_underlay (structured: schedule rows + checkbox to-dos + quote)");
+  console.log("\nwrite_underlay (structured: schedule rows + checkbox to-dos + ainotes)");
   const before = read.manifest.modified;
   await new Promise((r) => setTimeout(r, 5)); // ensure modified timestamp differs
   const wr = await writeUnderlay(root, daily, {
@@ -171,7 +177,7 @@ async function main() {
         { text: "Email the registrar", marker: "checkbox" },
         { text: "Prep advising notes", marker: "checkbox" },
       ]},
-      { region: "quote", lines: [{ text: "Small steps still move forward." }] },
+      { region: "ainotes", lines: [{ text: "Small steps still move forward." }] },
     ],
   });
   const aiPath = path.join(root, daily, "ai.svg");
@@ -180,7 +186,7 @@ async function main() {
   check("ai.svg uses gold fill", ai.includes(GOLD));
   check("ai.svg sets a heavier font-weight", ai.includes('font-weight="600"'));
   check("ai.svg groups by region", ai.includes('data-region="schedule"') && ai.includes('data-region="todo"'));
-  check("quote uses Newsreader (region default still applies)", regionGroup(ai, "quote")?.includes("Newsreader") ?? false);
+  check("ainotes uses Newsreader (region default still applies)", regionGroup(ai, "ainotes")?.includes("Newsreader") ?? false);
   check("write reported warnings array", Array.isArray(wr.warnings));
   check("write was not a dry run", wr.dryRun === false);
   // checkbox marker: a gold stroked <rect> inside the todo group, before its text.
@@ -197,17 +203,26 @@ async function main() {
   check("manifest ai.status = ready", m2.layers.ai.status === "ready");
   check("manifest modified bumped", m2.modified !== before, `${before} -> ${m2.modified}`);
 
-  console.log("\ntime-aware schedule (time → nearest ruled row; dry-run)");
+  console.log("\ntime-aware schedule (template start-hour + per-call override; dry-run)");
   const yOf = (svg: string | undefined, needle: string) =>
     Number(((svg ?? "").split("\n").find((l) => l.includes(needle)) ?? "").match(/y="(\d+)"/)?.[1] ?? -1);
-  // startHour 8, rowsPerHour 1: "11:00" → row 3. Reuse the geometry-derived slots (rl).
+  // The schedule self-describes its grid via data-start-hour / data-rows-per-hour.
+  check("schedule parses its template start-hour (7) + rows-per-hour (1)", schedule?.startHour === 7 && schedule?.rowsPerHour === 1, `${schedule?.startHour}/${schedule?.rowsPerHour}`);
+  // With NO caller startHour, a clock time now anchors via the template's start-hour.
+  const tplAnchored = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "seven", time: "07:00" }, { text: "nine", time: "09:00" }] }],
+  });
+  check("time anchors via the template start-hour (no caller startHour)", yOf(tplAnchored.aiSvg, ">nine</text>") > yOf(tplAnchored.aiSvg, ">seven</text>"), `${yOf(tplAnchored.aiSvg, ">seven</text>")} -> ${yOf(tplAnchored.aiSvg, ">nine</text>")}`);
+  check("template-anchored time does NOT warn about a missing startHour", !tplAnchored.warnings.some((w) => w.includes("startHour")), JSON.stringify(tplAnchored.warnings));
+  // A per-call startHour OVERRIDES the template's: startHour 8, "11:00" → row 3.
   const timed = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
     regions: [{ region: "schedule", startHour: 8, lines: [{ text: "11:00 mtg", time: "11:00" }] }],
   });
   const ty = yOf(timed.aiSvg, "11:00 mtg");
   const er = 3;
-  check("time 11:00 (startHour 8) lands in the row-3 slot", ty > rl[er] && ty < (rl[er + 1] ?? rl[er] + 58), `y=${ty} expected in (${rl[er]}, ${rl[er + 1]})`);
+  check("caller startHour 8 overrides the template (11:00 → row-3 slot)", ty > rl[er] && ty < (rl[er + 1] ?? rl[er] + 58), `y=${ty} expected in (${rl[er]}, ${rl[er + 1]})`);
   // rowsPerHour 2: 09:30 sits one ruled row below 09:00.
   const half = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
@@ -216,13 +231,13 @@ async function main() {
     ] }],
   });
   check("rowsPerHour=2 puts 09:30 one row below 09:00", yOf(half.aiSvg, ">ninethirty</text>") > yOf(half.aiSvg, ">nine</text>"), `${yOf(half.aiSvg, ">nine</text>")} -> ${yOf(half.aiSvg, ">ninethirty</text>")}`);
-  // No startHour: time is ignored (warns), but the page still composes.
-  const noAnchor = await writeUnderlay(root, daily, {
-    status: "ready", dryRun: true,
-    regions: [{ region: "schedule", lines: [{ text: "floating", time: "10:00" }] }],
-  });
-  check("time without startHour warns", noAnchor.warnings.some((w) => w.includes("startHour")), JSON.stringify(noAnchor.warnings));
-  check("time without startHour still composes", (noAnchor.aiSvg ?? "").includes(">floating</text>"));
+  // No start-hour anywhere (neither call nor template) → warns + falls back to order.
+  // The shipped schedule always declares one now, so compose directly on a synthetic
+  // ruled region (no data-start-hour) to exercise the fallback path.
+  const ruledOnly = parseRegions('<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><g id="region-ruled" data-region="ruled" transform="translate(0,0)"><rect width="200" height="400" fill="none"/><line x1="0" y1="40" x2="200" y2="40"/><line x1="0" y1="80" x2="200" y2="80"/><line x1="0" y1="120" x2="200" y2="120"/></g></svg>');
+  const noAnchor = composeAiSvg([1024, 1366], [{ region: "ruled", lines: [{ text: "floating", time: "10:00" }] }], ruledOnly);
+  check("time with no start-hour anywhere warns", noAnchor.warnings.some((w) => w.includes("startHour")), JSON.stringify(noAnchor.warnings));
+  check("time with no start-hour still composes (order fallback)", noAnchor.svg.includes(">floating</text>"));
   // Malformed time is rejected.
   let badTime = false;
   try {
@@ -257,11 +272,11 @@ async function main() {
   check("wrapped block warns when it overruns the row", tall.warnings.some((w) => w.includes("overlap the next row")), JSON.stringify(tall.warnings));
 
   console.log("\ndynamic sections (heading + items flow in a box region; dry-run)");
-  // The neutral `notes` box (no ruled lines) is where the AI draws day-specific
-  // structure: section headings + their items, only when a day needs them.
+  // A neutral box region with no ruled lines (here `todo`) is where the AI draws
+  // day-specific structure: section headings + their items, only when a day needs them.
   const sectioned = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    regions: [{ region: "notes", lines: [
+    regions: [{ region: "todo", lines: [
       { text: "Important", heading: true },
       { text: "Sample item one", marker: "bullet" },
       { text: "Sample item two", marker: "bullet" },
@@ -271,7 +286,7 @@ async function main() {
       { text: "Walk", marker: "checkbox" },
     ] }],
   });
-  const notesGroup = regionGroup(sectioned.aiSvg, "notes") ?? "";
+  const notesGroup = regionGroup(sectioned.aiSvg, "todo") ?? "";
   check("heading text is letter-spaced", notesGroup.includes('letter-spacing="0.08em"'), notesGroup.slice(0, 160));
   const headingRules = [...notesGroup.matchAll(new RegExp(`<line[^>]*stroke="${GOLD}"[^>]*opacity="0.4"`, "g"))].length;
   check("each of the 3 headings draws a hairline rule", headingRules === 3, `rules=${headingRules}`);
@@ -287,20 +302,20 @@ async function main() {
   console.log("\nthemed output (colored banners + accents; dry-run)");
   const themed = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true, theme: "bright",
-    regions: [{ region: "notes", lines: [
+    regions: [{ region: "todo", lines: [
       { text: "IMPORTANT", heading: true },
       { text: "Renew parking pass", marker: "checkbox" },
       { text: "TOMORROW", heading: true },
       { text: "Dentist 9am", marker: "bullet" },
     ] }],
   });
-  const tg = regionGroup(themed.aiSvg, "notes") ?? "";
+  const tg = regionGroup(themed.aiSvg, "todo") ?? "";
   check("banner heading draws a filled colored rect", /<rect[^>]*fill="#3FB6A8"/.test(tg) || /<rect[^>]*fill="#F2884B"/.test(tg), tg.slice(0, 200));
   check("two banners use two different cycled colors", new Set([...tg.matchAll(/<rect[^>]*rx="6" fill="(#[0-9A-Fa-f]{6})"/g)].map((m) => m[1])).size === 2, tg);
   check("banner label is white, not gold", tg.includes('fill="#FFFFFF"') && !tg.includes(GOLD), tg.slice(0, 240));
   check("themed body text uses theme ink, not gold", tg.includes('fill="#3A3A3A"'), tg);
   // The gold default is unchanged (back-compat): headings stay underline+rule.
-  const goldHead = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "notes", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "notes") ?? "";
+  const goldHead = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "todo") ?? "";
   check("default (no theme) keeps the gold underline heading", goldHead.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(goldHead), goldHead);
 
   console.log("\nadaptive theme contract (harmony / variety / fontPersonality)");
@@ -322,8 +337,8 @@ async function main() {
   const hand = resolveTheme({ fontPersonality: "handwritten" });
   check("fontPersonality=handwritten sets Caveat body / keeps gold palette", hand.theme.fonts?.body === "Caveat" && hand.theme.text === GOLD, JSON.stringify(hand.theme.fonts));
   // End-to-end: fontPersonality flows into the composed text.
-  const written = await writeUnderlay(root, daily, { status: "ready", dryRun: true, fontPersonality: "handwritten", regions: [{ region: "notes", lines: [{ text: "buy milk" }] }] });
-  check("fontPersonality reaches the composed ai.svg (Caveat body text)", (regionGroup(written.aiSvg, "notes") ?? "").includes('font-family="Caveat"'), regionGroup(written.aiSvg, "notes") ?? "");
+  const written = await writeUnderlay(root, daily, { status: "ready", dryRun: true, fontPersonality: "handwritten", regions: [{ region: "todo", lines: [{ text: "buy milk" }] }] });
+  check("fontPersonality reaches the composed ai.svg (Caveat body text)", (regionGroup(written.aiSvg, "todo") ?? "").includes('font-family="Caveat"'), regionGroup(written.aiSvg, "todo") ?? "");
 
   console.log("\ndev CLI forwards adaptive theme params");
   const cliAdaptive = await runCli(root, [
@@ -335,10 +350,10 @@ async function main() {
       harmony: "match",
       varietyDial: 0.9,
       fontPersonality: "handwritten",
-      regions: [{ region: "notes", lines: [{ text: "CLI", heading: true }, { text: "milk" }] }],
+      regions: [{ region: "todo", lines: [{ text: "CLI", heading: true }, { text: "milk" }] }],
     }),
   ]);
-  const cliNotes = regionGroup(cliAdaptive.aiSvg, "notes") ?? "";
+  const cliNotes = regionGroup(cliAdaptive.aiSvg, "todo") ?? "";
   check("CLI forwarded fontPersonality (Fredoka heading)", cliNotes.includes('font-family="Fredoka"'), cliNotes.slice(0, 220));
   check("CLI forwarded varietyDial/harmony (banner heading)", /<rect[^>]*rx="6"/.test(cliNotes), cliNotes.slice(0, 220));
 
@@ -347,13 +362,13 @@ async function main() {
   const folderJson = JSON.parse(await fs.readFile(dailyFolder, "utf8").catch(() => "{}"));
   folderJson.theme = { harmony: "match", varietyDial: 0.9, fontPersonality: "handwritten" };
   await fs.writeFile(dailyFolder, JSON.stringify(folderJson, null, 2) + "\n");
-  const fromChapter = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "notes", lines: [{ text: "Plan", heading: true }, { text: "milk" }] }] });
-  const fcg = regionGroup(fromChapter.aiSvg, "notes") ?? "";
+  const fromChapter = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", lines: [{ text: "Plan", heading: true }, { text: "milk" }] }] });
+  const fcg = regionGroup(fromChapter.aiSvg, "todo") ?? "";
   check("read_page surfaces the chapter theme", (await readPage(root, daily)).theme?.fontPersonality === "handwritten");
   check("chapter theme applies with no per-call params (handwritten heading font)", fcg.includes('font-family="Fredoka"'), fcg.slice(0, 200));
   check("chapter high-variety gives banner-pill headings", /<rect[^>]*rx="6"/.test(fcg), fcg.slice(0, 200));
   // Per-call preset overrides the chapter's adaptive default.
-  const overridden = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, theme: "gold", regions: [{ region: "notes", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "notes") ?? "";
+  const overridden = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, theme: "gold", regions: [{ region: "todo", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "todo") ?? "";
   check("per-call theme:gold overrides the chapter's adaptive theme", overridden.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(overridden), overridden.slice(0, 200));
   // Restore the folder so later assertions see no theme.
   delete folderJson.theme;
@@ -378,24 +393,24 @@ async function main() {
   const overflow = await writeUnderlay(root, daily, {
     status: "ready",
     dryRun: true,
-    regions: [{ region: "priorities", lines: [
+    regions: [{ region: "ainotes", lines: [
       { text: longText },
       { text: "a" }, { text: "b" }, { text: "c" }, { text: "d" }, { text: "e" }, { text: "f" },
     ]}],
   });
   check("warns about likely overflow", overflow.warnings.some((w) => w.includes("overflow")), JSON.stringify(overflow.warnings));
   // Flow layout: all 7 lines are written regardless of the ruled-row count.
-  const prioritiesGroup = regionGroup(overflow.aiSvg, "priorities") ?? "";
+  const prioritiesGroup = regionGroup(overflow.aiSvg, "ainotes") ?? "";
   check("flow layout writes all lines past the ruled-row count", prioritiesGroup.includes(">f</text>"), prioritiesGroup.slice(0, 600));
   check("warnings remain a string array for compatibility", overflow.warnings.every((w) => typeof w === "string"));
-  check("structured warning details include region + code", overflow.warningDetails.some((w) => w.code === "text_overflow" && w.region === "priorities"), JSON.stringify(overflow.warningDetails));
+  check("structured warning details include region + code", overflow.warningDetails.some((w) => w.code === "text_overflow" && w.region === "ainotes"), JSON.stringify(overflow.warningDetails));
 
   console.log("\ndry-run writes nothing to disk");
   const diskBefore = await fs.readFile(aiPath, "utf8");
   const dry = await writeUnderlay(root, daily, {
     status: "empty",
     dryRun: true,
-    regions: [{ region: "notes", lines: [{ text: "DRY_RUN_SENTINEL" }] }],
+    regions: [{ region: "todo", lines: [{ text: "DRY_RUN_SENTINEL" }] }],
   });
   const diskAfter = await fs.readFile(aiPath, "utf8");
   check("dry run returns composed svg", (dry.aiSvg ?? "").includes("DRY_RUN_SENTINEL") && dry.dryRun === true);
@@ -407,7 +422,7 @@ async function main() {
   const merged = await writeUnderlay(root, daily, {
     status: "ready",
     merge: true,
-    regions: [{ region: "notes", lines: [{ text: "Buy milk", marker: "bullet" }] }],
+    regions: [{ region: "ainotes", lines: [{ text: "Buy milk", marker: "bullet" }] }],
   });
   const aiMerged = await fs.readFile(aiPath, "utf8");
   check("merge adds the new region", aiMerged.includes("Buy milk"));
@@ -463,34 +478,34 @@ async function main() {
   // The bug this fixes: a region carrying raw `svg` used to be silently dropped.
   const perRegion = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    regions: [{ region: "priorities", svg: '<text x="24" y="20" font-family="Mulish" font-size="12">PRSVG</text>' }],
+    regions: [{ region: "ainotes", svg: '<text x="24" y="20" font-family="Mulish" font-size="12">PRSVG</text>' }],
   });
-  const prg = regionGroup(perRegion.aiSvg, "priorities") ?? "";
+  const prg = regionGroup(perRegion.aiSvg, "ainotes") ?? "";
   check("per-region svg is emitted verbatim inside the group", prg.includes(">PRSVG</text>"), prg.slice(0, 200));
   check("supported per-region svg produces no element warning", !perRegion.warningDetails.some((w) => w.code === "raw_svg_unsupported_element"), JSON.stringify(perRegion.warningDetails));
   const perRegionBad = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    regions: [{ region: "priorities", svg: '<foreignObject x="0" y="0" width="10" height="10"/>' }],
+    regions: [{ region: "ainotes", svg: '<foreignObject x="0" y="0" width="10" height="10"/>' }],
   });
-  check("per-region svg warns on unsupported app-renderer elements", perRegionBad.warningDetails.some((w) => w.code === "raw_svg_unsupported_element" && w.region === "priorities"), JSON.stringify(perRegionBad.warningDetails));
+  check("per-region svg warns on unsupported app-renderer elements", perRegionBad.warningDetails.some((w) => w.code === "raw_svg_unsupported_element" && w.region === "ainotes"), JSON.stringify(perRegionBad.warningDetails));
   // Backstop: a region named but given nothing renderable surfaces a warning (never
   // a silent ok) — this is what catches a stray/typo'd key on the direct/CLI path.
   const emptyReg = await writeUnderlay(root, daily, {
-    status: "ready", dryRun: true, regions: [{ region: "notes" }],
+    status: "ready", dryRun: true, regions: [{ region: "todo" }],
   });
-  check("a content-less region warns empty_region", emptyReg.warningDetails.some((w) => w.code === "empty_region" && w.region === "notes"), JSON.stringify(emptyReg.warningDetails));
+  check("a content-less region warns empty_region", emptyReg.warningDetails.some((w) => w.code === "empty_region" && w.region === "todo"), JSON.stringify(emptyReg.warningDetails));
   // svg is one of three mutually-exclusive bodies (lines / calendar / svg).
   let rejectedSvgLines = false;
   try {
-    await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "notes", svg: "<text/>", lines: [{ text: "x" }] }] });
+    await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", svg: "<text/>", lines: [{ text: "x" }] }] });
   } catch { rejectedSvgLines = true; }
   check("rejects a region with both svg and lines", rejectedSvgLines);
   // Composes + merges like any region: a per-region svg survives a merge of another region.
   await writeUnderlay(root, daily, { status: "ready", regions: [
-    { region: "priorities", svg: '<text x="24" y="20" font-family="Mulish" font-size="12">PRSVG</text>' },
-    { region: "notes", lines: [{ text: "keep me" }] },
+    { region: "ainotes", svg: '<text x="24" y="20" font-family="Mulish" font-size="12">PRSVG</text>' },
+    { region: "todo", lines: [{ text: "keep me" }] },
   ]});
-  await writeUnderlay(root, daily, { status: "ready", merge: true, regions: [{ region: "notes", lines: [{ text: "updated notes" }] }] });
+  await writeUnderlay(root, daily, { status: "ready", merge: true, regions: [{ region: "todo", lines: [{ text: "updated notes" }] }] });
   const aiPerRegion = await fs.readFile(aiPath, "utf8");
   check("per-region svg persists to disk verbatim", aiPerRegion.includes(">PRSVG</text>"));
   check("merge of another region keeps the per-region svg", aiPerRegion.includes(">PRSVG</text>") && aiPerRegion.includes(">updated notes</text>"));
@@ -566,7 +581,7 @@ async function main() {
   await createPage(root, { chapter: "Daily", name: "2026-06-24", title: "Wednesday" });
   await writeUnderlay(root, imgPage, {
     status: "ready",
-    regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "motivation", width: 120, corner: "center" }] }],
+    regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "motivation", width: 120, corner: "center" }] }],
   });
   const imgAi = await fs.readFile(path.join(root, imgPage, "ai.svg"), "utf8");
   const imgFile = path.join(root, imgPage, "media", "ai", "motivation.png");
@@ -576,11 +591,11 @@ async function main() {
   check("written bytes equal the decoded base64", (await fs.readFile(imgFile)).equals(Buffer.from(PNG_1x1, "base64")));
 
   // Orphan GC: re-write the page without the image → its file is removed.
-  await writeUnderlay(root, imgPage, { status: "ready", regions: [{ region: "notes", lines: [{ text: "no image now" }] }] });
+  await writeUnderlay(root, imgPage, { status: "ready", regions: [{ region: "todo", lines: [{ text: "no image now" }] }] });
   check("orphan GC removed the now-unreferenced image", !(await exists(imgFile)));
 
   // merge preserves another region's image + its file.
-  await writeUnderlay(root, imgPage, { status: "ready", regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "keep", width: 50 }] }] });
+  await writeUnderlay(root, imgPage, { status: "ready", regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "keep", width: 50 }] }] });
   await writeUnderlay(root, imgPage, { status: "ready", merge: true, regions: [{ region: "schedule", lines: [{ text: "8:00 keep me", row: 0 }] }] });
   const mergedImgAi = await fs.readFile(path.join(root, imgPage, "ai.svg"), "utf8");
   check("merge keeps the other region's image ref", mergedImgAi.includes('href="media/ai/keep.png"'));
@@ -591,19 +606,19 @@ async function main() {
   check("clear removed media/ai entirely", !(await exists(path.join(root, imgPage, "media", "ai"))));
 
   // dryRun composes the href but writes no file.
-  const dryImg = await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "dry", width: 40 }] }] });
+  const dryImg = await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "dry", width: 40 }] }] });
   check("dryRun composes the image href", (dryImg.aiSvg ?? "").includes('href="media/ai/dry.png"'));
   check("dryRun wrote no media file", !(await exists(path.join(root, imgPage, "media", "ai", "dry.png"))));
 
   // Validation: format/magic mismatch, oversize, traversal name.
   let badFormat = false;
-  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "jpeg", width: 40 }] }] }); } catch { badFormat = true; }
+  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "jpeg", width: 40 }] }] }); } catch { badFormat = true; }
   check("rejects a format/magic-byte mismatch", badFormat);
   let oversize = false;
   const big = Buffer.alloc(2 * 1024 * 1024 + 10, 1).toString("base64");
-  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: big, format: "png", width: 40 }] }] }); } catch { oversize = true; }
+  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: big, format: "png", width: 40 }] }] }); } catch { oversize = true; }
   check("rejects an oversize image (>2MB)", oversize);
-  const travAi = (await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "../../evil", width: 40 }] }] })).aiSvg ?? "";
+  const travAi = (await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "../../evil", width: 40 }] }] })).aiSvg ?? "";
   const travHref = travAi.match(/href="[^"]*"/)?.[0] ?? "";
   const travBase = travHref.replace(/^href="media\/ai\//, "").replace(/"$/, "");
   // Safe = stays under media/ai/: no slash in the filename, no leading dot (no `../`).
@@ -614,7 +629,7 @@ async function main() {
   await fs.writeFile(srcPng, Buffer.from(PNG_1x1, "base64"));
   await writeUnderlay(root, imgPage, {
     status: "ready",
-    regions: [{ region: "notes", images: [{ path: srcPng, name: "from-path", width: 64 }] }],
+    regions: [{ region: "todo", images: [{ path: srcPng, name: "from-path", width: 64 }] }],
   });
   const pathAi = await fs.readFile(path.join(root, imgPage, "ai.svg"), "utf8");
   const pathFile = path.join(root, imgPage, "media", "ai", "from-path.png");
@@ -623,10 +638,10 @@ async function main() {
   check("path image bytes copied into media/ai/", (await fs.readFile(pathFile)).equals(Buffer.from(PNG_1x1, "base64")));
   check("path image aspect-fills height (1×1 → 64²)", /width="64" height="64"/.test(pathAi), pathAi);
   let badPath = false;
-  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ path: "/no/such/file-xyz.png", width: 40 }] }] }); } catch { badPath = true; }
+  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ path: "/no/such/file-xyz.png", width: 40 }] }] }); } catch { badPath = true; }
   check("a missing path file errors clearly", badPath);
   let bothErr = false;
-  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, path: srcPng, format: "png", width: 40 }] }] }); } catch { bothErr = true; }
+  try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, path: srcPng, format: "png", width: 40 }] }] }); } catch { bothErr = true; }
   check("rejects an image with both data and path", bothErr);
   await fs.rm(srcPng, { force: true });
 

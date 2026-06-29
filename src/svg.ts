@@ -39,11 +39,11 @@ export function scanRawSvgElements(svg: string): string[] {
 
 /** Font roles applied when a `fontPersonality` is chosen (else region defaults stand). */
 export interface ThemeFonts {
-  /** Body lines (schedule, to-do, notes, priorities…). */
+  /** Body lines (schedule, to-do, ainotes…). */
   body: string;
   /** Heading lines + region-title labels/banners. */
   heading: string;
-  /** The serif "quote" register. */
+  /** The serif register (the `ainotes` AI-voice region). */
   serif: string;
 }
 
@@ -53,7 +53,7 @@ export interface ThemeFonts {
  * the composer's colour roles; callers pick a named preset *or* the adaptive param
  * block (`harmony`/`varietyDial`/`fontPersonality`) via `write_underlay`.
  *
- * - `text`/`serif`: body text (serif = the quote region).
+ * - `text`/`serif`: body text (serif = the `ainotes` AI-voice region).
  * - `accent`: markers (checkbox/bullet), rules, calendar day numbers.
  * - `banners` + `bannerText`: section-heading banners (a coloured pill behind a
  *   white label), cycled per heading so sections read distinctly.
@@ -197,7 +197,9 @@ export function resolveTheme(input?: ThemeInput | string): ResolvedTheme {
 function themeFontFor(theme: Theme, regionName: string, heading: boolean): string | undefined {
   if (!theme.fonts) return undefined;
   if (heading) return theme.fonts.heading;
-  if (regionName === "quote" || regionName === "affirmation") return theme.fonts.serif;
+  // `ainotes` is the serif AI-voice register; `quote`/`affirmation` are legacy aliases.
+  if (regionName === "ainotes" || regionName === "quote" || regionName === "affirmation")
+    return theme.fonts.serif;
   return theme.fonts.body;
 }
 
@@ -208,8 +210,9 @@ const DEFAULT_WEIGHT = 600;
 /**
  * Per-region font/size/weight defaults. Keyed by the template's `data-region`
  * name — keep in sync with the shipped templates (`../onionskin/.../Templates/`).
- * The serif "quote" region was historically named "affirmation"; both are kept so
- * older pages still pick up the serif styling. Unknown regions use FALLBACK_DEFAULT.
+ * The serif AI-voice region is `ainotes` (was `quote`, earlier `affirmation`); the
+ * legacy names are kept so older pages still pick up the serif styling. Unknown
+ * regions use FALLBACK_DEFAULT.
  */
 interface RegionDefault {
   font: string;
@@ -220,15 +223,19 @@ interface RegionDefault {
   xPad?: number;
 }
 const REGION_DEFAULTS: Record<string, RegionDefault> = {
-  quote: { font: "Newsreader", size: 26, weight: 500 },
-  affirmation: { font: "Newsreader", size: 26, weight: 500 }, // legacy region name
+  ainotes: { font: "Newsreader", size: 26, weight: 500 }, // the serif AI-voice register
   header: { font: "Mulish", size: 20, weight: 700 },
   schedule: { font: "Mulish", size: 15, weight: 600, xPad: 52 },
-  priorities: { font: "Mulish", size: 15, weight: 600 },
+  agenda: { font: "Mulish", size: 15, weight: 600, xPad: 52 },
   todo: { font: "Mulish", size: 15, weight: 600 },
   notes: { font: "Mulish", size: 14, weight: 600 },
-  goals: { font: "Mulish", size: 15, weight: 600 },
+  focus: { font: "Mulish", size: 15, weight: 600 },
   month: { font: "Mulish", size: 13, weight: 600 },
+  // legacy region names (retired 2026-06) — kept so older pages still style correctly.
+  quote: { font: "Newsreader", size: 26, weight: 500 },
+  affirmation: { font: "Newsreader", size: 26, weight: 500 },
+  priorities: { font: "Mulish", size: 15, weight: 600 },
+  goals: { font: "Mulish", size: 15, weight: 600 },
 };
 const FALLBACK_DEFAULT: RegionDefault = { font: "Mulish", size: 14, weight: DEFAULT_WEIGHT };
 
@@ -596,11 +603,11 @@ function baselineFor(
     return localRuled + rowOffset(region);
   }
 
-  // No ruled lines (e.g. quote, notes): stack by line height...
+  // No ruled lines (e.g. ainotes, an unruled box): stack by line height...
   const lineHeight = Math.round(size * 1.5);
   const topPad = Math.round(size * 1.2);
-  // ...but center a region's single auto-placed line vertically (nice for
-  // affirmations). Only when it's truly the sole line — otherwise a multi-line
+  // ...but center a region's single auto-placed line vertically (nice for a one-line
+  // ainotes message). Only when it's truly the sole line — otherwise a multi-line
   // todo would center line 0 and stack the rest from the top, overlapping it.
   if (line.row === undefined && lineCount === 1 && region.height) {
     return Math.round(region.height / 2 + size / 3);
@@ -935,10 +942,22 @@ export function composeAiSvg(
           );
         }
       }
-      // Body text uses the theme's ink; the quote box uses its serif colour.
+      // Body text uses the theme's ink; the ainotes box uses its serif colour
+      // (quote/affirmation are legacy aliases for it).
       const baseFill =
-        region.name === "quote" || region.name === "affirmation" ? theme.serif : theme.text;
-      const rowsPerHour = input.rowsPerHour && input.rowsPerHour > 0 ? input.rowsPerHour : 1;
+        region.name === "ainotes" || region.name === "quote" || region.name === "affirmation"
+          ? theme.serif
+          : theme.text;
+      // Schedule anchoring falls back to the template's own grid (`data-start-hour` /
+      // `data-rows-per-hour`, parsed onto the region) when the caller omits them, so a
+      // `time` write needs no caller startHour; an explicit per-call value still wins.
+      const effStartHour = input.startHour ?? region.startHour ?? undefined;
+      const rowsPerHour =
+        input.rowsPerHour && input.rowsPerHour > 0
+          ? input.rowsPerHour
+          : region.rowsPerHour && region.rowsPerHour > 0
+            ? region.rowsPerHour
+            : 1;
       // All regions default to top-down flow so AI content sits in the white space
       // above/between the ruled lines, leaving the lines free for the user's ink.
       // A line with an explicit `row` or `time` still snaps to the ruled grid.
@@ -961,16 +980,17 @@ export function composeAiSvg(
               "warning",
               region.name,
             );
-          } else if (input.startHour === undefined) {
+          } else if (effStartHour === undefined) {
             warn(
               "time_missing_start_hour",
               `region "${region.name}": line "${truncate(line.text)}" has time "${line.time}" ` +
-                `but no startHour was set for the region — placed by order instead.`,
+                `but no startHour was set (neither the call nor the template's ` +
+                `data-start-hour) — placed by order instead.`,
               "warning",
               region.name,
             );
           } else {
-            const r = rowForTime(line.time, input.startHour, rowsPerHour);
+            const r = rowForTime(line.time, effStartHour, rowsPerHour);
             if (r < 0 || r > region.ruledLines.length - 1) {
               warn(
                 "time_outside_grid",

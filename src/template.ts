@@ -33,6 +33,19 @@ export interface Region {
   rows: number | null;
   cols: number | null;
   /**
+   * Schedule/agenda grid timing from `data-start-hour` / `data-rows-per-hour` — the
+   * hour at ruled row 0 and how many rows make up an hour. The template self-describes
+   * these so a caller needn't supply `startHour` to place by clock time (a per-call
+   * `startHour`/`rowsPerHour` still overrides). null when the region omits them.
+   */
+  startHour: number | null;
+  rowsPerHour: number | null;
+  /**
+   * The `data-list` bucket for a list column (e.g. "today" / "this-week" / "later" on
+   * the to-do template) — advisory routing context, like `intent`. null if absent.
+   */
+  list: string | null;
+  /**
    * Absolute y of each horizontal ruled line (group y + line y1), ascending.
    * These are the writable "rows" — schedule hour lines, notes rules, etc.
    */
@@ -153,29 +166,34 @@ const FILL_BY_NAME: Record<string, RegionFill> = {
   schedule: "shared",
   agenda: "shared",
   todo: "shared",
-  priorities: "shared",
   "list-1": "shared",
   "list-2": "shared",
   "list-3": "shared",
   month: "shared",
-  notes: "shared",
-  goals: "shared",
-  summary: "shared",
+  focus: "shared", // Monthly's bottom band (was `goals`)
+  photos: "shared", // photo slots the user OR the AI may fill
+  morning: "shared",
+  afternoon: "shared",
+  evening: "shared",
   // ai — the AI owns it (a daily message, a title, structure).
-  quote: "ai",
-  affirmation: "ai", // legacy name for quote
+  ainotes: "ai", // the AI voice: weather/context/affirmation + a home for a small image
+  last: "ai", // reflection's "from last session" — the AI surfaces it
   header: "ai",
   weekdays: "ai",
   // ink — the user's handwriting surface; AI does light scaffolding only.
+  notes: "ink", // 2026-06: notes is the user's handwriting everywhere
   joys: "ink",
   concerns: "ink",
-  last: "ink",
-  morning: "ink",
-  afternoon: "ink",
-  evening: "ink",
   memories: "ink",
   page: "ink",
-  photos: "ink",
+  // legacy aliases — retired from the shipped templates (2026-06 redesign) but kept
+  // so older, un-tagged live pages still derive a sensible fill. New templates set
+  // `data-fill` explicitly, so these never apply to them.
+  quote: "ai", // → ainotes
+  affirmation: "ai", // → ainotes (older alias for quote)
+  priorities: "shared", // → folded into todo
+  goals: "shared", // → focus
+  summary: "shared", // → removed
 };
 
 /** Template ids whose whole surface is for handwriting — unknown regions → ink. */
@@ -253,6 +271,7 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
       explicitFill(g["@_data-fill"]) ??
       deriveFill(name, ruledLines.length > 0 || hasDots, templateName);
     const intent = readIntent(g["@_data-intent"]);
+    const list = readIntent(g["@_data-list"]); // same trim-or-null treatment
 
     regions.push({
       id,
@@ -265,6 +284,9 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
       height,
       rows: num(g["@_data-rows"]),
       cols: num(g["@_data-cols"]),
+      startHour: num(g["@_data-start-hour"]),
+      rowsPerHour: num(g["@_data-rows-per-hour"]),
+      list,
       ruledLines,
       colLines,
     });

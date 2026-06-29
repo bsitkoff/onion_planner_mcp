@@ -14,9 +14,9 @@ Shipped + planned work: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 Every Onionskin page is a folder compositing four SVG layers
 (`template → ai → stickers → ink`). The **ai layer is yours**; the user's ink/stickers
 are not. Permission is location: only pages under `Shared/` are touchable; `Private/` is
-invisible. This server lets Claude fill a page's schedule, to-dos, priorities, notes, and
-quote, then flip `manifest.json → layers.ai.status` to `ready` so the app composites
-it on next foreground.
+invisible. This server lets Claude fill a page's schedule, to-dos, focus, and the
+`ainotes` AI-voice block, then flip `manifest.json → layers.ai.status` to `ready` so the
+app composites it on next foreground.
 
 ## Tools
 
@@ -37,7 +37,7 @@ it on next foreground.
 ```
 get_library            → confirm the library is reachable
 list_pages             → find "Shared/Daily/2026-06-14"
-read_page              → learn its regions (schedule rows, quote box, …)
+read_page              → learn its regions (schedule rows, ainotes box, …)
 write_underlay         → place text by region/row; server computes coordinates; status=ready
 ```
 
@@ -52,14 +52,15 @@ write_underlay         → place text by region/row; server computes coordinates
       { "text": "13:00 1:1", "row": 6 } ] },
     { "region": "todo", "lines": [
       { "text": "Email the registrar", "marker": "checkbox" } ] },
-    { "region": "quote", "lines": [ { "text": "Small steps still move forward." } ] }
+    { "region": "ainotes", "lines": [ { "text": "Small steps still move forward." } ] }
   ]
 }
 ```
 
 `row` aligns to the region's ruled lines (from `read_page`). Use `y`/`x` for explicit
-placement, `marker` (`checkbox`/`bullet`) for a leading mark, `time` + `startHour` to place
-a schedule line by the clock. For hand-placed content in a single region, give it a raw
+placement, `marker` (`checkbox`/`bullet`) for a leading mark, and `time` to place
+a schedule line by the clock (anchored by the template's `data-start-hour`, or a per-call
+`startHour` override). For hand-placed content in a single region, give it a raw
 `svg` string (emitted verbatim inside that region's group, composes/merges like any
 region; mutually exclusive with `lines`/`calendar`) — or pass a full top-level `svg`
 document for total control. A line with

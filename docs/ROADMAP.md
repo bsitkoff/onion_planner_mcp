@@ -1,9 +1,11 @@
 # onion-planner-mcp — Roadmap
 
 This server is the **placement/rendering engine**, not the orchestrator. It is
-filesystem-only, no network. The data (calendar events, weather, email-derived to-dos,
-generated art) comes from *other* MCPs that an orchestrator (e.g. Claude CoWork) gathers;
-our job is to render it beautifully and safely into `ai.svg`. The north-star scenario:
+filesystem-first: the planner contract is plain files in iCloud, and the data (calendar
+events, weather, email-derived to-dos, generated art) comes from *other* MCPs that an
+orchestrator (e.g. Claude CoWork) gathers. The one network-capable helper, `fetch_image`,
+only downloads HTTPS PNG/JPEG files to local temp paths for filesystem embedding. Our job is
+to render everything beautifully and safely into `ai.svg`. The north-star scenario:
 
 > Overnight, the planner is set: the schedule is filled from the calendar, a weather note +
 > umbrella mark sit in a corner, email-derived to-dos appear next to checkboxes, a
@@ -24,13 +26,36 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
   **`media/ai/`** subfolder (AI-owned art); on create, the new page's own files + chapter
   `.folder.json`. Never touch ink/stickers/template, the rest of `media/`, or Private.
 - All writes through `resolvePageRel` (Shared/ containment) + `atomicWrite`.
-- No network. Re-read `manifest.size` per page; geometry comes from each page's template.
+- No app/network API for planner state. Re-read `manifest.size` per page; geometry comes from
+  each page's template.
 - Closed font set (`Mulish, Newsreader, IBM Plex Mono, Caveat, Fredoka, Phosphor`).
 
 ---
 
 ## Done (this pass)
 
+- **Region intent — `fill` + free-text `intent` (who fills, and what for)** — each parsed
+  region now carries two signals, surfaced by `read_page`, so an open-ended template ecosystem
+  can express designer intent without the server pre-coding every region type:
+  - **`fill`** (`ink | ai | shared`) — the *behaviour* axis (who writes). **Derived** — explicit
+    `data-fill` wins, else region-name default → template-type (`reflection/lined/dotted/blank`
+    → ink) → geometry fallback (the original "lined = me" instinct, last resort). Key reframe:
+    **geometry does not predict ownership** (reflection regions are ruled yet the user's;
+    `schedule`/`todo` are ruled yet AI-seeded). `ai`/`shared` are the AI's; a `shared` region
+    `read_ink`s first and seeds *around* the user's hand; an `ink` region is a handwriting
+    surface — scaffolding only, body text trips a soft `ink_region_filled` warning.
+  - **`intent`** (free text, or `null`) — the *designer's* note on what a block is for (e.g.
+    "this week's dinners, one row per day"). **Advisory**: the filler reads it to fill novel
+    regions as imagined, but is free to repurpose; never enforced. Region names are only a
+    default for `fill`, not a contract — novel templates set `data-fill`/`data-intent` explicitly
+    and are first-class.
+  - `deriveFill`/`FILL_BY_NAME`/`readIntent` in `src/template.ts`; `read_page` passes
+    `manifest.template` for type derivation. Filler guidance flipped from "fill the quote/todo
+    regions" to "honour each region by `fill`+`intent`, skip if no real data" (`docs/AUTHORING.md`).
+  - **App contract:** `data-fill="ink|ai|shared"` + free-text `data-intent` registered as
+    optional region keys in `FORMAT.md §2`; `TEMPLATES.md §3` region-authoring spec refreshed
+    (the identity/fill/intent model, real region vocabulary, `data-list`). Server derives by
+    default, so zero template edits needed. Smoke +25 (143 total).
 - **Theme contract migration (2026-06 UI-redesign handoff)** — reconciled the redesign handoff
   against the app's already-integrated decisions (`../onionskin` top commit; `DECISIONS.md`
   #34/#35/#39/#40). The underlay theme is no longer just the named enum: `write_underlay` now also
@@ -87,7 +112,8 @@ our job is to render it beautifully and safely into `ai.svg`. The north-star sce
   order (overnight-safe), and a time outside the grid pins to the nearest edge with a warning.
   `rowForTime` in `svg.ts`.
 - **Phase 2.2 — embed generated images**: a region may carry `images` — base64 PNG/JPEG the
-  caller supplies (this server has no network/generation). Investigating the **app's renderer**
+  caller supplies, or a local file `path` (optionally produced by `fetch_image` from an HTTPS
+  PNG/JPEG URL; generation still lives outside this server). Investigating the **app's renderer**
   set the mechanism: it's a custom SwiftUI Canvas parser that resolves `<image href>` only as a
   **page-relative file path** (`MediaCache`, decoded via `CGImageSource`, cached by URL#mtime),
   with **no data-URI support**. So the server writes art into a dedicated **`media/ai/`**

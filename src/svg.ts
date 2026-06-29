@@ -726,10 +726,21 @@ function composeCalendar(region: Region, spec: CalendarSpec, theme: Theme): stri
 }
 
 /** Result of composing an ai.svg: the document plus any non-fatal fit warnings. */
+export type WarningSeverity = "info" | "warning";
+
+export interface WarningDetail {
+  code: string;
+  severity: WarningSeverity;
+  message: string;
+  region?: string;
+}
+
 export interface ComposeResult {
   svg: string;
   /** Heuristic placement warnings (overflow, too many lines) — never fatal. */
   warnings: string[];
+  /** Structured companion to `warnings` for unattended callers. */
+  warningDetails: WarningDetail[];
 }
 
 /**
@@ -751,6 +762,20 @@ export function composeAiSvg(
     `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`,
   ];
   const warnings: string[] = [...themeWarnings];
+  const warningDetails: WarningDetail[] = themeWarnings.map((message) => ({
+    code: "theme_palette_fallback",
+    severity: "info",
+    message,
+  }));
+  const warn = (
+    code: string,
+    message: string,
+    severity: WarningSeverity = "warning",
+    region?: string,
+  ) => {
+    warnings.push(message);
+    warningDetails.push({ code, severity, message, ...(region ? { region } : {}) });
+  };
   // Banner heading colours cycle across the whole page so sections read distinctly.
   let bannerIdx = 0;
 
@@ -778,7 +803,12 @@ export function composeAiSvg(
       const lw = bannerLabelWidth(input.label, lsize);
       const labelFont = themeFontFor(theme, region.name, true) ?? "Mulish";
       if (region.y + ly - lsize < 0) {
-        warnings.push(`region "${region.name}": label "${truncate(input.label)}" may sit above the page top.`);
+        warn(
+          "label_above_page",
+          `region "${region.name}": label "${truncate(input.label)}" may sit above the page top.`,
+          "warning",
+          region.name,
+        );
       }
       if (theme.headingStyle === "banner") {
         const padX = BANNER_PAD_X;
@@ -819,9 +849,12 @@ export function composeAiSvg(
         region.height !== null &&
         (x < 0 || y < 0 || x + img.width > region.width || y + img.height > region.height)
       ) {
-        warnings.push(
+        warn(
+          "image_overflow",
           `region "${region.name}": image (${img.width}×${img.height}) may extend past ` +
             `the ${region.width}×${region.height} region box.`,
+          "warning",
+          region.name,
         );
       }
     }
@@ -830,21 +863,28 @@ export function composeAiSvg(
     } else {
       const def = REGION_DEFAULTS[region.name] ?? FALLBACK_DEFAULT;
       const lines = input.lines ?? [];
+      // A handwriting region wants the AI to scaffold (a heading/prompt, corner art),
+      // not fill its writing area. Headings are scaffolding; any other line is body.
+      if (region.fill === "ink") {
+        const body = lines.filter((l) => !l.heading).length;
+        if (body > 0) {
+          warn(
+            "ink_region_filled",
+            `region "${region.name}" is a handwriting surface (fill=ink) — expected ` +
+              `scaffolding (a heading/prompt or corner art) only, not ${body} body line(s).`,
+            "warning",
+            region.name,
+          );
+        }
+      }
       // Body text uses the theme's ink; the quote box uses its serif colour.
       const baseFill =
         region.name === "quote" || region.name === "affirmation" ? theme.serif : theme.text;
-      // Warn if there are more lines than ruled rows to land them on.
-      if (region.ruledLines.length > 0 && lines.length > region.ruledLines.length) {
-        warnings.push(
-          `region "${region.name}": ${lines.length} lines but only ` +
-            `${region.ruledLines.length} ruled rows — extra lines may overflow.`,
-        );
-      }
       const rowsPerHour = input.rowsPerHour && input.rowsPerHour > 0 ? input.rowsPerHour : 1;
-      // Box (unruled) regions flow top-down so dynamic sections stack cleanly;
-      // ruled regions snap each line to a row (computed per-line below).
-      const boxBaselines =
-        region.ruledLines.length === 0 ? flowBaselines(region, lines, def) : null;
+      // All regions default to top-down flow so AI content sits in the white space
+      // above/between the ruled lines, leaving the lines free for the user's ink.
+      // A line with an explicit `row` or `time` still snaps to the ruled grid.
+      const flowBases = flowBaselines(region, lines, def);
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
         const font = line.font ?? themeFontFor(theme, region.name, !!line.heading) ?? def.font;
@@ -856,30 +896,47 @@ export function composeAiSvg(
         let effLine = line;
         if (line.time !== undefined && line.y === undefined && line.row === undefined) {
           if (region.ruledLines.length === 0) {
-            warnings.push(
+            warn(
+              "time_unruled_region",
               `region "${region.name}": line "${truncate(line.text)}" has a time but the ` +
                 `region has no ruled rows — time ignored.`,
+              "warning",
+              region.name,
             );
           } else if (input.startHour === undefined) {
-            warnings.push(
+            warn(
+              "time_missing_start_hour",
               `region "${region.name}": line "${truncate(line.text)}" has time "${line.time}" ` +
                 `but no startHour was set for the region — placed by order instead.`,
+              "warning",
+              region.name,
             );
           } else {
             const r = rowForTime(line.time, input.startHour, rowsPerHour);
             if (r < 0 || r > region.ruledLines.length - 1) {
-              warnings.push(
+              warn(
+                "time_outside_grid",
                 `region "${region.name}": time "${line.time}" falls outside the ` +
                   `${region.ruledLines.length}-row grid — pinned to the nearest edge.`,
+                "warning",
+                region.name,
               );
             }
             effLine = { ...line, row: r };
           }
         }
 
-        const y = boxBaselines
-          ? Math.round(boxBaselines[i])
-          : Math.round(baselineFor(region, effLine, i, size, lines.length));
+        // Baseline: explicit y > ruled snap (when `row`/`time` set) > flow default.
+        let y: number;
+        if (effLine.y !== undefined) {
+          y = effLine.y;
+        } else if (effLine.row !== undefined && region.ruledLines.length > 0) {
+          const idx = Math.min(Math.max(0, Math.floor(effLine.row)), region.ruledLines.length - 1);
+          const localRuled = region.ruledLines[idx] - region.y;
+          y = Math.round(localRuled + rowOffset(region));
+        } else {
+          y = Math.round(flowBases[i]);
+        }
 
         // A section heading. `banner` themes draw a coloured pill + white label
         // (cycling banner colours so sections read distinctly); `underline` themes
@@ -949,9 +1006,12 @@ export function composeAiSvg(
             // Warn if the (unwrapped) text likely runs past the right edge.
             const end = x + estimateTextWidth(line.text, font, size);
             if (end > region.width) {
-              warnings.push(
+              warn(
+                "text_overflow",
                 `region "${region.name}": line "${truncate(line.text)}" ` +
                   `(~${end}px) may overflow the ${region.width}px region width.`,
+                "warning",
+                region.name,
               );
             }
           } else if (segments.length > 1) {
@@ -964,9 +1024,12 @@ export function composeAiSvg(
             const pastBox =
               region.height !== null && y + dropped + Math.round(size * 0.3) > region.height;
             if (collidesRow || pastBox) {
-              warnings.push(
+              warn(
+                "wrapped_text_vertical_overflow",
                 `region "${region.name}": wrapped line "${truncate(line.text)}" ` +
                   `(${segments.length} rows) may overlap the next row or run past the region.`,
+                "warning",
+                region.name,
               );
             }
           }
@@ -977,7 +1040,7 @@ export function composeAiSvg(
   }
 
   parts.push(`</svg>`);
-  return { svg: parts.join("\n") + "\n", warnings };
+  return { svg: parts.join("\n") + "\n", warnings, warningDetails };
 }
 
 /** Shorten a string for use inside a warning message. */

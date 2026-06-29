@@ -10,10 +10,12 @@ import {
 } from "./library.js";
 import {
   readPage,
+  readInk,
   writeUnderlay,
   setStatus,
   clearUnderlay,
   createPage,
+  fetchImageToTemp,
 } from "./page.js";
 
 const server = new McpServer(
@@ -126,9 +128,17 @@ server.tool(
 server.tool(
   "read_page",
   "Read one shared page: its manifest, parsed regions (name, x, y, width, height, rows, " +
-    "cols, and absolute ruled-line positions), current ai.svg, and a `template` summary, and " +
-    "optionally template.svg. Use the regions to target write_underlay — never hard-code " +
-    "coordinates. `template` reports whether the template already decorates itself " +
+    "cols, absolute ruled-line positions, a `fill`, and a free-text `intent`), current ai.svg, " +
+    "and a `template` summary, and optionally template.svg. Use the regions to target " +
+    "write_underlay — never hard-code coordinates. Each region's `fill` says who fills it: " +
+    "`ai` (you own it — fill it), `shared` (you seed it — calendar/tasks — but read_ink first " +
+    "and place around the user's handwriting), or `ink` (the user's handwriting surface — " +
+    "leave it; do light scaffolding only, a heading/prompt or a corner sticker, never body " +
+    "text). `intent` is the designer's free-text note on what the region is for (e.g. \"this " +
+    "week's dinners, one row per day\") — read it to fill the region as imagined, but you're " +
+    "free to repurpose; it's null when the template set none. Honour each region by its `fill` " +
+    "+ `intent` rather than expecting specific names (not every template has quote/todo). " +
+    "`template` reports whether the template already decorates itself " +
     "(`styled`/`hasLabels`/`hasBanners`/`stickersPresent`) and its own `palette`: if styled, " +
     "fill quietly in those colours; if bare, go full (theme + banners + art). Also returns " +
     "the chapter's `theme` (harmony/varietyDial/fontPersonality + chromeAccent), which " +
@@ -147,6 +157,32 @@ server.tool(
     try {
       const root = await requireLibrary();
       return json(await readPage(root, page, includeTemplate));
+    } catch (e: any) {
+      if (e instanceof LibraryMissingError) {
+        return { ...text(e.message), isError: true as const };
+      }
+      return { ...text(`Error: ${e.message}`), isError: true as const };
+    }
+  },
+);
+
+// --- read_ink ---
+server.tool(
+  "read_ink",
+  "Read a shared page's ink.svg — the user's handwritten layer. Use this to see what the " +
+    "user has already written before composing the AI underlay, or to pick up handwritten " +
+    "notes and annotations. Returns null if no ink file exists. Read-only; never modifies " +
+    "any layer. Refuses any page outside Shared/.",
+  {
+    page: z
+      .string()
+      .describe('Relative page path, e.g. "Shared/2026-06/2026-06-26".'),
+  },
+  { readOnlyHint: true },
+  async ({ page }) => {
+    try {
+      const root = await requireLibrary();
+      return json(await readInk(root, page));
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {
         return { ...text(e.message), isError: true as const };
@@ -258,7 +294,7 @@ const imageSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Base64-encoded image bytes (the art — this server has no network and generates " +
+      "Base64-encoded image bytes (the art — this server generates " +
         "nothing). Keep it small (≤1536px); there is a 2MB cap. Give EITHER `data` or `path`.",
     ),
   path: z
@@ -304,7 +340,7 @@ server.tool(
     "references from ai.svg). Sets status to 'ready' by default so the app will composite " +
     "it. Use `merge` to update only the named regions and keep the rest of the page; use " +
     "`dryRun` to preview the result + fit warnings without writing. Returns non-fatal " +
-    "`warnings` for likely overflow. Refuses any page outside Shared/.",
+    "`warnings` plus structured `warningDetails` for likely overflow. Refuses any page outside Shared/.",
   {
     page: z.string().describe('Relative page path, e.g. "Shared/Daily/2026-02-06".'),
     regions: z
@@ -537,6 +573,39 @@ server.tool(
       if (e instanceof LibraryMissingError) {
         return { ...text(e.message), isError: true as const };
       }
+      return { ...text(`Error: ${e.message}`), isError: true as const };
+    }
+  },
+);
+
+// --- fetch_image ---
+server.tool(
+  "fetch_image",
+  "Download an image from an HTTPS URL and save it to a local temp file. Returns the path " +
+    "to pass as `images[].path` in write_underlay — keeps image bytes off the model context " +
+    "and bridges CDN URLs to the filesystem-only Onionskin renderer. Validates PNG/JPEG " +
+    "format and the 2 MB size cap. The temp file lives in /tmp/onionskin-fetch/ and is " +
+    "cleaned up by the OS.",
+  {
+    url: z.string().describe("HTTPS URL of the image to download."),
+    name: z
+      .string()
+      .optional()
+      .describe("Filename stem for the saved file (defaults to the last URL path segment)."),
+    removeBackground: z
+      .boolean()
+      .optional()
+      .describe(
+        "Run rembg to strip the image background, outputting a transparent PNG. " +
+          "Requires rembg installed: pip3 install rembg[cpu]. The output is re-validated " +
+          "and may exceed the 2 MB cap.",
+      ),
+  },
+  async ({ url, name, removeBackground }) => {
+    try {
+      const result = await fetchImageToTemp(url, name, removeBackground);
+      return json({ ok: true, ...result });
+    } catch (e: any) {
       return { ...text(`Error: ${e.message}`), isError: true as const };
     }
   },

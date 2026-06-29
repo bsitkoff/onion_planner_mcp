@@ -12,6 +12,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { execFile } from "node:child_process";
 import {
   requireLibrary,
   listChapters,
@@ -25,10 +26,11 @@ import {
   setStatus,
   clearUnderlay,
   createPage,
+  fetchImageToTemp,
 } from "../src/page.js";
 import { GOLD, resolveTheme } from "../src/svg.js";
 import { hexToHsl } from "../src/color.js";
-import { inspectTemplate } from "../src/template.js";
+import { inspectTemplate, parseRegions } from "../src/template.js";
 
 let pass = 0;
 let fail = 0;
@@ -42,8 +44,35 @@ function check(name: string, cond: boolean, detail = "") {
   }
 }
 
+function execFileP(
+  file: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, opts, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`${error.message}\n${stderr}`));
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
+}
+
+async function runCli(root: string, args: string[]): Promise<any> {
+  const { stdout } = await execFileP("npm", ["run", "call", "--", ...args], {
+    cwd: process.cwd(),
+    env: { ...process.env, ONIONSKIN_CONTAINER: root },
+  });
+  const start = stdout.lastIndexOf("\n{");
+  const end = stdout.lastIndexOf("}");
+  return JSON.parse(stdout.slice(start + 1, end + 1));
+}
+
 /** Extract the verbatim `<g data-region="NAME">…</g>` block from an ai.svg. */
-function regionGroup(svg: string, name: string): string | null {
+function regionGroup(svg: string | undefined, name: string): string | null {
+  if (!svg) return null;
   const re = new RegExp(`<g\\b[^>]*\\bdata-region="${name}"[^>]*>[\\s\\S]*?</g>`);
   return svg.match(re)?.[0] ?? null;
 }
@@ -86,6 +115,48 @@ async function main() {
   check("template info: cozy is styled with its own banners", cozyInfo.styled && cozyInfo.hasBanners && cozyInfo.hasLabels, JSON.stringify(cozyInfo));
   check("template info: cozy palette is non-empty and non-neutral", cozyInfo.palette.length > 0 && cozyInfo.palette.every((h) => /^#[0-9a-f]{6}$/.test(h)), JSON.stringify(cozyInfo.palette));
 
+  console.log("\nregion fill (who fills each region: ink / ai / shared) + designer intent");
+  // Derived from the region name: schedule is shared (AI seeds, user augments), the
+  // quote box is the AI's. Geometry does NOT decide this (schedule is ruled, quote is not).
+  check("schedule fill is shared", schedule?.fill === "shared", schedule?.fill);
+  check("quote fill is ai", quote?.fill === "ai", quote?.fill);
+  // A reflection template's ruled regions are the user's handwriting (ink), not the AI's —
+  // the counterexample to "lined = AI". Found by fill, not by hard-coded name.
+  const reflectionSvg = await fs.readFile(path.join(root, "Templates", "reflection-minimal", "template.svg"), "utf8");
+  const reflectionRegions = parseRegions(reflectionSvg, "reflection-minimal");
+  check("a ruled reflection region derives fill=ink", reflectionRegions.some((r) => r.fill === "ink" && r.ruledLines.length > 0), JSON.stringify(reflectionRegions.map((r) => [r.name, r.fill])));
+  // Geometry fallback (unknown name, no template type): ruled → ink, blank box → ai.
+  const fbSvg =
+    '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg">' +
+    '<g id="region-mystery-lined" data-region="mystery-lined" transform="translate(10,10)"><rect width="100" height="100" fill="none"/><line x1="0" y1="20" x2="100" y2="20"/></g>' +
+    '<g id="region-mystery-box" data-region="mystery-box" transform="translate(10,200)"><rect width="100" height="100" fill="none"/></g>' +
+    "</svg>";
+  const fb = parseRegions(fbSvg);
+  check("geometry fallback: a ruled unknown region → ink", fb.find((r) => r.name === "mystery-lined")?.fill === "ink");
+  check("geometry fallback: a blank unknown box → ai", fb.find((r) => r.name === "mystery-box")?.fill === "ai");
+  // Template-type fallback: the SAME unknown regions in a handwriting-surface template → all ink.
+  check("template-type fallback: unknown regions in a 'blank' template → ink", parseRegions(fbSvg, "blank-minimal").every((r) => r.fill === "ink"));
+  // Explicit data-fill wins over everything (schedule would otherwise derive as shared); a
+  // free-text data-intent carries the designer's purpose for an otherwise-anonymous block.
+  const overrideSvg =
+    '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg">' +
+    '<g id="region-block-2" data-region="block-2" data-fill="ink" data-intent="this week\'s dinners, one row per day" transform="translate(10,10)"><rect width="100" height="100" fill="none"/></g></svg>';
+  const over = parseRegions(overrideSvg)[0];
+  check("explicit data-fill overrides the derived fill", over?.fill === "ink", over?.fill);
+  check("free-text data-intent is parsed as the designer's purpose", over?.intent === "this week's dinners, one row per day", over?.intent ?? "null");
+  check("a region with no data-intent has null intent", schedule?.intent === null, String(schedule?.intent));
+
+  console.log("\nink_region_filled warning (a handwriting surface wants scaffolding, not fill)");
+  const reflectPage = "Shared/Daily/2026-06-25";
+  await createPage(root, { chapter: "Daily", name: "2026-06-25", title: "Reflection", template: "reflection-minimal" });
+  const reflectRead = await readPage(root, reflectPage);
+  const inkReg = reflectRead.regions.find((r) => r.fill === "ink");
+  check("reflection page exposes an ink region", !!inkReg, JSON.stringify(reflectRead.regions.map((r) => [r.name, r.fill])));
+  const filledInk = await writeUnderlay(root, reflectPage, { status: "ready", dryRun: true, regions: [{ region: inkReg!.name, lines: [{ text: "I should not write here" }] }] });
+  check("body text into an ink region warns", filledInk.warningDetails.some((w) => w.code === "ink_region_filled" && w.region === inkReg!.name), JSON.stringify(filledInk.warningDetails));
+  const scaffoldInk = await writeUnderlay(root, reflectPage, { status: "ready", dryRun: true, regions: [{ region: inkReg!.name, lines: [{ text: "Morning", heading: true }] }] });
+  check("heading-only scaffolding into an ink region does NOT warn", !scaffoldInk.warningDetails.some((w) => w.code === "ink_region_filled"), JSON.stringify(scaffoldInk.warningDetails));
+
   console.log("\nwrite_underlay (structured: schedule rows + checkbox to-dos + quote)");
   const before = read.manifest.modified;
   await new Promise((r) => setTimeout(r, 5)); // ensure modified timestamp differs
@@ -127,8 +198,8 @@ async function main() {
   check("manifest modified bumped", m2.modified !== before, `${before} -> ${m2.modified}`);
 
   console.log("\ntime-aware schedule (time → nearest ruled row; dry-run)");
-  const yOf = (svg: string, needle: string) =>
-    Number((svg.split("\n").find((l) => l.includes(needle)) ?? "").match(/y="(\d+)"/)?.[1] ?? -1);
+  const yOf = (svg: string | undefined, needle: string) =>
+    Number(((svg ?? "").split("\n").find((l) => l.includes(needle)) ?? "").match(/y="(\d+)"/)?.[1] ?? -1);
   // startHour 8, rowsPerHour 1: "11:00" → row 3. Reuse the geometry-derived slots (rl).
   const timed = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
@@ -151,7 +222,7 @@ async function main() {
     regions: [{ region: "schedule", lines: [{ text: "floating", time: "10:00" }] }],
   });
   check("time without startHour warns", noAnchor.warnings.some((w) => w.includes("startHour")), JSON.stringify(noAnchor.warnings));
-  check("time without startHour still composes", noAnchor.aiSvg.includes(">floating</text>"));
+  check("time without startHour still composes", (noAnchor.aiSvg ?? "").includes(">floating</text>"));
   // Malformed time is rejected.
   let badTime = false;
   try {
@@ -254,6 +325,23 @@ async function main() {
   const written = await writeUnderlay(root, daily, { status: "ready", dryRun: true, fontPersonality: "handwritten", regions: [{ region: "notes", lines: [{ text: "buy milk" }] }] });
   check("fontPersonality reaches the composed ai.svg (Caveat body text)", (regionGroup(written.aiSvg, "notes") ?? "").includes('font-family="Caveat"'), regionGroup(written.aiSvg, "notes") ?? "");
 
+  console.log("\ndev CLI forwards adaptive theme params");
+  const cliAdaptive = await runCli(root, [
+    "write_underlay",
+    daily,
+    JSON.stringify({
+      status: "ready",
+      dryRun: true,
+      harmony: "match",
+      varietyDial: 0.9,
+      fontPersonality: "handwritten",
+      regions: [{ region: "notes", lines: [{ text: "CLI", heading: true }, { text: "milk" }] }],
+    }),
+  ]);
+  const cliNotes = regionGroup(cliAdaptive.aiSvg, "notes") ?? "";
+  check("CLI forwarded fontPersonality (Fredoka heading)", cliNotes.includes('font-family="Fredoka"'), cliNotes.slice(0, 220));
+  check("CLI forwarded varietyDial/harmony (banner heading)", /<rect[^>]*rx="6"/.test(cliNotes), cliNotes.slice(0, 220));
+
   console.log("\nchapter .folder.json theme is read as the default (overridable per call)");
   const dailyFolder = path.join(root, "Shared", "Daily", ".folder.json");
   const folderJson = JSON.parse(await fs.readFile(dailyFolder, "utf8").catch(() => "{}"));
@@ -296,7 +384,11 @@ async function main() {
     ]}],
   });
   check("warns about likely overflow", overflow.warnings.some((w) => w.includes("overflow")), JSON.stringify(overflow.warnings));
-  check("warns about more lines than ruled rows", overflow.warnings.some((w) => w.includes("ruled rows")), JSON.stringify(overflow.warnings));
+  // Flow layout: all 7 lines are written regardless of the ruled-row count.
+  const prioritiesGroup = regionGroup(overflow.aiSvg, "priorities") ?? "";
+  check("flow layout writes all lines past the ruled-row count", prioritiesGroup.includes(">f</text>"), prioritiesGroup.slice(0, 600));
+  check("warnings remain a string array for compatibility", overflow.warnings.every((w) => typeof w === "string"));
+  check("structured warning details include region + code", overflow.warningDetails.some((w) => w.code === "text_overflow" && w.region === "priorities"), JSON.stringify(overflow.warningDetails));
 
   console.log("\ndry-run writes nothing to disk");
   const diskBefore = await fs.readFile(aiPath, "utf8");
@@ -306,7 +398,7 @@ async function main() {
     regions: [{ region: "notes", lines: [{ text: "DRY_RUN_SENTINEL" }] }],
   });
   const diskAfter = await fs.readFile(aiPath, "utf8");
-  check("dry run returns composed svg", dry.aiSvg.includes("DRY_RUN_SENTINEL") && dry.dryRun === true);
+  check("dry run returns composed svg", (dry.aiSvg ?? "").includes("DRY_RUN_SENTINEL") && dry.dryRun === true);
   check("dry run left ai.svg unchanged", diskAfter === diskBefore);
   check("dry run did NOT flip status", JSON.parse(await fs.readFile(path.join(root, daily, "manifest.json"), "utf8")).layers.ai.status === "ready");
 
@@ -346,11 +438,19 @@ async function main() {
   check("every cell aligns to a 7-column boundary", cellXs.every((x) => expectedCols.some((c) => Math.abs(c - x) <= 1)), JSON.stringify([...new Set(cellXs)].sort((a, b) => a - b)));
 
   console.log("\nwrite_underlay (raw svg) + reject merge+svg");
-  await writeUnderlay(root, daily, {
+  const rawOk = await writeUnderlay(root, daily, {
     status: "ready",
     svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#9C7C1A">raw</text></svg>',
   });
   check("raw svg written verbatim", (await fs.readFile(aiPath, "utf8")).includes(">raw</text>"));
+  check("supported raw svg produces no raw warnings", rawOk.warningDetails.length === 0, JSON.stringify(rawOk.warningDetails));
+  const rawWarn = await writeUnderlay(root, daily, {
+    status: "ready",
+    dryRun: true,
+    svg: '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><foreignObject x="0" y="0" width="10" height="10"/></svg>',
+  });
+  check("raw svg warns on unsupported app-renderer elements", rawWarn.warningDetails.some((w) => w.code === "raw_svg_unsupported_element"), JSON.stringify(rawWarn.warningDetails));
+  check("raw svg warns on viewBox/page-size mismatch", rawWarn.warningDetails.some((w) => w.code === "raw_svg_viewbox_mismatch"), JSON.stringify(rawWarn.warningDetails));
   let rejectedMergeSvg = false;
   try {
     await writeUnderlay(root, daily, { status: "ready", merge: true, svg: "<svg/>" });
@@ -368,6 +468,22 @@ async function main() {
   check("clear empties ai.svg", !(await fs.readFile(aiPath, "utf8")).includes("<text"));
 
   console.log("\ncreate_page by cloning a sibling");
+  await fs.mkdir(path.join(root, "Shared", "Daily", "reserved-dir"), { recursive: true });
+  let refusedExistingDir = false;
+  try {
+    await createPage(root, { chapter: "Daily", name: "reserved-dir", title: "Nope" });
+  } catch {
+    refusedExistingDir = true;
+  }
+  check("create_page refuses an existing destination directory", refusedExistingDir);
+  let cleanedStage = false;
+  try {
+    await createPage(root, { chapter: "Daily", name: "bad-template", title: "Bad", template: "missing-template" });
+  } catch {
+    const entries = await fs.readdir(path.join(root, "Shared", "Daily"));
+    cleanedStage = !entries.some((e) => e.includes("bad-template") || e.startsWith(".create-bad-template"));
+  }
+  check("failed create_page leaves no destination/staging folder", cleanedStage);
   const sib = await createPage(root, { chapter: "Daily", name: "2026-06-23", title: "Tuesday" });
   check("sibling clone reports a Shared/ provenance", sib.clonedFrom.startsWith("Shared/Daily/"), sib.clonedFrom);
   check("cloned page is writable", true);
@@ -440,7 +556,7 @@ async function main() {
 
   // dryRun composes the href but writes no file.
   const dryImg = await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "dry", width: 40 }] }] });
-  check("dryRun composes the image href", dryImg.aiSvg.includes('href="media/ai/dry.png"'));
+  check("dryRun composes the image href", (dryImg.aiSvg ?? "").includes('href="media/ai/dry.png"'));
   check("dryRun wrote no media file", !(await exists(path.join(root, imgPage, "media", "ai", "dry.png"))));
 
   // Validation: format/magic mismatch, oversize, traversal name.
@@ -451,7 +567,7 @@ async function main() {
   const big = Buffer.alloc(2 * 1024 * 1024 + 10, 1).toString("base64");
   try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: big, format: "png", width: 40 }] }] }); } catch { oversize = true; }
   check("rejects an oversize image (>2MB)", oversize);
-  const travAi = (await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "../../evil", width: 40 }] }] })).aiSvg;
+  const travAi = (await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, format: "png", name: "../../evil", width: 40 }] }] })).aiSvg ?? "";
   const travHref = travAi.match(/href="[^"]*"/)?.[0] ?? "";
   const travBase = travHref.replace(/^href="media\/ai\//, "").replace(/"$/, "");
   // Safe = stays under media/ai/: no slash in the filename, no leading dot (no `../`).
@@ -477,6 +593,38 @@ async function main() {
   try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "notes", images: [{ data: PNG_1x1, path: srcPng, format: "png", width: 40 }] }] }); } catch { bothErr = true; }
   check("rejects an image with both data and path", bothErr);
   await fs.rm(srcPng, { force: true });
+
+  console.log("\nfetch_image validation after optional background removal");
+  const fakeFetch: typeof fetch = async () =>
+    new Response(Buffer.from(PNG_1x1, "base64"), { status: 200, statusText: "OK" });
+  const fetched = await fetchImageToTemp("https://example.test/source.png", "fetched", false, {
+    fetchImpl: fakeFetch,
+  });
+  check("fetch_image accepts a valid PNG from fetch", fetched.format === "png" && fetched.bytes > 0, JSON.stringify(fetched));
+  let badRembg = false;
+  try {
+    await fetchImageToTemp("https://example.test/source.png", "bad-rembg", true, {
+      fetchImpl: fakeFetch,
+      removeBackgroundImpl: async (_input, output) => {
+        await fs.writeFile(output, Buffer.from("not a png"));
+      },
+    });
+  } catch {
+    badRembg = true;
+  }
+  check("fetch_image re-validates rembg output format", badRembg);
+  let hugeRembg = false;
+  try {
+    await fetchImageToTemp("https://example.test/source.png", "huge-rembg", true, {
+      fetchImpl: fakeFetch,
+      removeBackgroundImpl: async (_input, output) => {
+        await fs.writeFile(output, Buffer.alloc(2 * 1024 * 1024 + 1));
+      },
+    });
+  } catch {
+    hugeRembg = true;
+  }
+  check("fetch_image re-checks rembg output size", hugeRembg);
 
   console.log("\nNEGATIVE: refuse Private + traversal");
   let refusedPrivate = false;

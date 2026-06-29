@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Guidance for working on this repo. See `README.md` for usage and `docs/ROADMAP.md` for what's
 shipped and what's next. **The file-format contract lives in the Onionskin app repo at
@@ -9,8 +9,11 @@ that points back to it, and `docs/AUTHORING.md` covers how to fill pages.
 ## What this is
 
 A **local stdio** MCP server (TypeScript, run via `tsx`) that writes the gold `ai.svg`
-underlay into [Onionskin](https://onionskin.sitkoff.net) planner pages. Integration is **filesystem-only** —
-it reads/writes plain SVG + JSON in the app's iCloud container. There is no network API.
+underlay into [Onionskin](https://onionskin.sitkoff.net) planner pages. The planner
+integration itself is **filesystem-only** — it reads/writes plain SVG + JSON in the app's
+iCloud container. The `fetch_image` helper is the only network-capable edge: it downloads
+HTTPS PNG/JPEG files to local temp paths so they can be embedded through the filesystem path
+flow.
 
 Built on the official `@modelcontextprotocol/sdk`: high-level `McpServer` + `server.tool()`,
 `zod` schemas. Onionskin itself is an **iPad/iOS app**; this server runs on the **Mac** against
@@ -44,7 +47,7 @@ npm run build      # tsc → emits to dist/ (gitignored); the server runs via ts
 The **registered** `onionskin` MCP server is a long-lived `tsx` process — it caches the
 code from session start and `tsx` does **not** hot-reload, so your edits won't show up
 through the in-conversation `mcp__onionskin__*` tools until that server is reconnected
-(`/mcp`) or Claude Code restarts. Don't test edits through it.
+(`/mcp`) or Codex restarts. Don't test edits through it.
 
 Instead use **`npm run call`** (`test/cli.ts`): it dispatches to the same underlying
 functions the server wraps (`readPage`, `writeUnderlay`, `composeAiSvg`, the path guard),
@@ -67,7 +70,7 @@ to exercise the MCP transport itself.
 
 | File | Role |
 |---|---|
-| `src/index.ts` | MCP server + the 7 tools (zod schemas, annotations, error handling). |
+| `src/index.ts` | MCP server + the 9 tools (zod schemas, annotations, error handling). |
 | `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under `Shared/`, no traversal). |
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
@@ -75,9 +78,11 @@ to exercise the MCP transport itself.
 | `src/color.ts` | Pure colour helpers (hex↔HSL) + `harmony` palette derivation from the template's sampled colours, with a lightness floor on derived text so it reads on cream. No deps. |
 | `src/page.ts` | Read a page, **atomic** ai.svg + `media/ai/` image writes (`resolveImages`/`gcOrphanMedia`), manifest status flips, `create_page`. |
 
-The 7 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`,
-`write_underlay`, `set_underlay_status`, `clear_underlay`, `create_page`. Only the last four
-mutate; `write_underlay` is the workhorse (structured `regions` → composed `ai.svg`).
+The 9 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`,
+`read_ink`, `write_underlay`, `set_underlay_status`, `clear_underlay`, `create_page`,
+`fetch_image`. The mutating page tools are `write_underlay`, `set_underlay_status`,
+`clear_underlay`, and `create_page`; `fetch_image` writes only to OS temp storage.
+`write_underlay` is the workhorse (structured `regions` → composed `ai.svg`).
 
 ## How a page is addressed
 
@@ -89,14 +94,7 @@ containing `manifest.json`" (`library.findPages`), recursing under `Shared/` onl
 data-region="<name>" transform="translate(x,y)">`; `template.parseRegions` turns these into
 `Region[]` with the group origin, optional `<rect>` box, `data-rows`/`data-cols` hints, and
 the **absolute positions of ruled lines** (`ruledLines` = horizontal rules, `colLines` =
-vertical). Those ruled lines are the writable "rows." Each region also carries two intent
-signals: **`fill`** (`ink`/`ai`/`shared`) — who fills it, from `data-fill` else derived
-name → template type → geometry (`template.deriveFill`); and **`intent`** — the designer's
-free-text purpose from `data-intent` (e.g. "this week's dinners"), or `null`. `fill` drives
-behaviour (`shared`/`ai` are yours; an `ink` region is the user's — filling its body trips an
-`ink_region_filled` warning); `intent` is advisory context, free to repurpose. Region names are
-only a *default* for `fill`, not a contract — novel templates set the attributes explicitly. See
-`docs/AUTHORING.md`.
+vertical). Those ruled lines are the writable "rows."
 
 `write_underlay`'s structured `regions` input is the normal path: `svg.composeAiSvg` looks
 up each region by name and places each line's baseline via `row` (snap to a ruled line +
@@ -118,10 +116,12 @@ not a constraint, and the orchestrator is meant to pick the mood to fit the day 
 `docs/AUTHORING.md`). So callers never compute
 coordinates; they reference a region name and a row index from
 `read_page`. An unknown region name throws (listing the valid ones). Raw `svg` bypasses all
-of this — full control, no geometry help. `composeAiSvg` returns `{ svg, warnings }`; the
-warnings flag likely overflow (text past the region rect, more lines than ruled rows, a
-wrapped block that overruns its row, a `time` that can't be anchored) and surface in the
-`write_underlay` result — important because overnight/unattended writes have no human watching.
+of this — full control, no geometry help. `composeAiSvg` returns `{ svg, warnings,
+warningDetails }`; the warnings flag likely overflow (text past the region rect, more lines
+than ruled rows, a wrapped block that overruns its row, a `time` that can't be anchored) and
+surface in the `write_underlay` result. `warnings` stays a string array for old callers;
+`warningDetails` adds `{ code, severity, region?, message }` for unattended jobs that need to
+route layout problems differently from informational notes.
 
 Two `write_underlay` modifiers: **`merge`** patches only the named regions into the
 existing `ai.svg` (parsing its `<g data-region>` blocks, replacing matches, keeping the rest
@@ -132,7 +132,9 @@ existing `ai.svg` (parsing its `<g data-region>` blocks, replacing matches, keep
 A region entry may also carry **`images`** — PNG/JPEG art the caller supplies as base64
 `data` **or** a local file `path` (read off disk, so a generated image never passes through
 the model context — for overnight/automated writes; format is sniffed when omitted). This
-server has no network/generation. The app's renderer resolves `<image href>` only as a
+the core renderer has no generation. `fetch_image` may download an HTTPS PNG/JPEG to
+`/tmp/onionskin-fetch/` first, but actual embedding still goes through local `path` input.
+The app's renderer resolves `<image href>` only as a
 **page-relative file path** (no data-URIs), so `page.ts:resolveImages` validates the bytes
 (magic vs `format`, 2MB cap), writes them to the page's **`media/ai/`** folder, and rewrites
 the `<image href="media/ai/…">` into the region group; `svg.ts:imageDims` reads intrinsic size

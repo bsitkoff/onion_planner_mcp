@@ -27,6 +27,44 @@ its level; don't fight it.**
 
 When in doubt, under-decorate — the user chose that template on purpose.
 
+## Who fills a region — `fill` and `intent`
+
+Ownership in Onionskin is by *layer* — you write `ai.svg`, the user owns `ink.svg`
+(handwriting) and `stickers.svg`, and they composite on top of you, so you never collide on
+disk. But not every region is yours to fill, and **you can't assume any particular region
+exists** — a template may have a `schedule` and a `quote`, or it may be a meal planner, a mood
+tracker, a sketchbook page with regions you've never seen. So **don't look for known names;
+read each region's `fill` and `intent`** (`read_page` hands you both) and honour what's there.
+
+**`fill` — who fills it** (the behaviour axis: `ink` / `ai` / `shared`). Derived (an explicit
+`data-fill` wins; else the region name, template type, then geometry), so you don't compute it.
+
+| `fill` | Who it's for | What you do |
+|---|---|---|
+| **`ai`** | you | Fill it — a daily message, a title, freeform structure. |
+| **`shared`** | you seed, the user augments | Seed it from real data (calendar, tasks). **`read_ink` first** and place *around* rows the user already wrote on — never clobber their hand. They add more on top. |
+| **`ink`** | the user's pencil | **Leave the writing surface alone.** Light scaffolding only: a dated header, a faint section prompt (`heading: true`), or a small corner sticker/art. Body text into a ruled `ink` region trips an `ink_region_filled` warning. |
+
+**`intent` — what the designer imagined** (free text, or `null`). A region may carry a
+human-readable note like `"this week's dinners, one row per day"` or `"three things I'm grateful
+for"`. Read it to fill the region *as the designer pictured it*, sourcing real data to match —
+even for a region type the server has no built-in knowledge of. **It's advisory: you're free to
+repurpose** a block when the day (or the user) calls for it. `intent` is never enforced; only
+`fill` carries a (soft) behavioural nudge.
+
+> Geometry is *not* who-fills. Reflection regions (`joys`, `concerns`, `morning`/`evening`,
+> `memories`) are ruled or dotted yet they're the user's; `schedule`/`todo` are ruled yet
+> AI-seeded. So don't reason from "lined vs blank" — read the region's `fill`.
+
+**The loop for any template:** for each region, skip `ink` (scaffold only); for `ai`/`shared`,
+fill it from real data guided by its `intent` (or, absent an `intent`, its name + shape); and
+**skip a region entirely if you have nothing real for it** — an empty honest region beats a
+generic filled one. Don't expect a fixed set of sections.
+
+**Shared *within* a region already works.** A `shared` box flows your content top-down in the
+whitespace (a preview, a weather note), leaving the ruled lines below free for the user's ink —
+so one region can hold both your seed and their hand.
+
 ## Two principles
 
 **1. Pull the user's real data — don't invent it.** Generic content (a stock suggestion, a
@@ -137,9 +175,17 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
 - **`wrap: true`** — long notes/previews wrap to the region width instead of overflowing.
 - **`merge: true`** — a mid-day "update my planner" patches only the regions you pass and
   leaves the rest verbatim (slide a new meeting in without clearing the to-dos).
-- **`dryRun: true`** — compose and read back the `warnings` first; an unattended/overnight
-  write has no human watching, so check for overflow before you commit. Set status
-  `refreshing` during a long multi-step build, `ready` only when the page is whole.
+- **Write once, then check `warnings`.** A real `write_underlay` returns the same `warnings`
+  a `dryRun` would, so you don't need a separate preview pass — and emitting the whole
+  `regions` payload twice is the slowest part of an unattended run. Write with status `ready`,
+  read the returned `warnings`, and **only if one fires** patch the affected region with a
+  `merge: true` re-write. Reserve **`dryRun: true`** for when you genuinely want to preview
+  without writing (it's the one call that returns the composed `aiSvg`; a real write omits it).
+  Set status `refreshing` during a long multi-step build, `ready` only when the page is whole.
+- **Reuse geometry across a chapter.** Sibling pages in a chapter share one `template.svg`,
+  so the region names, ruled rows, and `startHour` from a single `read_page` apply to every
+  page in that chapter. When filling several pages in one run (backfill / month rollover),
+  `read_page` once and reuse it — don't re-read per page.
 
 ## Images (stickers / art)
 
@@ -147,7 +193,8 @@ A region's `images` take PNG/JPEG as base64 `data` **or** a local file `path`. F
 **overnight/automated** build, use `path`: the server reads the file off disk into the
 page's `media/ai/` folder, so a ~1 MB PNG never passes through the model context.
 Constraints: PNG/JPEG only, **≤ 2 MB** (no webp — the app rejects it), tucked into `notes`
-or an empty corner like a sticker. Generation lives outside this server (it has no network).
+or an empty corner like a sticker. Generation lives outside this server; `fetch_image` is only
+a bridge from an HTTPS image URL to a local temp file for `images[].path`.
 
 **The sourcing recipe (generate the image however you like, land it on the Mac, embed by path):**
 
@@ -155,6 +202,9 @@ or an empty corner like a sticker. Generation lives outside this server (it has 
    look: soft watercolour / doodle / washi-sticker, simple subject. Prefer a tool that returns
    a **file path**, not base64, so a ~1 MB PNG never rides through the model context.
 2. Make sure the file is on this Mac (e.g. saved or copied to `/tmp/onionskin-img.png`).
+   If the source is an HTTPS PNG/JPEG URL, `fetch_image` can download it to
+   `/tmp/onionskin-fetch/`; optional `removeBackground` requires `rembg` and may increase file
+   size, so the output is re-checked against the same 2 MB cap.
 3. `write_underlay(page, regions=[{ region:"notes",
    images:[{ path:"/tmp/onionskin-img.png", width:140, corner:"bottom-right" }] }])` —
    `format` is sniffed; the server validates (≤2 MB) and copies it into `media/ai/`.

@@ -1,11 +1,28 @@
 import { XMLParser } from "fast-xml-parser";
 
+/**
+ * Who fills a region — the ownership/behavior axis, orthogonal to its geometry (a
+ * ruled region may be the user's or the AI's). `ink` = the user's handwriting surface
+ * (AI does light scaffolding only); `ai` = the AI owns it; `shared` = the AI seeds it
+ * and the user augments by hand on top (read the ink first, place around it). Set by
+ * the template's `data-fill`, else derived (see `deriveFill`).
+ */
+export type RegionFill = "ink" | "ai" | "shared";
+
 /** Geometry of one addressable region, in absolute page coordinates. */
 export interface Region {
   /** SVG element id, e.g. "region-schedule". */
   id: string;
   /** Logical name from data-region, e.g. "schedule" — the key callers use. */
   name: string;
+  /** Who fills this region (data-fill, else derived) — the behavior axis. */
+  fill: RegionFill;
+  /**
+   * The designer's free-text intent for this region (`data-intent`), e.g. "this
+   * week's dinners, one row per day" — what the block is imagined for. Advisory: the
+   * filler reads it for context but is free to repurpose. null if the template set none.
+   */
+  intent: string | null;
   /** Absolute top-left of the region group (from its transform). */
   x: number;
   y: number;
@@ -124,12 +141,78 @@ export function parseViewBox(templateSvg: string): [number, number] | null {
 }
 
 /**
- * Parse a template.svg into its addressable regions. Reads every
- * <g id="region-*"> and reports its transform, box, row/col hints, and the
- * absolute positions of its ruled lines — everything a writer needs to place
- * text without hard-coding coordinates.
+ * Region name → fill, a convenience default for the conventional vocabulary — NOT
+ * the contract (an explicit `data-fill` always wins). A region's geometry does NOT
+ * predict who fills it (reflection regions are ruled yet the user's; schedule is
+ * ruled yet AI-seeded), so the default is keyed on the name. Keep in sync with the
+ * shipped templates (`../onionskin/.../Templates/`). Unknown names fall through to
+ * template-type, then geometry (see deriveFill).
  */
-export function parseRegions(templateSvg: string): Region[] {
+const FILL_BY_NAME: Record<string, RegionFill> = {
+  // shared — AI seeds (calendar/tasks), the user augments by hand on top.
+  schedule: "shared",
+  agenda: "shared",
+  todo: "shared",
+  priorities: "shared",
+  "list-1": "shared",
+  "list-2": "shared",
+  "list-3": "shared",
+  month: "shared",
+  notes: "shared",
+  goals: "shared",
+  summary: "shared",
+  // ai — the AI owns it (a daily message, a title, structure).
+  quote: "ai",
+  affirmation: "ai", // legacy name for quote
+  header: "ai",
+  weekdays: "ai",
+  // ink — the user's handwriting surface; AI does light scaffolding only.
+  joys: "ink",
+  concerns: "ink",
+  last: "ink",
+  morning: "ink",
+  afternoon: "ink",
+  evening: "ink",
+  memories: "ink",
+  page: "ink",
+  photos: "ink",
+};
+
+/** Template ids whose whole surface is for handwriting — unknown regions → ink. */
+const INK_TEMPLATE_RE = /reflection|lined|dotted|blank/i;
+
+/**
+ * Derive who fills a region when it carries no explicit `data-fill`. Precedence:
+ * region-name default → template-type (a handwriting-surface template) → geometry
+ * (the original instinct: a writable surface — ruled lines or a dot grid — is the
+ * user's; a blank box is the AI's). Always yields an answer.
+ */
+function deriveFill(name: string, hasRules: boolean, templateName?: string): RegionFill {
+  const byName = FILL_BY_NAME[name];
+  if (byName) return byName;
+  if (templateName && INK_TEMPLATE_RE.test(templateName)) return "ink";
+  return hasRules ? "ink" : "ai";
+}
+
+/** Validate a raw `data-fill` value; undefined if absent/unrecognized. */
+function explicitFill(v: unknown): RegionFill | undefined {
+  return v === "ink" || v === "ai" || v === "shared" ? v : undefined;
+}
+
+/** A non-empty `data-intent` free-text purpose, trimmed; null otherwise. */
+function readIntent(v: unknown): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
+}
+
+/**
+ * Parse a template.svg into its addressable regions. Reads every
+ * <g id="region-*"> and reports its transform, box, row/col hints, the absolute
+ * positions of its ruled lines, who fills it (`fill`), and the designer's free-text
+ * `intent` — everything a writer needs to place text (without hard-coding
+ * coordinates) and to understand what a region is for. `templateName` (the page's
+ * `manifest.template`) sharpens `fill` derivation for unknown region names; optional.
+ */
+export function parseRegions(templateSvg: string, templateName?: string): Region[] {
   const doc = parser.parse(templateSvg);
   const svg = doc?.svg;
   if (!svg) return [];
@@ -163,9 +246,19 @@ export function parseRegions(templateSvg: string): Region[] {
     ruledLines.sort((a, b) => a - b);
     colLines.sort((a, b) => a - b);
 
+    // A dot grid (dotted/notes paper) is drawn as <path> dots — also a writable
+    // surface for the fill geometry fallback.
+    const hasDots = Array.isArray(g.path) ? g.path.length > 0 : !!g.path;
+    const fill =
+      explicitFill(g["@_data-fill"]) ??
+      deriveFill(name, ruledLines.length > 0 || hasDots, templateName);
+    const intent = readIntent(g["@_data-intent"]);
+
     regions.push({
       id,
       name,
+      fill,
+      intent,
       x,
       y,
       width,

@@ -2,9 +2,11 @@
 
 A local MCP server that writes the **gold AI underlay** (`ai.svg`) into
 [Onionskin](https://onionskin.sitkoff.net) planner pages. Onionskin's whole integration surface is a
-folder of plain files in an iCloud container — no API, no library — so this server is
-**filesystem-only**: it reads `template.svg` for region geometry and writes `ai.svg` +
-the manifest's status flag. Full contract: [`docs/MCP-INTEGRATION.md`](docs/MCP-INTEGRATION.md).
+folder of plain files in an iCloud container — no app API, no hosted service — so the core
+planner integration is **filesystem-only**: it reads `template.svg` for region geometry and
+writes `ai.svg` + the manifest's status flag. The optional `fetch_image` helper only downloads
+HTTPS image files to local temp paths for later filesystem embedding. Full contract:
+[`docs/MCP-INTEGRATION.md`](docs/MCP-INTEGRATION.md).
 Shipped + planned work: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## What it does
@@ -23,10 +25,12 @@ it on next foreground.
 | `get_library` | read | Resolve & validate the iCloud library; list Shared chapters. **Call first.** |
 | `list_pages` | read | List shared pages with title, template, size, modified, ai status. Optional filters (AND): `chapter`, `template`, `aiStatus`, `titleContains`, `modifiedAfter`/`modifiedBefore`. |
 | `read_page` | read | One page's manifest + parsed **regions** (geometry) + current ai.svg. |
-| `write_underlay` | write | Write ai.svg (structured `regions` *or* raw `svg`) + set status. `merge` patches named regions; `dryRun` previews without writing; returns fit `warnings`. |
+| `read_ink` | read | Read the user's `ink.svg` layer for context without modifying it. |
+| `write_underlay` | write | Write ai.svg (structured `regions` *or* raw `svg`) + set status. `merge` patches named regions; `dryRun` previews without writing; returns fit `warnings` plus structured `warningDetails`. |
 | `set_underlay_status` | write | Flip ai status (`empty`/`refreshing`/`ready`) without rewriting. |
 | `clear_underlay` | write | Reset ai.svg to empty + status `empty`. |
 | `create_page` | write | New shared page from a sibling's template, or from the `Templates/` catalogue by id. |
+| `fetch_image` | helper | Download an HTTPS PNG/JPEG to `/tmp/onionskin-fetch/` and return a local path for `images[].path`; optional background removal requires `rembg`. |
 
 ### Typical flow
 
@@ -62,7 +66,7 @@ structure (an "Important" / "Tomorrow" / "Habits" block) into a neutral region w
 template pre-printing it. Pass `merge: true` to update only the regions you supply and
 leave the rest of the page intact (e.g. slide a new meeting into the schedule without
 clearing the to-dos); pass `dryRun: true` to get the composed SVG plus overflow `warnings`
-back without writing.
+and structured `warningDetails` back without writing.
 
 **Filling a page well** — pulling your real data, never leaving it blank, and using sections
 to give each day its own shape — is its own craft: see
@@ -114,3 +118,5 @@ the future path if it ever needs distribution.)
 - **Never** writes `ink.svg`, `stickers.svg`, or `template.svg`; never reads/writes `Private/`.
 - Every write is validated to live under `Shared/` (no traversal) and is **atomic**
   (temp file + rename) so the app never reads a half-written file.
+- `fetch_image` is the one network-capable helper: it accepts HTTPS only, validates PNG/JPEG
+  bytes and the 2 MB cap, and writes only to OS temp storage.

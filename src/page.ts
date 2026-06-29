@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { resolvePageRel, normalizeChapter } from "./paths.js";
 import { parseRegions, parseViewBox, inspectTemplate, type Region, type TemplateInfo } from "./template.js";
 import {
@@ -11,6 +12,7 @@ import {
   imageDims,
   type RegionInput,
   type ThemeInput,
+  type WarningDetail,
 } from "./svg.js";
 
 /**
@@ -132,6 +134,101 @@ function sanitizeName(name: string): string {
   return base.length ? base : "img";
 }
 
+function imageTooLargeMessage(bytes: number): string {
+  return `Image too large: ${bytes} bytes (max ${MAX_IMAGE_BYTES} bytes / 2 MB).`;
+}
+
+function validateFetchedImageBuffer(
+  buf: Buffer,
+  expectedFormat?: "png" | "jpeg",
+): "png" | "jpeg" {
+  if (buf.byteLength > MAX_IMAGE_BYTES) {
+    throw new Error(imageTooLargeMessage(buf.byteLength));
+  }
+  const format = sniffFormat(buf);
+  if (!format) throw new Error("Unrecognised format — only PNG and JPEG are supported.");
+  if (expectedFormat && format !== expectedFormat) {
+    throw new Error(`Expected ${expectedFormat} output, got ${format}.`);
+  }
+  imageDims(buf, format);
+  return format;
+}
+
+/**
+ * Remove the background of an image using rembg's Python API directly (bypasses
+ * the CLI so optional server deps like aiohttp/watchdog don't need to be installed).
+ */
+function spawnRembg(inputPath: string, outputPath: string): Promise<void> {
+  // Call the Python API inline — no CLI entry-point, no server deps required.
+  const script = [
+    "from rembg import remove",
+    "from PIL import Image",
+    "import io, sys",
+    "inp = open(sys.argv[1], 'rb').read()",
+    "out = remove(inp)",
+    "open(sys.argv[2], 'wb').write(out)",
+  ].join("; ");
+  return new Promise((resolve, reject) => {
+    const proc = spawn("python3", ["-c", script, inputPath, outputPath]);
+    let stderr = "";
+    proc.stderr?.on("data", (d: Buffer) => (stderr += d));
+    proc.on("close", (code) => {
+      if (code !== 0) reject(new Error(`rembg failed (exit ${code}): ${stderr.trim()}`));
+      else resolve();
+    });
+    proc.on("error", (e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") {
+        reject(new Error("python3 not found — rembg requires Python 3."));
+      } else {
+        reject(e);
+      }
+    });
+  });
+}
+
+/**
+ * Fetch an image from an HTTPS URL and save it to a temp file.
+ * Returns the local path (suitable for `images[].path` in write_underlay), the
+ * detected format, and the byte count. The Mac MCP process has full network access;
+ * this is the bridge between a CDN URL and the filesystem-only Onionskin renderer.
+ */
+export async function fetchImageToTemp(
+  url: string,
+  name?: string,
+  removeBackground?: boolean,
+  deps: {
+    fetchImpl?: typeof fetch;
+    removeBackgroundImpl?: (inputPath: string, outputPath: string) => Promise<void>;
+  } = {},
+): Promise<{ path: string; format: "png" | "jpeg"; bytes: number }> {
+  const parsed = new URL(url); // throws on malformed URL
+  if (parsed.protocol !== "https:") throw new Error("Only HTTPS URLs are supported.");
+
+  const res = await (deps.fetchImpl ?? fetch)(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} fetching image.`);
+
+  const buf = Buffer.from(await res.arrayBuffer());
+  const format = validateFetchedImageBuffer(buf);
+
+  const stem = sanitizeName(name ?? (parsed.pathname.split("/").pop() ?? "img"));
+  const ext = format === "jpeg" ? "jpg" : "png";
+  const dir = path.join(os.tmpdir(), "onionskin-fetch");
+  await fs.mkdir(dir, { recursive: true });
+  const dest = path.join(dir, `${stem}.${ext}`);
+  await fs.writeFile(dest, buf);
+
+  if (removeBackground) {
+    const nobgPath = dest.replace(/\.(png|jpg)$/, "-nobg.png");
+    await (deps.removeBackgroundImpl ?? spawnRembg)(dest, nobgPath);
+    await fs.rm(dest, { force: true });
+    const nobgBuf = await fs.readFile(nobgPath);
+    validateFetchedImageBuffer(nobgBuf, "png");
+    return { path: nobgPath, format: "png", bytes: nobgBuf.byteLength };
+  }
+
+  return { path: dest, format, bytes: buf.byteLength };
+}
+
 /**
  * Decode, validate, size, and (unless dryRun) write each region's images into the
  * page's `media/ai/` folder, mutating each `ImageInput` in place with its resolved
@@ -141,8 +238,9 @@ async function resolveImages(
   pageAbs: string,
   regions: RegionInput[],
   dryRun: boolean,
-): Promise<string[]> {
+): Promise<{ warnings: string[]; warningDetails: WarningDetail[] }> {
   const warnings: string[] = [];
+  const warningDetails: WarningDetail[] = [];
   const mediaAiAbs = path.join(pageAbs, MEDIA_AI);
   for (const region of regions) {
     for (const img of region.images ?? []) {
@@ -174,10 +272,16 @@ async function resolveImages(
         );
       }
       if (buf.length > WARN_IMAGE_BYTES) {
-        warnings.push(
+        const message =
           `region "${region.region}": image is ${Math.round(buf.length / 1024)}KB — large for ` +
-            `iCloud sync; consider downscaling.`,
-        );
+            `iCloud sync; consider downscaling.`;
+        warnings.push(message);
+        warningDetails.push({
+          code: "image_large_for_sync",
+          severity: "info",
+          region: region.region,
+          message,
+        });
       }
       // Format: declared, or sniffed from the file's magic bytes when reading a path.
       const format = img.format ?? sniffFormat(buf);
@@ -208,7 +312,7 @@ async function resolveImages(
       }
     }
   }
-  return warnings;
+  return { warnings, warningDetails };
 }
 
 /** Delete any file in `media/ai/` not referenced by an href in the final ai.svg. */
@@ -281,7 +385,7 @@ export async function readPage(
   const templateSvg = await readIfExists(path.join(abs, "template.svg"));
   const stickersSvg = await readIfExists(path.join(abs, "stickers.svg"));
   const aiSvg = await readIfExists(path.join(abs, "ai.svg"));
-  const regions = templateSvg ? parseRegions(templateSvg) : [];
+  const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
   const size = pageSize(manifest, templateSvg);
   const theme = await readChapterTheme(abs);
   return {
@@ -297,6 +401,17 @@ export async function readPage(
     theme,
     ...(includeTemplate && templateSvg ? { templateSvg } : {}),
   };
+}
+
+/** Read a page's ink layer (the user's handwriting) without touching anything. */
+export async function readInk(
+  root: string,
+  rel: string,
+): Promise<{ page: string; inkSvg: string | null }> {
+  const abs = resolvePageRel(root, rel);
+  await readJson<Manifest>(path.join(abs, "manifest.json")); // confirms it's a real page
+  const inkSvg = await readIfExists(path.join(abs, "ink.svg"));
+  return { page: rel, inkSvg };
 }
 
 /** Update the ai-layer status block + top-level modified, atomically. */
@@ -322,11 +437,63 @@ export interface WriteResult {
   page: string;
   status: AiStatus;
   bytes: number;
-  aiSvg: string;
+  /**
+   * The composed ai.svg — returned **only on a dry run** (the one case a caller wants
+   * to see the result before committing). On a real write it's omitted: echoing the
+   * full SVG the caller just authored back through the model is pure ingest cost and
+   * the model never needs it (it has `bytes` + `warnings`).
+   */
+  aiSvg?: string;
   /** Non-fatal placement warnings from composing structured regions. */
   warnings: string[];
+  /** Structured companion to `warnings` for unattended callers. */
+  warningDetails: WarningDetail[];
   /** True when this was a dry run — nothing was written to disk. */
   dryRun: boolean;
+}
+
+const RAW_SVG_ALLOWED_ELEMENTS = new Set([
+  "svg",
+  "g",
+  "rect",
+  "line",
+  "path",
+  "text",
+  "image",
+  "circle",
+]);
+
+function rawSvgWarnings(svg: string, size: [number, number]): {
+  warnings: string[];
+  warningDetails: WarningDetail[];
+} {
+  const warnings: string[] = [];
+  const warningDetails: WarningDetail[] = [];
+  const warn = (code: string, message: string) => {
+    warnings.push(message);
+    warningDetails.push({ code, severity: "warning", message });
+  };
+
+  const unsupported = new Set<string>();
+  for (const m of svg.matchAll(/<\s*\/?\s*([A-Za-z][A-Za-z0-9:_-]*)\b/g)) {
+    const tag = m[1].toLowerCase();
+    if (!RAW_SVG_ALLOWED_ELEMENTS.has(tag)) unsupported.add(tag);
+  }
+  if (unsupported.size > 0) {
+    warn(
+      "raw_svg_unsupported_element",
+      `raw svg uses unsupported element(s) for the app renderer: ${[...unsupported].sort().join(", ")}.`,
+    );
+  }
+
+  const vb = parseViewBox(svg);
+  if (vb && (vb[0] !== size[0] || vb[1] !== size[1])) {
+    warn(
+      "raw_svg_viewbox_mismatch",
+      `raw svg viewBox is ${vb[0]}×${vb[1]}, but this page is ${size[0]}×${size[1]}.`,
+    );
+  }
+  return { warnings, warningDetails };
 }
 
 /**
@@ -362,21 +529,28 @@ export async function writeUnderlay(
 
   let svg: string;
   let warnings: string[] = [];
+  let warningDetails: WarningDetail[] = [];
   if (opts.svg !== undefined) {
     if (opts.merge) {
       throw new Error("`merge` is only supported with structured `regions`, not raw `svg`.");
     }
+    const templateSvg = await readIfExists(path.join(abs, "template.svg"));
+    const size = pageSize(manifest, templateSvg);
     svg = opts.svg.trim() + "\n";
+    const rawWarnings = rawSvgWarnings(svg, size);
+    warnings = rawWarnings.warnings;
+    warningDetails = rawWarnings.warningDetails;
   } else if (opts.regions) {
     // Resolve images first (writes media/ai/ files, fills each image's href) so the
     // composed ai.svg never references a file that isn't on disk yet.
-    const imageWarnings = await resolveImages(abs, opts.regions, opts.dryRun ?? false);
+    const imageResult = await resolveImages(abs, opts.regions, opts.dryRun ?? false);
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
-    const regions = templateSvg ? parseRegions(templateSvg) : [];
+    const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
     const size = pageSize(manifest, templateSvg);
     const themeInput = await resolveThemeInput(abs, templateSvg, opts);
     const composed = composeAiSvg(size, opts.regions, regions, themeInput);
-    warnings = [...composed.warnings, ...imageWarnings];
+    warnings = [...composed.warnings, ...imageResult.warnings];
+    warningDetails = [...composed.warningDetails, ...imageResult.warningDetails];
     if (opts.merge) {
       const existing = await readIfExists(path.join(abs, "ai.svg"));
       svg = mergeRegions(existing, composed.svg, size);
@@ -389,14 +563,15 @@ export async function writeUnderlay(
 
   const bytes = Buffer.byteLength(svg);
   if (opts.dryRun) {
-    return { page: rel, status: opts.status, bytes, aiSvg: svg, warnings, dryRun: true };
+    return { page: rel, status: opts.status, bytes, aiSvg: svg, warnings, warningDetails, dryRun: true };
   }
 
   await atomicWrite(path.join(abs, "ai.svg"), svg);
   // Drop any AI image no longer referenced by the final (possibly merged) ai.svg.
   await gcOrphanMedia(abs, svg);
   await patchManifestStatus(abs, opts.status);
-  return { page: rel, status: opts.status, bytes, aiSvg: svg, warnings, dryRun: false };
+  // Note: no `aiSvg` on a real write — see WriteResult. The model has bytes + warnings.
+  return { page: rel, status: opts.status, bytes, warnings, warningDetails, dryRun: false };
 }
 
 /** Flip the ai-layer status without rewriting the SVG. */
@@ -513,10 +688,10 @@ export async function createPage(
   const newRel = `${chapterRel}/${opts.name}`;
   const newAbs = resolvePageRel(root, newRel); // also validates name has no traversal
 
-  // Refuse to clobber an existing page.
+  // Refuse to clobber any existing destination, even a partial/non-page folder.
   try {
-    await fs.access(path.join(newAbs, "manifest.json"));
-    throw new Error(`Page "${newRel}" already exists.`);
+    await fs.access(newAbs);
+    throw new Error(`Page folder "${newRel}" already exists.`);
   } catch (e: any) {
     if (e.code !== "ENOENT") throw e;
   }
@@ -555,30 +730,44 @@ export async function createPage(
 
   const { size, templateName } = source;
   const ts = nowIso();
+  const stageName = `.create-${sanitizeName(opts.name)}-${process.pid}-${tmpCounter++}`;
+  const stageAbs = path.join(chapterAbs, stageName);
+  let staged = false;
 
-  await fs.mkdir(path.join(newAbs, "media"), { recursive: true });
-  await atomicWrite(path.join(newAbs, "template.svg"), source.templateSvg);
-  await atomicWrite(path.join(newAbs, "ai.svg"), emptySvg(size));
-  await atomicWrite(path.join(newAbs, "stickers.svg"), source.stickersSvg ?? emptySvg(size));
-  await atomicWrite(path.join(newAbs, "ink.svg"), emptySvg(size));
+  try {
+    await fs.mkdir(chapterAbs, { recursive: true });
+    await fs.mkdir(path.join(stageAbs, "media"), { recursive: true });
+    staged = true;
+    await atomicWrite(path.join(stageAbs, "template.svg"), source.templateSvg);
+    await atomicWrite(path.join(stageAbs, "ai.svg"), emptySvg(size));
+    await atomicWrite(path.join(stageAbs, "stickers.svg"), source.stickersSvg ?? emptySvg(size));
+    await atomicWrite(path.join(stageAbs, "ink.svg"), emptySvg(size));
 
-  const manifest: Manifest = {
-    title: opts.title ?? opts.name,
-    template: templateName,
-    created: ts,
-    modified: ts,
-    size,
-    layers: {
-      template: { file: "template.svg", z: 0 },
-      ai: { file: "ai.svg", z: 1, status: "empty", updated: ts },
-      stickers: { file: "stickers.svg", z: 2 },
-      ink: { file: "ink.svg", z: 3 },
-    },
-  };
-  await atomicWrite(
-    path.join(newAbs, "manifest.json"),
-    JSON.stringify(manifest, null, 2) + "\n",
-  );
+    const manifest: Manifest = {
+      title: opts.title ?? opts.name,
+      template: templateName,
+      created: ts,
+      modified: ts,
+      size,
+      layers: {
+        template: { file: "template.svg", z: 0 },
+        ai: { file: "ai.svg", z: 1, status: "empty", updated: ts },
+        stickers: { file: "stickers.svg", z: 2 },
+        ink: { file: "ink.svg", z: 3 },
+      },
+    };
+    await atomicWrite(
+      path.join(stageAbs, "manifest.json"),
+      JSON.stringify(manifest, null, 2) + "\n",
+    );
+    await fs.rename(stageAbs, newAbs);
+    staged = false;
+  } catch (e) {
+    if (staged) {
+      await fs.rm(stageAbs, { recursive: true, force: true }).catch(() => {});
+    }
+    throw e;
+  }
 
   // Append to the chapter's page order.
   const folderFile = path.join(chapterAbs, ".folder.json");

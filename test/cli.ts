@@ -18,10 +18,12 @@
 import { requireLibrary, listChapters, listPageRows, type PageFilter } from "../src/library.js";
 import {
   readPage,
+  readInk,
   writeUnderlay,
   setStatus,
   clearUnderlay,
   createPage,
+  fetchImageToTemp,
   type AiStatus,
 } from "../src/page.js";
 
@@ -42,8 +44,8 @@ async function main() {
     throw new Error(
       "Usage: npm run call -- <tool> [args]\n" +
         "Tools: get_library | list_pages [chapter] [key=value filters] | read_page <page> [--template] |\n" +
-        "  write_underlay <page> <json> | set_underlay_status <page> <status> |\n" +
-        "  clear_underlay <page> | create_page <json>",
+        "  read_ink <page> | write_underlay <page> <json> | set_underlay_status <page> <status> |\n" +
+        "  clear_underlay <page> | create_page <json> | fetch_image <json:{url,name?}>",
     );
   }
 
@@ -75,6 +77,11 @@ async function main() {
       return out(await readPage(root, args[0], args.includes("--template")));
     }
 
+    case "read_ink": {
+      if (!args[0]) throw new Error("read_ink needs a page path.");
+      return out(await readInk(root, args[0]));
+    }
+
     case "write_underlay": {
       if (!args[0]) throw new Error("write_underlay needs a page path.");
       // arg[1] is a JSON object: { regions?, svg?, status?, merge?, dryRun? }
@@ -95,6 +102,9 @@ async function main() {
           merge: body.merge,
           dryRun: body.dryRun,
           theme: body.theme,
+          harmony: body.harmony,
+          varietyDial: body.varietyDial,
+          fontPersonality: body.fontPersonality,
         })),
       });
     }
@@ -114,6 +124,11 @@ async function main() {
     case "create_page": {
       const body = parseJson(args[0], "create options");
       return out({ ok: true, ...(await createPage(root, body)) });
+    }
+
+    case "fetch_image": {
+      const body = parseJson(args[0], "fetch_image options");
+      return out({ ok: true, ...(await fetchImageToTemp(body.url, body.name, body.removeBackground)) });
     }
 
     default:

@@ -76,9 +76,13 @@ function parseTranslate(transform: unknown): { x: number; y: number } {
 /** What a template already provides — so the AI can match its level (see AUTHORING). */
 export interface TemplateInfo {
   /**
-   * True if the template already decorates itself (its own labels, banners, or a
-   * starter sticker layer). On a styled template the AI should fill *quietly* into
-   * the existing slots; only a bare/minimal template (false) invites full decoration.
+   * True if the template already decorates itself (its own colour-filled banners
+   * or a starter sticker layer). On a styled template the AI should fill *quietly*
+   * into the existing slots; only a bare/minimal template (false) invites full
+   * decoration. Derived from banners/stickers, NOT labels: every shipped template
+   * prints at least a microcap ("TODAY"), so `hasLabels` can't discriminate — in
+   * the shipped catalogue the minimal set has zero filled rects and no stickers,
+   * cozy/colorful always have one or both.
    */
   styled: boolean;
   /** The template prints its own section labels (any `<text>` in template.svg). */
@@ -136,7 +140,8 @@ export function inspectTemplate(templateSvg: string, stickersSvg?: string | null
   const hasBanners = /<rect\b[^>]*\bfill\s*=\s*"#[0-9a-fA-F]{3,6}"/.test(templateSvg);
   const stickersPresent = !!stickersSvg && /<(rect|path|image|text|circle|line|g)\b/.test(stickersSvg);
   return {
-    styled: hasLabels || hasBanners || stickersPresent,
+    // Labels alone don't make a template "styled" — see the TemplateInfo doc.
+    styled: hasBanners || stickersPresent,
     hasLabels,
     hasBanners,
     stickersPresent,
@@ -179,7 +184,9 @@ const FILL_BY_NAME: Record<string, RegionFill> = {
   ainotes: "ai", // the AI voice: weather/context/affirmation + a home for a small image
   last: "ai", // reflection's "from last session" — the AI surfaces it
   header: "ai",
-  weekdays: "ai",
+  // The monthly templates print Sun–Sat themselves — nothing for the AI to own here
+  // (an `ai` default invited double-printing the weekday header).
+  weekdays: "shared",
   // ink — the user's handwriting surface; AI does light scaffolding only.
   notes: "ink", // 2026-06: notes is the user's handwriting everywhere
   joys: "ink",

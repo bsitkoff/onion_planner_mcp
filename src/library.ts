@@ -81,8 +81,17 @@ export async function listChapters(root: string): Promise<Chapter[]> {
 /**
  * Recursively find page folders (any dir containing manifest.json) beneath a
  * relative directory under the library root. Returns relative paths.
+ *
+ * A page whose manifest is iCloud-evicted on this Mac shows up as a
+ * `.manifest.json.icloud` placeholder instead — it's a real page, just not
+ * downloaded. Pass `pendingDownload` to collect those instead of silently
+ * omitting them from every listing.
  */
-export async function findPages(root: string, relDir: string): Promise<string[]> {
+export async function findPages(
+  root: string,
+  relDir: string,
+  pendingDownload?: string[],
+): Promise<string[]> {
   const absDir = path.join(root, relDir);
   const out: string[] = [];
   let entries;
@@ -94,18 +103,24 @@ export async function findPages(root: string, relDir: string): Promise<string[]>
   // A folder with a manifest.json is itself a page.
   if (await isFile(path.join(absDir, "manifest.json"))) {
     out.push(relDir.split(path.sep).join("/"));
+  } else if (pendingDownload && (await isFile(path.join(absDir, ".manifest.json.icloud")))) {
+    pendingDownload.push(relDir.split(path.sep).join("/"));
   }
   for (const e of entries) {
     if (!e.isDirectory() || e.name.startsWith(".") || e.name === "media") continue;
-    out.push(...(await findPages(root, path.join(relDir, e.name))));
+    out.push(...(await findPages(root, path.join(relDir, e.name), pendingDownload)));
   }
   return out;
 }
 
 /** All shared pages, optionally restricted to a single chapter name. */
-export async function listPages(root: string, chapter?: string): Promise<string[]> {
+export async function listPages(
+  root: string,
+  chapter?: string,
+  pendingDownload?: string[],
+): Promise<string[]> {
   const base = chapter ? path.join("Shared", normalizeChapter(chapter)) : "Shared";
-  const pages = await findPages(root, base);
+  const pages = await findPages(root, base, pendingDownload);
   pages.sort();
   return pages;
 }
@@ -145,9 +160,14 @@ function epoch(s?: string): number | null {
  */
 async function readPageMeta(root: string, rel: string): Promise<PageRow> {
   const abs = resolvePageRel(root, rel);
-  const manifest = JSON.parse(
-    await fs.readFile(path.join(abs, "manifest.json"), "utf8"),
-  ) as Manifest;
+  const raw = await fs.readFile(path.join(abs, "manifest.json"), "utf8");
+  let manifest: Manifest;
+  try {
+    manifest = JSON.parse(raw) as Manifest;
+  } catch (e: any) {
+    // Rethrown with the page named so the caller's skip-note is actionable.
+    throw new Error(`manifest.json is not valid JSON (${e.message}).`);
+  }
   const size: [number, number] =
     Array.isArray(manifest.size) && manifest.size.length === 2
       ? [manifest.size[0], manifest.size[1]]
@@ -174,14 +194,38 @@ async function readPageMeta(root: string, rel: string): Promise<PageRow> {
  * (e.g. pageText(root, p)) rather than reading the manifest. Keeping that seam in mind
  * is why the filter surface is a single growable `PageFilter`, not fixed params.
  */
-export async function listPageRows(root: string, filter: PageFilter = {}): Promise<PageRow[]> {
+export async function listPageRows(
+  root: string,
+  filter: PageFilter = {},
+): Promise<{ rows: PageRow[]; notes: string[] }> {
   const { chapter, template, aiStatus, titleContains } = filter;
   const after = epoch(filter.modifiedAfter);
   const before = epoch(filter.modifiedBefore);
   const needle = titleContains?.toLowerCase();
 
-  const pages = await listPages(root, chapter);
-  const metas = await Promise.all(pages.map((p) => readPageMeta(root, p)));
+  const notes: string[] = [];
+  const pendingDownload: string[] = [];
+  const pages = await listPages(root, chapter, pendingDownload);
+  for (const p of pendingDownload) {
+    notes.push(
+      `${p}: manifest is in iCloud but not downloaded on this Mac — the page is ` +
+        `omitted until iCloud materialises it (open the folder in Finder to force it).`,
+    );
+  }
+  // One bad page (a truncated / hand-edited / conflicted manifest) must not take
+  // down the whole listing — skip it with a note naming the file instead.
+  const metas = (
+    await Promise.all(
+      pages.map(async (p) => {
+        try {
+          return await readPageMeta(root, p);
+        } catch (e: any) {
+          notes.push(`Skipped ${p}: ${e.message}`);
+          return null;
+        }
+      }),
+    )
+  ).filter((r): r is PageRow => r !== null);
 
   const rows: PageRow[] = [];
   for (const r of metas) {
@@ -198,5 +242,5 @@ export async function listPageRows(root: string, filter: PageFilter = {}): Promi
     }
     rows.push(r);
   }
-  return rows;
+  return { rows, notes };
 }

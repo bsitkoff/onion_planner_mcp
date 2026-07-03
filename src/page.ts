@@ -27,6 +27,13 @@ export interface ChapterTheme {
   harmony?: "match" | "complement" | "warm" | "cool" | "seasonal";
   varietyDial?: number;
   fontPersonality?: "clean" | "handwritten" | "editorial";
+  /**
+   * An explicit underlay accent (hex) the whole chapter inherits — tints body text /
+   * markers / banners so a chapter can carry a colour the named presets don't (e.g.
+   * lavender). Additive to the app's `FORMAT.md §4` theme keys; the server reads it
+   * defensively (absent ⇒ the gold/preset default). Written by `set_chapter_theme`.
+   */
+  accent?: string;
 }
 
 /**
@@ -43,6 +50,38 @@ async function readChapterTheme(pageAbs: string): Promise<ChapterTheme | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Merge a theme block into a chapter's `.folder.json → theme` (the chapter's default
+ * mood, applied by `write_underlay` and surfaced by `read_page`). Only the provided
+ * keys are patched — an existing `order` and any other folder fields are preserved.
+ * The chapter folder must already exist (theming never creates a chapter). This is the
+ * one place besides `create_page` that the server writes `.folder.json`.
+ */
+export async function writeChapterTheme(
+  root: string,
+  chapter: string,
+  theme: ChapterTheme,
+): Promise<{ chapter: string; theme: ChapterTheme }> {
+  const chapterRel = `Shared/${normalizeChapter(chapter)}`;
+  const chapterAbs = resolvePageRel(root, chapterRel);
+  const stat = await fs.stat(chapterAbs).catch(() => null);
+  if (!stat || !stat.isDirectory()) {
+    throw new Error(`Chapter "${chapterRel}" does not exist.`);
+  }
+  const folderFile = path.join(chapterAbs, ".folder.json");
+  const existing = await readIfExists(folderFile);
+  const folder = existing ? (JSON.parse(existing) as Record<string, unknown>) : {};
+  const prev =
+    folder.theme && typeof folder.theme === "object" ? (folder.theme as ChapterTheme) : {};
+  const merged: ChapterTheme = { ...prev };
+  for (const [k, v] of Object.entries(theme)) {
+    if (v !== undefined) (merged as Record<string, unknown>)[k] = v;
+  }
+  folder.theme = merged;
+  await atomicWrite(folderFile, JSON.stringify(folder, null, 2) + "\n");
+  return { chapter: chapterRel, theme: merged };
 }
 
 /**
@@ -69,13 +108,19 @@ async function resolveThemeInput(
     opts.varietyDial !== undefined ||
     opts.fontPersonality !== undefined;
   if (opts.theme && !callAdaptive) {
-    return { name: opts.theme, fontPersonality: chapter?.fontPersonality, templatePalette };
+    return {
+      name: opts.theme,
+      fontPersonality: chapter?.fontPersonality,
+      accent: chapter?.accent,
+      templatePalette,
+    };
   }
   return {
     name: opts.theme,
     harmony: opts.harmony ?? chapter?.harmony,
     varietyDial: opts.varietyDial ?? chapter?.varietyDial,
     fontPersonality: opts.fontPersonality ?? chapter?.fontPersonality,
+    accent: chapter?.accent,
     chromeAccent: chapter?.chromeAccent,
     templatePalette,
   };
@@ -101,8 +146,36 @@ function nowIso(): string {
 }
 
 let tmpCounter = 0;
+
+/**
+ * Remove stale temp siblings from a crashed earlier write. Anything matching
+ * `<file>.tmp-*` and older than a minute is a dropping (a healthy write renames its
+ * temp within milliseconds) — left behind, it would sync to the iPad via iCloud.
+ */
+async function sweepStaleTmp(absFile: string): Promise<void> {
+  const dir = path.dirname(absFile);
+  const prefix = `${path.basename(absFile)}.tmp-`;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - 60_000;
+  for (const e of entries) {
+    if (!e.startsWith(prefix)) continue;
+    const p = path.join(dir, e);
+    try {
+      if ((await fs.stat(p)).mtimeMs < cutoff) await fs.rm(p, { force: true });
+    } catch {
+      // best-effort hygiene only
+    }
+  }
+}
+
 /** Write a file atomically: temp sibling + rename, so no reader sees a partial file. */
 async function atomicWrite(absFile: string, content: string | Uint8Array): Promise<void> {
+  await sweepStaleTmp(absFile);
   const tmp = `${absFile}.tmp-${process.pid}-${tmpCounter++}`;
   await fs.writeFile(tmp, content); // string defaults to utf8; Uint8Array writes bytes
   await fs.rename(tmp, absFile);
@@ -215,7 +288,12 @@ export async function fetchImageToTemp(
   const ext = format === "jpeg" ? "jpg" : "png";
   const dir = path.join(os.tmpdir(), "onionskin-fetch");
   await fs.mkdir(dir, { recursive: true });
-  const dest = path.join(dir, `${stem}.${ext}`);
+  // Don't clobber an earlier fetch that landed on the same stem (its path may still
+  // be queued for a write_underlay call) — suffix instead.
+  let dest = path.join(dir, `${stem}.${ext}`);
+  for (let i = 2; await fs.access(dest).then(() => true, () => false); i++) {
+    dest = path.join(dir, `${stem}-${i}.${ext}`);
+  }
   await fs.writeFile(dest, buf);
 
   if (removeBackground) {
@@ -243,6 +321,9 @@ async function resolveImages(
   const warnings: string[] = [];
   const warningDetails: WarningDetail[] = [];
   const mediaAiAbs = path.join(pageAbs, MEDIA_AI);
+  // Filenames already claimed in THIS write (file → content sha) — two different
+  // images sharing a `name` must not silently overwrite each other.
+  const usedFiles = new Map<string, string>();
   for (const region of regions) {
     for (const img of region.images ?? []) {
       if ((img.data === undefined) === (img.path === undefined)) {
@@ -296,8 +377,15 @@ async function resolveImages(
       const width = img.width;
       const height = img.height ?? Math.round((width * dims.height) / dims.width);
       const ext = format === "jpeg" ? "jpg" : "png";
-      const stem = sanitizeName(img.name ?? createHash("sha256").update(buf).digest("hex").slice(0, 16));
-      const file = `${stem}.${ext}`;
+      const digest = createHash("sha256").update(buf).digest("hex");
+      const stem = sanitizeName(img.name ?? digest.slice(0, 16));
+      // De-collide within this write: identical bytes may share a file; different
+      // bytes under the same name get a numeric suffix.
+      let file = `${stem}.${ext}`;
+      for (let i = 2; usedFiles.has(file) && usedFiles.get(file) !== digest; i++) {
+        file = `${stem}-${i}.${ext}`;
+      }
+      usedFiles.set(file, digest);
 
       img.href = `${MEDIA_AI.split(path.sep).join("/")}/${file}`; // forward-slash href
       img.width = width;
@@ -404,18 +492,37 @@ export async function readPage(
   };
 }
 
-/** Read a page's ink layer (the user's handwriting) without touching anything. */
+/**
+ * Read a page's ink layer (the user's handwriting) without touching anything.
+ *
+ * Each stroke carries a `data-stroke` centerline stream (the eraser/edit source of
+ * truth) that dominates the file's bytes — hundreds of KB on a heavily written page —
+ * and says nothing an underlay author needs beyond the outline geometry. It's
+ * stripped by default; pass `includeStrokeData` for the verbatim file.
+ */
 export async function readInk(
   root: string,
   rel: string,
+  includeStrokeData = false,
 ): Promise<{ page: string; inkSvg: string | null }> {
   const abs = resolvePageRel(root, rel);
   await readJson<Manifest>(path.join(abs, "manifest.json")); // confirms it's a real page
-  const inkSvg = await readIfExists(path.join(abs, "ink.svg"));
+  let inkSvg = await readIfExists(path.join(abs, "ink.svg"));
+  if (inkSvg && !includeStrokeData) {
+    inkSvg = inkSvg.replace(/\s+data-stroke="[^"]*"/g, "");
+  }
   return { page: rel, inkSvg };
 }
 
-/** Update the ai-layer status block + top-level modified, atomically. */
+/**
+ * Update the ai-layer status block + top-level modified, atomically.
+ *
+ * Read-modify-write on a file another author (the app, via iCloud) may also touch:
+ * the write itself is atomic, but a manifest change landing between our read and
+ * rename is overwritten with our copy (a lost update). The read happens immediately
+ * before the write to keep that window at milliseconds; it's inherent to a file
+ * surface with no locking, and the app's own writes bump `modified` again anyway.
+ */
 async function patchManifestStatus(
   abs: string,
   status: AiStatus,
@@ -534,12 +641,20 @@ export async function writeUnderlay(
     const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
     const size = pageSize(manifest, templateSvg);
     const themeInput = await resolveThemeInput(abs, templateSvg, opts);
-    const composed = composeAiSvg(size, opts.regions, regions, themeInput);
+    const composed = composeAiSvg(size, opts.regions, regions, themeInput, manifest.template);
     warnings = [...composed.warnings, ...imageResult.warnings];
     warningDetails = [...composed.warningDetails, ...imageResult.warningDetails];
     if (opts.merge) {
       const existing = await readIfExists(path.join(abs, "ai.svg"));
-      svg = mergeRegions(existing, composed.svg, size);
+      const merged = mergeRegions(existing, composed.svg, size);
+      svg = merged.svg;
+      if (merged.discardedExisting) {
+        const message =
+          "merge: the existing ai.svg has no data-region groups to preserve (a prior " +
+          "raw `svg` write?) — its content was replaced by the fresh regions.";
+        warnings.push(message);
+        warningDetails.push({ code: "merge_discarded_raw_svg", severity: "warning", message });
+      }
     } else {
       svg = composed.svg;
     }
@@ -588,6 +703,8 @@ export interface CreateResult {
   template: string;
   size: [number, number];
   clonedFrom: string;
+  /** Non-fatal problems (e.g. the page was created but the chapter order wasn't updated). */
+  warnings?: string[];
 }
 
 /** The layers + geometry a new page is instantiated from. */
@@ -602,7 +719,31 @@ interface PageSource {
   clonedFrom: string;
 }
 
-/** Find a sibling page in the chapter to clone a template from, if any. */
+/** A chapter's `.folder.json`, parsed leniently; null when absent/unreadable. */
+async function readFolderConfig(chapterAbs: string): Promise<Record<string, any> | null> {
+  const raw = await readIfExists(path.join(chapterAbs, ".folder.json"));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A month chapter's single overview page: folder `YYYY-MM` / a monthly template. */
+function isMonthlyOverview(folderName: string, manifest: Manifest): boolean {
+  return /^\d{4}-\d{2}$/.test(folderName) || /monthly/i.test(manifest.template ?? "");
+}
+
+/**
+ * Find a sibling page in the chapter to clone a template from, if any.
+ *
+ * Deterministic (siblings sorted by name) and calendar-aware: a month chapter always
+ * contains its monthly-overview page (the app self-heals one in), which must never
+ * become the template for a new *day* page — overview siblings are only used when
+ * nothing else qualifies (a chapter that genuinely holds just the grid).
+ */
 async function findSiblingTemplate(
   chapterAbs: string,
   chapterRel: string,
@@ -614,17 +755,28 @@ async function findSiblingTemplate(
   } catch {
     return null; // chapter folder doesn't exist yet (brand-new chapter)
   }
-  for (const s of siblings) {
+  let overviewFallback: { rel: string; manifest: Manifest; templateSvg: string } | null = null;
+  for (const s of [...siblings].sort((a, b) => a.name.localeCompare(b.name))) {
     if (!s.isDirectory() || s.name.startsWith(".") || s.name === opts.name) continue;
     const sAbs = path.join(chapterAbs, s.name);
     const m = await readIfExists(path.join(sAbs, "manifest.json"));
     const t = await readIfExists(path.join(sAbs, "template.svg"));
     if (!m || !t) continue;
-    const manifest = JSON.parse(m) as Manifest;
+    let manifest: Manifest;
+    try {
+      manifest = JSON.parse(m) as Manifest;
+    } catch {
+      continue; // a corrupt sibling manifest shouldn't block page creation
+    }
     if (opts.template && manifest.template !== opts.template) continue;
-    return { rel: `${chapterRel}/${s.name}`, manifest, templateSvg: t };
+    const candidate = { rel: `${chapterRel}/${s.name}`, manifest, templateSvg: t };
+    if (!opts.template && isMonthlyOverview(s.name, manifest)) {
+      overviewFallback ??= candidate;
+      continue;
+    }
+    return candidate;
   }
-  return null;
+  return overviewFallback;
 }
 
 /** Load a template from the top-level `Templates/<id>/` catalogue, if it exists. */
@@ -660,16 +812,23 @@ async function listCatalogueTemplates(root: string): Promise<string[]> {
 
 /**
  * Create a new shared page, writing manifest + layers + media/ and appending the
- * new folder to the chapter's .folder.json order. The template comes from a
- * **sibling page** in the same chapter when one exists (keeps a chapter
- * consistent); otherwise it is instantiated from the top-level **`Templates/`
- * catalogue** by id (`template`), so a brand-new/empty chapter can still be seeded.
+ * new folder to the chapter's .folder.json order. Template resolution: an explicit
+ * `template` arg wins; else the chapter's declared `.folder.json → defaultTemplate`;
+ * with a template id in hand, a matching **sibling page** is cloned (keeps a chapter
+ * consistent), else the id is instantiated from the top-level **`Templates/`
+ * catalogue**. With no id at all, any non-overview sibling is cloned.
  */
 export async function createPage(
   root: string,
   opts: { chapter: string; name: string; title?: string; template?: string },
 ): Promise<CreateResult> {
-  const chapterRel = `Shared/${normalizeChapter(opts.chapter)}`;
+  if (/[/\\]/.test(opts.name) || opts.name.trim() === "") {
+    throw new Error(
+      `Page name "${opts.name}" must be a single non-empty folder name (no slashes).`,
+    );
+  }
+  const chapterName = normalizeChapter(opts.chapter);
+  const chapterRel = `Shared/${chapterName}`;
   const chapterAbs = resolvePageRel(root, chapterRel);
   const newRel = `${chapterRel}/${opts.name}`;
   const newAbs = resolvePageRel(root, newRel); // also validates name has no traversal
@@ -682,23 +841,33 @@ export async function createPage(
     if (e.code !== "ENOENT") throw e;
   }
 
+  // The chapter's declared default template (FORMAT.md §4) fills in when the caller
+  // doesn't pass one — a calendar chapter's day pages come out right by default.
+  const folderCfg = await readFolderConfig(chapterAbs);
+  const effTemplate =
+    opts.template ??
+    (typeof folderCfg?.defaultTemplate === "string" ? folderCfg.defaultTemplate : undefined);
+
   // Prefer a sibling; fall back to the Templates/ catalogue.
-  const sibling = await findSiblingTemplate(chapterAbs, chapterRel, opts);
+  const sibling = await findSiblingTemplate(chapterAbs, chapterRel, {
+    name: opts.name,
+    template: effTemplate,
+  });
   let source: PageSource;
   if (sibling) {
     source = {
       templateSvg: sibling.templateSvg,
       stickersSvg: null,
       size: pageSize(sibling.manifest, sibling.templateSvg),
-      templateName: sibling.manifest.template ?? opts.template ?? "daily",
+      templateName: sibling.manifest.template ?? effTemplate ?? "daily",
       clonedFrom: sibling.rel,
     };
   } else {
-    const cat = opts.template ? await loadCatalogueTemplate(root, opts.template) : null;
+    const cat = effTemplate ? await loadCatalogueTemplate(root, effTemplate) : null;
     if (!cat) {
       const ids = await listCatalogueTemplates(root);
-      const why = opts.template
-        ? `no catalogue template "${opts.template}" exists under Templates/`
+      const why = effTemplate
+        ? `no catalogue template "${effTemplate}" exists under Templates/`
         : "pass `template` with a catalogue id to start from the Templates/ catalogue";
       throw new Error(
         `No sibling page in "${chapterRel}" to clone from, and ${why}. ` +
@@ -709,8 +878,8 @@ export async function createPage(
       templateSvg: cat.templateSvg,
       stickersSvg: cat.stickersSvg,
       size: cat.size,
-      templateName: opts.template!,
-      clonedFrom: `Templates/${opts.template}`,
+      templateName: effTemplate!,
+      clonedFrom: `Templates/${effTemplate}`,
     };
   }
 
@@ -755,13 +924,28 @@ export async function createPage(
     throw e;
   }
 
-  // Append to the chapter's page order.
-  const folderFile = path.join(chapterAbs, ".folder.json");
-  const existing = await readIfExists(folderFile);
-  const folder = existing ? (JSON.parse(existing) as any) : { title: opts.chapter };
-  folder.order = Array.isArray(folder.order) ? folder.order : [];
-  if (!folder.order.includes(opts.name)) folder.order.push(opts.name);
-  await atomicWrite(folderFile, JSON.stringify(folder, null, 2) + "\n");
+  // Append to the chapter's page order. The page already exists at this point, so a
+  // corrupt .folder.json downgrades to a warning — not an error for a created page.
+  const warnings: string[] = [];
+  try {
+    const folderFile = path.join(chapterAbs, ".folder.json");
+    const existing = await readIfExists(folderFile);
+    const folder = existing ? (JSON.parse(existing) as any) : { title: chapterName };
+    folder.order = Array.isArray(folder.order) ? folder.order : [];
+    if (!folder.order.includes(opts.name)) folder.order.push(opts.name);
+    await atomicWrite(folderFile, JSON.stringify(folder, null, 2) + "\n");
+  } catch (e: any) {
+    warnings.push(
+      `Page created, but the chapter's .folder.json could not be updated ` +
+        `(${e.message}) — the page may not appear in the chapter's declared order.`,
+    );
+  }
 
-  return { page: newRel, template: templateName, size, clonedFrom: source.clonedFrom };
+  return {
+    page: newRel,
+    template: templateName,
+    size,
+    clonedFrom: source.clonedFrom,
+    ...(warnings.length ? { warnings } : {}),
+  };
 }

@@ -22,10 +22,12 @@ import {
 } from "../src/library.js";
 import {
   readPage,
+  readInk,
   writeUnderlay,
   setStatus,
   clearUnderlay,
   createPage,
+  writeChapterTheme,
   fetchImageToTemp,
 } from "../src/page.js";
 import { GOLD, resolveTheme, composeAiSvg } from "../src/svg.js";
@@ -109,10 +111,11 @@ async function main() {
   check("schedule region parsed with ruled lines", (schedule?.ruledLines.length ?? 0) >= 8, String(schedule?.ruledLines.length));
   check("ainotes region parsed (no-ruled box)", !!ainotes && ainotes.ruledLines.length === 0, String(ainotes?.ruledLines.length));
   check("todo region parsed", !!todo);
-  // Template inspection: minimal now prints a faint "TODAY" header label (so the
-  // hasLabels heuristic marks it styled) but ships no banners/art/palette; cozy is
-  // fully styled (fill quietly into its own colours).
-  check("template info: minimal has a label but no banners/palette", read.template.hasLabels === true && !read.template.hasBanners && read.template.palette.length === 0, JSON.stringify(read.template));
+  // Template inspection: minimal prints a faint "TODAY" microcap (hasLabels) but no
+  // banners/art/palette — labels alone must NOT mark it styled, or the "bare → go
+  // full" guidance would be unreachable on every shipped template. Cozy is fully
+  // styled (fill quietly into its own colours).
+  check("template info: minimal has a label but is NOT styled", read.template.hasLabels === true && !read.template.hasBanners && !read.template.styled && read.template.palette.length === 0, JSON.stringify(read.template));
   const cozyInfo = inspectTemplate(await fs.readFile(path.join(root, "Templates", "daily-cozy", "template.svg"), "utf8"));
   check("template info: cozy is styled with its own banners", cozyInfo.styled && cozyInfo.hasBanners && cozyInfo.hasLabels, JSON.stringify(cozyInfo));
   check("template info: cozy palette is non-empty and non-neutral", cozyInfo.palette.length > 0 && cozyInfo.palette.every((h) => /^#[0-9a-f]{6}$/.test(h)), JSON.stringify(cozyInfo.palette));
@@ -313,7 +316,8 @@ async function main() {
   check("banner heading draws a filled colored rect", /<rect[^>]*fill="#3FB6A8"/.test(tg) || /<rect[^>]*fill="#F2884B"/.test(tg), tg.slice(0, 200));
   check("two banners use two different cycled colors", new Set([...tg.matchAll(/<rect[^>]*rx="6" fill="(#[0-9A-Fa-f]{6})"/g)].map((m) => m[1])).size === 2, tg);
   check("banner label is white, not gold", tg.includes('fill="#FFFFFF"') && !tg.includes(GOLD), tg.slice(0, 240));
-  check("themed body text uses theme ink, not gold", tg.includes('fill="#3A3A3A"'), tg);
+  // (case-insensitive: the AA floor round-trips the hex through HSL → lowercase)
+  check("themed body text uses theme ink, not gold", /fill="#3a3a3a"/i.test(tg), tg);
   // The gold default is unchanged (back-compat): headings stay underline+rule.
   const goldHead = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "todo") ?? "";
   check("default (no theme) keeps the gold underline heading", goldHead.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(goldHead), goldHead);
@@ -388,8 +392,9 @@ async function main() {
   const noLabel = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", lines: [{ text: "x", row: 0 }] }] })).aiSvg, "schedule") ?? "";
   check("no label → no banner rect", !/<rect[^>]*rx="6"/.test(noLabel), noLabel);
 
-  console.log("\noverflow warnings (dry-run, no write)");
-  const longText = "This is an absurdly long line of text that cannot possibly fit the box".repeat(1);
+  console.log("\noverflow warnings + default-on wrap (dry-run, no write)");
+  const longText = "This is an absurdly long line of text that cannot possibly fit the box";
+  // Default-on wrap: a flow-placed long line in a box region wraps instead of overflowing.
   const overflow = await writeUnderlay(root, daily, {
     status: "ready",
     dryRun: true,
@@ -398,12 +403,20 @@ async function main() {
       { text: "a" }, { text: "b" }, { text: "c" }, { text: "d" }, { text: "e" }, { text: "f" },
     ]}],
   });
-  check("warns about likely overflow", overflow.warnings.some((w) => w.includes("overflow")), JSON.stringify(overflow.warnings));
+  const overflowGroup = regionGroup(overflow.aiSvg, "ainotes") ?? "";
+  const wrapSegs = [...overflowGroup.matchAll(/<text\b[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  check("flow-placed long line wraps by default (extra <text> segments)", wrapSegs.length > 7, `segments=${wrapSegs.length}`);
+  check("default wrap suppresses the overflow warning", !overflow.warnings.some((w) => w.includes("overflow")), JSON.stringify(overflow.warnings));
   // Flow layout: all 7 lines are written regardless of the ruled-row count.
-  const prioritiesGroup = regionGroup(overflow.aiSvg, "ainotes") ?? "";
-  check("flow layout writes all lines past the ruled-row count", prioritiesGroup.includes(">f</text>"), prioritiesGroup.slice(0, 600));
-  check("warnings remain a string array for compatibility", overflow.warnings.every((w) => typeof w === "string"));
-  check("structured warning details include region + code", overflow.warningDetails.some((w) => w.code === "text_overflow" && w.region === "ainotes"), JSON.stringify(overflow.warningDetails));
+  check("flow layout writes all lines past the ruled-row count", overflowGroup.includes(">f</text>"), overflowGroup.slice(0, 600));
+  // wrap:false forces the single-segment overflow warning (+ structured detail).
+  const noWrapOverflow = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: longText, wrap: false }] }],
+  });
+  check("wrap:false warns about likely overflow", noWrapOverflow.warnings.some((w) => w.includes("overflow")), JSON.stringify(noWrapOverflow.warnings));
+  check("warnings remain a string array for compatibility", noWrapOverflow.warnings.every((w) => typeof w === "string"));
+  check("structured warning details include region + code", noWrapOverflow.warningDetails.some((w) => w.code === "text_overflow" && w.region === "ainotes"), JSON.stringify(noWrapOverflow.warningDetails));
 
   console.log("\ndry-run writes nothing to disk");
   const diskBefore = await fs.readFile(aiPath, "utf8");
@@ -431,6 +444,39 @@ async function main() {
   check("merge preserves the schedule group VERBATIM", !!scheduleBlock && aiMerged.includes(scheduleBlock!), "schedule block changed");
   check("merge reported not-dry-run", merged.dryRun === false);
 
+  console.log("\nmerge survives a region whose raw fragment nests <g> (balanced output)");
+  // Regression: the old regex extraction stopped at the FIRST </g>, so a nested
+  // group produced an unclosed <g> after merge — the app's XMLParser then rejected
+  // the whole document and the gold layer silently vanished on device.
+  await writeUnderlay(root, daily, {
+    status: "ready",
+    regions: [
+      { region: "ainotes", svg: '<g opacity="0.5"><g><text x="24" y="20" font-family="Mulish" font-size="12">NESTED</text></g></g>' },
+      { region: "todo", lines: [{ text: "todo before merge" }] },
+    ],
+  });
+  await writeUnderlay(root, daily, {
+    status: "ready", merge: true,
+    regions: [{ region: "todo", lines: [{ text: "todo after merge" }] }],
+  });
+  const nestedMerged = await fs.readFile(aiPath, "utf8");
+  const gOpens = (nestedMerged.match(/<g\b(?![^>]*\/>)/g) ?? []).length;
+  const gCloses = (nestedMerged.match(/<\/g>/g) ?? []).length;
+  check("merged document keeps <g> tags balanced", gOpens === gCloses, `${gOpens} opens vs ${gCloses} closes`);
+  check("nested-g region content survives the merge intact", nestedMerged.includes(">NESTED</text>") && nestedMerged.includes('opacity="0.5"'), nestedMerged.slice(0, 400));
+  check("merged region was replaced", nestedMerged.includes(">todo after merge</text>") && !nestedMerged.includes(">todo before merge</text>"));
+
+  console.log("\nmerge over a prior raw-svg document warns instead of silently dropping it");
+  await writeUnderlay(root, daily, {
+    status: "ready",
+    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#9C7C1A">raw only</text></svg>',
+  });
+  const mergeOverRaw = await writeUnderlay(root, daily, {
+    status: "ready", merge: true,
+    regions: [{ region: "todo", lines: [{ text: "fresh region" }] }],
+  });
+  check("merge over raw svg warns merge_discarded_raw_svg", mergeOverRaw.warningDetails.some((w) => w.code === "merge_discarded_raw_svg"), JSON.stringify(mergeOverRaw.warningDetails));
+
   console.log("\nwrite_underlay (calendar grid — monthly tap-to-day)");
   const monthRead = await readPage(root, monthly);
   const monthRegion = monthRead.regions.find((r) => r.name === "month");
@@ -451,6 +497,27 @@ async function main() {
   const cellXs = [...cal.matchAll(/<rect x="(-?\d+)"[^>]*data-date="2026-02-/g)].map((m) => Number(m[1]));
   check("28 day cells emitted", cellXs.length === 28, String(cellXs.length));
   check("every cell aligns to a 7-column boundary", cellXs.every((x) => expectedCols.some((c) => Math.abs(c - x) <= 1)), JSON.stringify([...new Set(cellXs)].sort((a, b) => a - b)));
+  // A too-small grid (5 rows vs a 6-week month) must warn about the days it drops,
+  // never lose them silently. Aug 2026 starts Saturday → days 30/31 land on row 5.
+  const smallGrid = parseRegions('<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><g id="region-month" data-region="month" data-cols="7" data-rows="5" transform="translate(56,300)"><rect width="912" height="750" fill="none"/></g></svg>');
+  const dropped = composeAiSvg([1024, 1366], [{ region: "month", calendar: { month: "2026-08" } }], smallGrid);
+  check("days outside the printed grid warn (calendar_days_outside_grid)", dropped.warningDetails.some((w) => w.code === "calendar_days_outside_grid" && w.message.includes("30, 31")), JSON.stringify(dropped.warningDetails));
+  check("in-grid days still compose on the small grid", dropped.svg.includes('data-date="2026-08-29"') && !dropped.svg.includes('data-date="2026-08-30"'));
+  // The monthly templates print Sun–Sat themselves — `weekdays` must not derive as
+  // an AI-owned region (that invited double-printing the header).
+  const monthlyRegions = parseRegions(await fs.readFile(path.join(root, "Templates", "monthly-minimal", "template.svg"), "utf8"), "monthly-minimal");
+  const weekdaysRegion = monthlyRegions.find((r) => r.name === "weekdays");
+  check("weekdays region derives as shared, not ai", !weekdaysRegion || weekdaysRegion.fill !== "ai", weekdaysRegion?.fill);
+
+  console.log("\npreset themes respect the cream-legibility floor (AA text)");
+  // The bright preset's accent (#E86A92, ~2.9:1 on cream) is calendar day-number TEXT —
+  // presets must pass through the same lightness floor the adaptive path uses.
+  for (const name of ["bright", "cozy", "editorial"]) {
+    const t = resolveTheme(name).theme;
+    check(`${name}: text/serif floored dark`, hexToHsl(t.text).l <= 0.36 && hexToHsl(t.serif).l <= 0.36, `text ${t.text} serif ${t.serif}`);
+    check(`${name}: accent floored for cream`, hexToHsl(t.accent).l <= 0.48, `${t.accent} (L=${hexToHsl(t.accent).l.toFixed(2)})`);
+  }
+  check("gold preset is untouched (the canonical value)", resolveTheme("gold").theme.text === GOLD && resolveTheme("gold").theme.accent === GOLD);
 
   console.log("\nwrite_underlay (raw svg) + reject merge+svg");
   const rawOk = await writeUnderlay(root, daily, {
@@ -546,32 +613,112 @@ async function main() {
   const folder = JSON.parse(await fs.readFile(path.join(root, "Shared/Daily/.folder.json"), "utf8"));
   check("chapter order includes both pages", folder.order.includes("2026-06-22") && folder.order.includes("2026-06-23"));
 
+  console.log("\ncreate_page name hygiene");
+  // A slashed name must fail validation, not create nested folders / corrupt order.
+  let refusedSlashName = false;
+  try {
+    await createPage(root, { chapter: "Daily", name: "a/b", title: "Nope" });
+  } catch { refusedSlashName = true; }
+  check("create_page rejects a name containing a slash", refusedSlashName);
+
   console.log("\nlist_pages metadata filters");
   // At this point: Daily/2026-06-22 (daily-minimal, "Monday", status empty after clear),
   // Daily/2026-06-23 (daily-minimal, "Tuesday", ready), Monthly/2026-02 (monthly-minimal,
   // "February", ready). Derive the unfiltered total rather than hard-coding it.
-  const allRows = await listPageRows(root);
+  const allRows = (await listPageRows(root)).rows;
   const total = allRows.length;
   check("unfiltered lists every page", total >= 3, String(total));
-  const byTemplate = await listPageRows(root, { template: "daily-minimal" });
+  const byTemplate = (await listPageRows(root, { template: "daily-minimal" })).rows;
   check("template filter keeps only daily-minimal", byTemplate.length === 2 && byTemplate.every((r) => r.template === "daily-minimal"), JSON.stringify(byTemplate.map((r) => r.page)));
-  const ready = await listPageRows(root, { aiStatus: "ready" });
+  const ready = (await listPageRows(root, { aiStatus: "ready" })).rows;
   check("aiStatus=ready excludes the cleared daily", ready.every((r) => r.aiStatus === "ready") && !ready.some((r) => r.page === daily), JSON.stringify(ready.map((r) => r.page)));
-  const empty = await listPageRows(root, { aiStatus: "empty" });
+  const empty = (await listPageRows(root, { aiStatus: "empty" })).rows;
   check("aiStatus=empty finds the cleared daily", empty.some((r) => r.page === daily) && empty.every((r) => r.aiStatus === "empty"), JSON.stringify(empty.map((r) => r.page)));
-  const titled = await listPageRows(root, { titleContains: "feb" });
+  const titled = (await listPageRows(root, { titleContains: "feb" })).rows;
   check("titleContains is case-insensitive", titled.length === 1 && titled[0].title === "February", JSON.stringify(titled.map((r) => r.title)));
-  const combined = await listPageRows(root, { chapter: "Daily", template: "daily-minimal" });
+  const combined = (await listPageRows(root, { chapter: "Daily", template: "daily-minimal" })).rows;
   check("filters AND together (chapter + template)", combined.length === 2 && combined.every((r) => r.page.startsWith("Shared/Daily/")), JSON.stringify(combined.map((r) => r.page)));
   // Regression: the `chapter` filter accepts both the bare name and the "Shared/<name>"
   // path get_library hands back (callers feed the path back; the prefix must not double).
-  const byBareName = await listPageRows(root, { chapter: "Daily" });
-  const byPath = await listPageRows(root, { chapter: "Shared/Daily" });
+  const byBareName = (await listPageRows(root, { chapter: "Daily" })).rows;
+  const byPath = (await listPageRows(root, { chapter: "Shared/Daily" })).rows;
   check("chapter filter accepts the get_library path form, not just the bare name", byPath.length === byBareName.length && byBareName.length >= 2, `bare=${byBareName.length} path=${byPath.length}`);
-  const beforeFuture = await listPageRows(root, { modifiedBefore: "2999-01-01" });
+  const beforeFuture = (await listPageRows(root, { modifiedBefore: "2999-01-01" })).rows;
   check("modifiedBefore far-future keeps all dated pages", beforeFuture.length === total, `${beforeFuture.length}/${total}`);
-  const afterFuture = await listPageRows(root, { modifiedAfter: "2999-01-01" });
+  const afterFuture = (await listPageRows(root, { modifiedAfter: "2999-01-01" })).rows;
   check("modifiedAfter far-future excludes everything", afterFuture.length === 0, String(afterFuture.length));
+
+  console.log("\nlist_pages resilience (corrupt manifest + iCloud-evicted placeholder)");
+  // One bad page must not take down the whole listing — it's skipped with a note.
+  const badPage = path.join(root, "Shared", "Daily", "corrupt-manifest");
+  await fs.mkdir(badPage, { recursive: true });
+  await fs.writeFile(path.join(badPage, "manifest.json"), "{ this is not JSON");
+  // An evicted page shows only a .manifest.json.icloud placeholder on the Mac.
+  const evictedPage = path.join(root, "Shared", "Daily", "evicted-page");
+  await fs.mkdir(evictedPage, { recursive: true });
+  await fs.writeFile(path.join(evictedPage, ".manifest.json.icloud"), "placeholder");
+  const resilient = await listPageRows(root, { chapter: "Daily" });
+  check("corrupt manifest is skipped, not fatal", resilient.rows.length === byBareName.length, `${resilient.rows.length} vs ${byBareName.length}`);
+  check("corrupt manifest surfaces a skip note", resilient.notes.some((n) => n.includes("corrupt-manifest") && n.includes("Skipped")), JSON.stringify(resilient.notes));
+  check("evicted page surfaces a pending-download note", resilient.notes.some((n) => n.includes("evicted-page") && n.includes("iCloud")), JSON.stringify(resilient.notes));
+  await fs.rm(badPage, { recursive: true, force: true });
+  await fs.rm(evictedPage, { recursive: true, force: true });
+
+  console.log("\ncreate_page calendar-awareness + chapter-title hygiene");
+  // A brand-new chapter referenced by its "Shared/<name>" path form gets the BARE
+  // name as its .folder.json title (regression: it used to store "Shared/Fresh").
+  await createPage(root, { chapter: "Shared/Fresh", name: "2026-07-01", template: "daily-minimal" });
+  const freshFolder = JSON.parse(await fs.readFile(path.join(root, "Shared", "Fresh", ".folder.json"), "utf8"));
+  check("new chapter title is the bare name, not the path form", freshFolder.title === "Fresh", JSON.stringify(freshFolder.title));
+  // The Monthly chapter holds only the 2026-02 monthly-overview grid. With a declared
+  // defaultTemplate, a new day page must come from THAT, never clone the month grid.
+  const monthlyFolderFile = path.join(root, "Shared", "Monthly", ".folder.json");
+  const monthlyFolder = JSON.parse(await fs.readFile(monthlyFolderFile, "utf8").catch(() => "{}"));
+  monthlyFolder.defaultTemplate = "daily-minimal";
+  await fs.writeFile(monthlyFolderFile, JSON.stringify(monthlyFolder, null, 2) + "\n");
+  const dayInMonth = await createPage(root, { chapter: "Monthly", name: "2026-02-10", title: "Feb 10" });
+  check("day page uses the chapter defaultTemplate, not the month grid", dayInMonth.template === "daily-minimal", `${dayInMonth.template} from ${dayInMonth.clonedFrom}`);
+  // Without a defaultTemplate, a sibling clone must still skip the monthly overview
+  // (regression: readdir order could hand a new day page the month-grid template).
+  delete monthlyFolder.defaultTemplate;
+  await fs.writeFile(monthlyFolderFile, JSON.stringify(monthlyFolder, null, 2) + "\n");
+  const dayInMonth2 = await createPage(root, { chapter: "Monthly", name: "2026-02-11", title: "Feb 11" });
+  check("sibling clone skips the monthly-overview page", dayInMonth2.template === "daily-minimal" && dayInMonth2.clonedFrom !== "Shared/Monthly/2026-02", `${dayInMonth2.template} from ${dayInMonth2.clonedFrom}`);
+
+  console.log("\nprinted-checkbox templates warn on a redundant checkbox marker");
+  const todoPage = "Shared/Daily/todo-day";
+  await createPage(root, { chapter: "Daily", name: "todo-day", title: "Lists", template: "todo-minimal" });
+  const todoRead = await readPage(root, todoPage);
+  const listRegion = todoRead.regions.find((r) => r.name.startsWith("list")) ?? todoRead.regions.find((r) => r.name === "todo");
+  check("todo template exposes a list region", !!listRegion, JSON.stringify(todoRead.regions.map((r) => r.name)));
+  const doubleBox = await writeUnderlay(root, todoPage, {
+    status: "ready", dryRun: true,
+    regions: [{ region: listRegion!.name, lines: [{ text: "Buy stamps", marker: "checkbox" }] }],
+  });
+  check("checkbox marker on a printed-box template warns printed_checkboxes", doubleBox.warningDetails.some((w) => w.code === "printed_checkboxes"), JSON.stringify(doubleBox.warningDetails));
+  const textOnly = await writeUnderlay(root, todoPage, {
+    status: "ready", dryRun: true,
+    regions: [{ region: listRegion!.name, lines: [{ text: "Buy stamps" }] }],
+  });
+  check("text-only lines on the same template do not warn", !textOnly.warningDetails.some((w) => w.code === "printed_checkboxes"), JSON.stringify(textOnly.warningDetails));
+
+  console.log("\nread_ink strips bulky data-stroke streams by default");
+  const inkSvgDoc =
+    '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg">' +
+    '<path d="M10 10 L20 20" fill="#1B4B8A" data-kind="pen" data-stroke="10,10,0.5 11,11,0.52 12,12,0.53"/></svg>';
+  await fs.writeFile(path.join(root, daily, "ink.svg"), inkSvgDoc);
+  const strippedInk = await readInk(root, daily);
+  check("default read_ink drops data-stroke", !!strippedInk.inkSvg && !strippedInk.inkSvg.includes("data-stroke"), strippedInk.inkSvg ?? "null");
+  check("default read_ink keeps the visible geometry", (strippedInk.inkSvg ?? "").includes('d="M10 10 L20 20"'));
+  const rawInk = await readInk(root, daily, true);
+  check("includeStrokeData returns the verbatim file", rawInk.inkSvg === inkSvgDoc);
+
+  console.log("\nraw fragments accept the app renderer's full element set");
+  const shapes = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", svg: '<ellipse cx="40" cy="40" rx="20" ry="10" fill="none" stroke="#9C7C1A"/><polyline points="0,0 10,10 20,0" fill="none" stroke="#9C7C1A"/><polygon points="0,0 10,10 0,10" fill="#9C7C1A"/>' }],
+  });
+  check("ellipse/polyline/polygon produce no unsupported-element warning", !shapes.warningDetails.some((w) => w.code === "raw_svg_unsupported_element"), JSON.stringify(shapes.warningDetails));
 
   console.log("\nwrite_underlay images → media/ai/ (file-relative, GC, validation)");
   const PNG_1x1 =
@@ -644,6 +791,50 @@ async function main() {
   try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, path: srcPng, format: "png", width: 40 }] }] }); } catch { bothErr = true; }
   check("rejects an image with both data and path", bothErr);
   await fs.rm(srcPng, { force: true });
+
+  console.log("\nimage placement warnings (cross-region + off-page; dry-run)");
+  // A big image in ainotes spills onto a sibling region → image_overlaps_region.
+  const overlapImg = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", images: [{ data: PNG_1x1, format: "png", name: "big", width: 400, height: 400, corner: "center" }] }],
+  });
+  check("image overlapping a sibling region warns (image_overlaps_region)",
+    overlapImg.warningDetails.some((w) => w.code === "image_overlaps_region"), JSON.stringify(overlapImg.warningDetails));
+  // A negative-y image pushed above its region → off the page.
+  const offPageImg = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", images: [{ data: PNG_1x1, format: "png", name: "up", width: 40, y: -1000 }] }],
+  });
+  check("image pushed off the page warns (image_off_page)",
+    offPageImg.warningDetails.some((w) => w.code === "image_off_page"), JSON.stringify(offPageImg.warningDetails));
+  // A small, well-placed corner sticker in an ai region → no placement warnings.
+  const cleanImg = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", images: [{ data: PNG_1x1, format: "png", name: "ok", width: 40, corner: "bottom-right" }] }],
+  });
+  check("a small in-region sticker warns nothing about placement",
+    !cleanImg.warningDetails.some((w) => w.code.startsWith("image_")), JSON.stringify(cleanImg.warningDetails));
+
+  console.log("\nset_chapter_theme accent → chapter default the underlay picks up");
+  const accentHex = "#7B5EA7"; // lavender
+  await writeChapterTheme(root, "Daily", { accent: accentHex });
+  const daylyFolder = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
+  check("set_chapter_theme writes theme.accent into .folder.json", daylyFolder.theme?.accent === accentHex, JSON.stringify(daylyFolder.theme));
+  check("set_chapter_theme preserves the chapter page order", Array.isArray(daylyFolder.order) && daylyFolder.order.length > 0, JSON.stringify(daylyFolder.order));
+  const accented = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "todo", lines: [{ text: "Email Dr. Lee", marker: "checkbox" }] }],
+  });
+  // The default gold (#9C7C1A) must NOT appear; a derived lavender-family fill should.
+  const accentTodoGroup = regionGroup(accented.aiSvg, "todo") ?? "";
+  check("accented page drops the gold default", !/#9C7C1A/i.test(accentTodoGroup), accentTodoGroup.slice(0, 400));
+  check("accented page tints body text (non-gold fill present)", /<text[^>]*fill="#[0-9a-fA-F]{6}"/.test(accentTodoGroup), accentTodoGroup.slice(0, 400));
+  // Clean up so later assertions see a pristine folder (writeChapterTheme only merges).
+  {
+    const f = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
+    delete f.theme;
+    await fs.writeFile(path.join(root, "Shared", "Daily", ".folder.json"), JSON.stringify(f, null, 2) + "\n");
+  }
 
   console.log("\nfetch_image validation after optional background removal");
   const fakeFetch: typeof fetch = async () =>

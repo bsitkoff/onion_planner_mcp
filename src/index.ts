@@ -15,6 +15,7 @@ import {
   setStatus,
   clearUnderlay,
   createPage,
+  writeChapterTheme,
   fetchImageToTemp,
 } from "./page.js";
 
@@ -106,7 +107,7 @@ server.tool(
   async ({ chapter, template, aiStatus, titleContains, modifiedAfter, modifiedBefore }) => {
     try {
       const root = await requireLibrary();
-      const rows = await listPageRows(root, {
+      const { rows, notes } = await listPageRows(root, {
         chapter,
         template,
         aiStatus,
@@ -114,7 +115,11 @@ server.tool(
         modifiedAfter,
         modifiedBefore,
       });
-      return json({ count: rows.length, pages: rows });
+      return json({
+        count: rows.length,
+        pages: rows,
+        ...(notes.length ? { notes } : {}),
+      });
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {
         return { ...text(e.message), isError: true as const };
@@ -142,8 +147,9 @@ server.tool(
     "`template` reports whether the template already decorates itself " +
     "(`styled`/`hasLabels`/`hasBanners`/`stickersPresent`) and its own `palette`: if styled, " +
     "fill quietly in those colours; if bare, go full (theme + banners + art). Also returns " +
-    "the chapter's `theme` (harmony/varietyDial/fontPersonality + chromeAccent), which " +
-    "write_underlay applies as the default palette/fonts unless you override it per call.",
+    "the chapter's `theme` (harmony/varietyDial/fontPersonality + an explicit `accent` + " +
+    "chromeAccent), which write_underlay applies as the default palette/fonts unless you " +
+    "override it per call. Set it with set_chapter_theme.",
   {
     page: z
       .string()
@@ -172,18 +178,27 @@ server.tool(
   "read_ink",
   "Read a shared page's ink.svg — the user's handwritten layer. Use this to see what the " +
     "user has already written before composing the AI underlay, or to pick up handwritten " +
-    "notes and annotations. Returns null if no ink file exists. Read-only; never modifies " +
+    "notes and annotations. By default the bulky per-stroke `data-stroke` centerline " +
+    "streams are stripped (the visible outline geometry remains); set `includeStrokeData` " +
+    "for the verbatim file. Returns null if no ink file exists. Read-only; never modifies " +
     "any layer. Refuses any page outside Shared/.",
   {
     page: z
       .string()
       .describe('Relative page path, e.g. "Shared/2026-06/2026-06-26".'),
+    includeStrokeData: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Include each stroke's raw data-stroke centerline stream (large; only needed " +
+          "for stroke-level analysis, not for seeing what was written where).",
+      ),
   },
   { readOnlyHint: true },
-  async ({ page }) => {
+  async ({ page, includeStrokeData }) => {
     try {
       const root = await requireLibrary();
-      return json(await readInk(root, page));
+      return json(await readInk(root, page, includeStrokeData));
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {
         return { ...text(e.message), isError: true as const };
@@ -194,6 +209,13 @@ server.tool(
 );
 
 // --- write_underlay ---
+// Any colour that lands in an SVG attribute must be a hex value: it keeps output
+// legible to the app renderer and means a stray quote/expression can't produce
+// malformed XML (which would blank the whole AI layer on device).
+const HEX_COLOR = z
+  .string()
+  .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "must be a hex colour like #7B5EA7");
+
 // The closed set of fonts that render in-app (see svg.ts REGION_DEFAULTS).
 const FONT_ENUM = z.enum([
   "Mulish",
@@ -238,7 +260,7 @@ const lineSchema = z.object({
     .int()
     .optional()
     .describe("SVG font-weight (100–900). Defaults per region (600; 500 for the serif ainotes)."),
-  fill: z.string().optional().describe("Override colour. Defaults to the gold default."),
+  fill: HEX_COLOR.optional().describe("Override colour (hex). Defaults to the gold default."),
   marker: z
     .enum(["checkbox", "bullet"])
     .optional()
@@ -278,14 +300,14 @@ const calendarSchema = z.object({
         font: FONT_ENUM.optional(),
         size: z.number().optional(),
         weight: z.number().int().optional(),
-        fill: z.string().optional(),
+        fill: HEX_COLOR.optional(),
       }).strict(),
     )
     .optional()
     .describe("Optional per-day event labels / styling."),
   numberSize: z.number().optional().describe("Day-number font size (default 18)."),
   numberWeight: z.number().int().optional().describe("Day-number weight (default 600)."),
-  fill: z.string().optional().describe("Override gold for the day numbers."),
+  fill: HEX_COLOR.optional().describe("Override gold for the day numbers (hex)."),
 }).strict();
 
 // An AI-owned image placed in a region — the caller supplies the bytes (base64);
@@ -359,7 +381,7 @@ server.tool(
                 "\"TOP 3\"). Themed like headings (colored pill, or label+rule). For a sub-section " +
                 "INSIDE a box region, use a line with `heading` instead.",
             ),
-          labelFill: z.string().optional().describe("Override the label banner color (default: theme)."),
+          labelFill: HEX_COLOR.optional().describe("Override the label banner color (hex; default: theme)."),
           lines: z
             .array(lineSchema)
             .optional()
@@ -378,8 +400,9 @@ server.tool(
                 "hatch for hand-placed <text>/shapes when `lines` placement isn't enough. " +
                 "Composes and merges like any region. Mutually exclusive with " +
                 "`lines`/`calendar`. Stay within the renderer's elements (svg/g/rect/line/" +
-                "path/text/image/circle); others warn. NOTE: an <image href> here is NOT " +
-                "media-resolved — use the `images` array for app-rendered art.",
+                "path/text/image/circle/ellipse/polyline/polygon); others warn. NOTE: an " +
+                "<image href> here is NOT media-resolved — use the `images` array for " +
+                "app-rendered art.",
             ),
           images: z
             .array(imageSchema)
@@ -557,9 +580,11 @@ server.tool(
 // --- create_page ---
 server.tool(
   "create_page",
-  "Create a new shared page (e.g. tomorrow's daily). The template comes from a sibling page " +
-    "in the same chapter when one exists; otherwise it's instantiated from the top-level " +
-    "Templates/ catalogue by id (`template`), so a brand-new/empty chapter can still be seeded. " +
+  "Create a new shared page (e.g. tomorrow's daily). Template resolution: an explicit " +
+    "`template` wins; else the chapter's `.folder.json → defaultTemplate`; a matching " +
+    "sibling page is cloned when one exists (a month chapter's monthly-overview grid is " +
+    "never used for a new day page), else the id is instantiated from the top-level " +
+    "Templates/ catalogue — so a brand-new/empty chapter can still be seeded. " +
     "Writes manifest + layers + media/ and adds it to the chapter order. Prefer letting the " +
     "user create pages in the app; use this only when asked.",
   {
@@ -571,6 +596,10 @@ server.tool(
       ),
     name: z
       .string()
+      .regex(
+        /^[^/\\]+$/,
+        "page name must be a single folder name (no slashes)",
+      )
       .describe('New page folder name — a human date/slug, e.g. "2026-06-14". No slashes.'),
     title: z.string().optional().describe("Display title. Defaults to the folder name."),
     template: z
@@ -595,14 +624,75 @@ server.tool(
   },
 );
 
+// --- set_chapter_theme ---
+server.tool(
+  "set_chapter_theme",
+  "Set a chapter's default theme (its `.folder.json → theme` block) so every page in the " +
+    "chapter inherits one mood — write_underlay applies it as the default (overridable per " +
+    "call) and read_page surfaces it. Use `accent` to give the chapter an explicit colour " +
+    "the named presets don't cover (e.g. lavender to-dos): it tints body text, markers, and " +
+    "banners, floored dark to stay legible on cream. `harmony`/`varietyDial`/`fontPersonality` " +
+    "set the adaptive mood. Only the fields you pass are changed; the rest of the theme (and " +
+    "the chapter's page order) is preserved. The chapter must already exist.",
+  {
+    chapter: z
+      .string()
+      .describe(
+        'Chapter under Shared/. Either the bare name ("2026-06") or the path ' +
+          'get_library returns ("Shared/2026-06") works.',
+      ),
+    accent: z
+      .string()
+      .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "accent must be a hex colour like #7B5EA7")
+      .optional()
+      .describe(
+        "Explicit underlay accent (hex) the whole chapter inherits — tints body text / " +
+          "markers / banners. The way to make e.g. to-dos lavender by default; per-day exact " +
+          "colour is still available via a line's `fill`.",
+      ),
+    harmony: z
+      .enum(["match", "complement", "warm", "cool", "seasonal"])
+      .optional()
+      .describe("Adaptive palette strategy vs the template's own colours (see write_underlay)."),
+    varietyDial: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe("0 steady … 1 surprising — banner count + heading style."),
+    fontPersonality: z
+      .enum(["clean", "handwritten", "editorial"])
+      .optional()
+      .describe("AI-text voice: clean / handwritten / editorial."),
+  },
+  { idempotentHint: true },
+  async ({ chapter, accent, harmony, varietyDial, fontPersonality }) => {
+    try {
+      const root = await requireLibrary();
+      const res = await writeChapterTheme(root, chapter, {
+        accent,
+        harmony,
+        varietyDial,
+        fontPersonality,
+      });
+      return json({ ok: true, ...res });
+    } catch (e: any) {
+      if (e instanceof LibraryMissingError) {
+        return { ...text(e.message), isError: true as const };
+      }
+      return { ...text(`Error: ${e.message}`), isError: true as const };
+    }
+  },
+);
+
 // --- fetch_image ---
 server.tool(
   "fetch_image",
   "Download an image from an HTTPS URL and save it to a local temp file. Returns the path " +
     "to pass as `images[].path` in write_underlay — keeps image bytes off the model context " +
     "and bridges CDN URLs to the filesystem-only Onionskin renderer. Validates PNG/JPEG " +
-    "format and the 2 MB size cap. The temp file lives in /tmp/onionskin-fetch/ and is " +
-    "cleaned up by the OS.",
+    "format and the 2 MB size cap. The file lands in an `onionskin-fetch/` folder under " +
+    "the OS temp dir (cleaned up by the OS); repeated fetches never overwrite each other.",
   {
     url: z.string().describe("HTTPS URL of the image to download."),
     name: z

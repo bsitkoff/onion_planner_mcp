@@ -24,7 +24,8 @@ to render everything beautifully and safely into `ai.svg`. The north-star scenar
 
 - Only ever write `ai.svg` + the manifest's `layers.ai` block (+ `modified`) + the page's
   **`media/ai/`** subfolder (AI-owned art); on create, the new page's own files + chapter
-  `.folder.json`. Never touch ink/stickers/template, the rest of `media/`, or Private.
+  `.folder.json`; via `set_chapter_theme`, the chapter `.folder.json → theme` block. Never
+  touch ink/stickers/template, the rest of `media/`, or Private.
 - All writes through `resolvePageRel` (Shared/ containment) + `atomicWrite`.
 - No app/network API for planner state. Re-read `manifest.size` per page; geometry comes from
   each page's template.
@@ -32,7 +33,105 @@ to render everything beautifully and safely into `ai.svg`. The north-star scenar
 
 ---
 
-## Done (this pass)
+## App-contract sync — 2026-07-02
+
+The app's 2026-07-02 evening audit (its `design/DECISIONS.md` C1–C7 / #42–#48) pinned the
+contract this server writes against. What that settles here:
+
+- **The template/region contract is locked (app E0 closed).** Region attributes
+  (`data-region` / `data-fill` / `data-intent` / `data-list` / `data-cols` / `data-rows` /
+  `data-start-hour` / `data-rows-per-hour`), the 1024×1366 authoring space, and the theme keys
+  are now pinned in the app's `FORMAT.md §2/§4` + `TEMPLATES.md §3`. Our `parseRegions` /
+  `deriveFill` already consume all of it — no code change, just a stable target.
+- **Coordinate space (app C1):** pages are authored at 1024×1366 AND `manifest.size` is
+  authoritative per page — writers MUST read it. Already an invariant here (see above);
+  now it's the app's written rule too.
+- **`theme.accent` is registered (app C4).** The additive `accent` hex this server writes via
+  `set_chapter_theme` is now an official optional `FORMAT.md §4` theme key (underlay body
+  colour, AA-floored on cream, distinct from `chromeAccent`). **Resolves item 2 of
+  `app-bugs-2026-06-30.md`.**
+- **Renderer verifications (app C8, answers to item 3 of `app-bugs-2026-06-30.md`):** the app
+  confirmed its renderer does **NOT clip** a region-overflowing `<image>`
+  (`SVGCanvasRenderer.swift:68-73` draws anywhere) — so our `image_off_page` /
+  `image_overlaps_region` warnings are the only guardrail; keep them prominent. The stacked
+  wrapped-`<text>` baseline check is still owed by the app.
+- **Live-page migration is app-side work (app C5 → its D21):** empty/future day-pages get
+  auto-restamped to the redesigned templates; ink-bearing pages migrate via a one-tap opt-in
+  (the app never re-flows ink). Nothing for this server to do besides keep the legacy region
+  fallbacks until it lands.
+- **Track app C7 (Shared/-gate retirement):** when the app ships its E2 encryption lock and
+  retires the `Shared/`-only visibility gate, **`resolvePageRel` (`src/paths.ts`) must change
+  in the same coordinated release** (the app decision names this file). Nothing to do now —
+  code against the shipped `Shared/`-gate — but this is a standing cross-repo coupling.
+- **`ink.svg` precision (app A5.14):** the app tightened ink coordinates to 2 decimals partly
+  for our `read_ink`. Server-side we now strip `data-stroke` streams from `read_ink` by
+  default (below); if payloads are still heavy, the app's lever is resample density.
+
+### Bug/polish pass (2026-07-02, same audit)
+
+- **`merge` no longer corrupts `ai.svg` when a region nests `<g>`.** The old regex extraction
+  stopped at the first `</g>`, so a raw per-region `svg` fragment containing a nested group
+  produced an unclosed `<g>` after merge — Apple's XMLParser then rejected the document and
+  the gold layer silently vanished on device. `extractRegionGroups` is now depth-aware
+  (`svg.ts`); merging over a prior raw-`svg` document (no region groups to preserve) warns
+  `merge_discarded_raw_svg` instead of silently dropping it.
+- **`create_page` is calendar-aware and deterministic.** Siblings are sorted; a month
+  chapter's monthly-overview page is never picked as the template for a new day page; the
+  chapter's `.folder.json → defaultTemplate` fills in when the caller passes no `template`.
+  Also: a slashed `name` fails validation (it used to corrupt `.folder.json → order`), a
+  brand-new chapter's title is the bare name (was the raw `"Shared/…"` arg), and a corrupt
+  `.folder.json` downgrades the order-append to a warning on an already-created page.
+- **`list_pages` survives bad pages.** One corrupt `manifest.json` used to fail the whole
+  listing; it's now skipped with a `notes` entry naming the page. iCloud-evicted pages
+  (`.manifest.json.icloud` placeholders) surface a pending-download note instead of silently
+  vanishing.
+- **Contract drift closed:** the raw-svg allowlist matches the app renderer
+  (`ellipse`/`polyline`/`polygon` added — they were falsely warned); `weekdays` derives as
+  `shared` (the monthly templates print Sun–Sat themselves; `ai` invited double-printing);
+  `marker: "checkbox"` on a template that prints its own boxes (`todo-*`, cozy/colorful
+  dailies) warns `printed_checkboxes` (the locked SHARED-VISUAL-SPEC §2 rule, previously
+  unenforced); `template.styled` now derives from banners/stickers only (every shipped
+  template prints a microcap, so the old any-`<text>` heuristic marked ALL 27 styled and the
+  "bare → go full" guidance was unreachable); the named presets' text/serif/accent pass
+  through the same cream-legibility floor as the adaptive palette (bright's `#E86A92` day
+  numbers were ~2.9:1 on cream, under AA).
+- **Hardening/polish:** `escapeXml` escapes quotes and all caller-supplied colours are
+  hex-validated at the schema (a stray `"` could previously emit malformed XML — an invisible
+  AI layer); `atomicWrite` sweeps stale `*.tmp-*` droppings (crash leftovers used to sync to
+  the iPad); `composeCalendar` warns `calendar_days_outside_grid` instead of silently dropping
+  days beyond the printed grid; same-name/different-bytes images in one write de-collide with
+  a suffix; `fetch_image` never overwrites an earlier fetch and its description matches the
+  real temp path; `read_ink` strips per-stroke `data-stroke` streams by default
+  (`includeStrokeData` opts into the verbatim file); dead `baselineFor` removed; the
+  `resolveTheme` docblock matches `isAdaptive` (only `harmony`/`varietyDial` select the
+  adaptive palette).
+
+---
+
+## Done (previous passes)
+
+- **Fixes from the 2026-06-30 CoWork struggle** — the nightly run put a habit sticker over the
+  schedule and a surprise sticker over the date, to-dos came out gold not lavender, and long
+  to-do text ran off the panel. Three server changes address the *placement/theming* side (the
+  root cause — the user's live June pages predate the `ainotes` redesign, so a sticker has no
+  AI-owned home — is filed as an app bug + a scoped page migration, see `docs/app-bugs-2026-06-30.md`):
+  - **Image placement warnings.** `composeAiSvg` now computes each image's *absolute* bbox and
+    warns when it leaves the page (`image_off_page` — catches a negative-`y` sticker pushed into
+    the date/chrome band) or overlaps *another* region's box (`image_overlaps_region`, naming the
+    region + its `fill` — catches habit-sticker-over-schedule). The prior check only compared an
+    image to its own region box. Warnings only — never blocks the write. `bboxesOverlap` in `svg.ts`.
+  - **Default-on wrap** for flow-placed body text: a line with no `row`/`time`/`y` in a
+    width-bounded region now wraps to the region width by default (was opt-in `wrap: true`), so a
+    long to-do/note no longer overflows the panel. Explicit `wrap: false` opts out; row/time
+    lines keep single-segment placement. (Generalises the Phase-2.5 "default-on for ainotes" note.)
+  - **`set_chapter_theme` tool (10th tool)** — writes a chapter's `.folder.json → theme` block so
+    a mood is set once and every page inherits it (`write_underlay` already reads it as the
+    default). Adds an explicit **`accent`** hex key (additive to `FORMAT.md §4`) that tints body
+    text / markers / banners — the way to make e.g. lavender to-dos a chapter default, since no
+    named preset is lavender and `harmony` only derives from the (neutral) template.
+    `deriveAccentPalette` in `color.ts` (same cream-legibility floor as `derivePalette`);
+    `writeChapterTheme` in `page.ts`. Invariant extended: the server may also write the chapter
+    theme block (passed keys only; order + other fields preserved).
 
 - **Match the 2026-06 template/region redesign** — brought the server's vocabulary and grid
   handling in line with the app's committed redesign (`../onionskin` `seed.version
@@ -108,7 +207,8 @@ to render everything beautifully and safely into `ai.svg`. The north-star scenar
   `Templates/` + `Stickers/` catalogue, no seeded pages):
   - `create_page` instantiates from the `Templates/<id>/` catalogue when a chapter has no
     sibling to clone (copies a starter `stickers.svg` if the template ships one).
-  - `REGION_DEFAULTS` updated for renamed/new regions (`affirmation → quote`, `header`, `goals`).
+  - `REGION_DEFAULTS` updated for that era's renames (`affirmation → quote`, `header`,
+    `goals`) — names since retired to legacy fallbacks by the 2026-06 redesign (above).
   - `composeCalendar` derives the grid from the box + `data-cols`/`data-rows` (robust to the
     month template now drawing only interior dividers inside a `<rect>`).
   - Smoke test rewritten to seed its own chapters + create pages from the catalogue (52 checks).
@@ -226,6 +326,27 @@ Shape of the work (all server-side, renderer-safe):
 Out of scope here: a `star` *marker primitive* — the contract uses a typographic ★ in the to-do
 text, which needs no new code.
 
+### 2.7 Surface the templates' printed label slots · Effort M · Feasibility HIGH
+The 2026-06 catalogue templates print a dashed **label slot** *inside* each region — a
+`<rect data-region="label-…" data-fill="shared" data-intent="optional section label…">`
+nested in the region's `<g>` (e.g. `daily-minimal`'s slot at region-local `(0,-54) 118×34`).
+`parseRegions` only scans top-level `<g id="region-*">`, so these sub-regions (and their
+fills/intents) are invisible to `read_page` — and the server's own `label` banner hard-codes
+`x=24, baseline y=-12` (`svg.ts`), so its pill half-overlaps the printed dashed slot instead
+of filling it: visible double decoration on every shipped template. Work: parse label
+sub-regions onto `Region` (or a `labelSlot` field), aim the `label` banner at the printed
+slot's geometry when one exists, and keep today's margin placement as the fallback for
+templates without slots.
+
+### 2.8 Read `settings.json → underlayVoice` · Effort S · Feasibility HIGH
+The app's `FORMAT.md §4` publishes a root-level `settings.json` with
+`underlayVoice { name, tone, notes }` (`tone ∈ calm·warm·upbeat·dry·none`; `none` = no
+written note) and explicitly invites an external MCP to read it to personalize the `ainotes`
+voice. No code here touches it, so an orchestrator can't honour the user's chosen tone/name
+through the tool surface. Work: read it defensively (absent/garbled → null) and surface it on
+`get_library` (and/or `read_page`) so the note-writing prompt can use it. Read-only — the
+server never writes `settings.json`.
+
 ---
 
 ## Phase 3 — parked / app-dependent
@@ -236,12 +357,16 @@ text, which needs no new code.
 - **`ai.svg` history / undo** — tension with the "only write `ai.svg` + manifest ai block"
   invariant; the app may own undo. `merge` + `clear_underlay` already cover most "oops" cases.
 - **New template types / regions** — owned by the app; the server follows once templates ship.
-- **Calendar-chapter-aware `create_page`** — the app's `FORMAT.md` defines chapter-level
-  calendar config (`year`, `month`, `defaultTemplate`, `weekdayTemplates`, `deletedDays`) that
-  the server doesn't read today. It doesn't affect the `ai.svg` write contract, so nothing's
-  broken — but a future `create_page` could honor it (pick the right weekday template, respect
-  `deletedDays`, default the template from the chapter) instead of just cloning a sibling /
-  taking an explicit `template`. Revisit when auto-creating dated pages into a calendar chapter.
+- **Calendar-chapter-aware `create_page` — remainder** — `defaultTemplate` is now honoured
+  and the monthly-overview page is never cloned for a day page (2026-07-02 pass, above). Still
+  unread from the chapter's `.folder.json`: **`weekdayTemplates`** (an MCP-created Saturday
+  page should get the declared weekend template) and **`deletedDays`** (recreating a
+  tombstoned day leaves a contradictory state — the server should refuse, or clear the
+  tombstone). Revisit when auto-creating dated pages into a calendar chapter is a real flow;
+  note the app's materializer usually creates day pages first anyway (create-on-write is a
+  safety net beyond its rolling window).
+- **`resolvePageRel` change when the app retires the Shared/ gate (app C7)** — see the
+  2026-07-02 sync section: coordinated release, nothing to do until the app's E2 lock ships.
 - **Live `Shared/` watcher** — app-side; out of server scope.
 - **On-device underlay author (Apple Intelligence)** — already **shipped** in the app as an
   additive, opt-in sibling that coexists with and defers to this MCP (not a replacement). How
@@ -263,6 +388,7 @@ text, which needs no new code.
 
 ## Verification
 
-`npm run smoke` (self-seeding e2e, 118 checks) · `npm run call -- <tool> [args]` (drive a
-tool in a fresh process) · `npx tsc --noEmit`. Keep the smoke test deriving coordinates and
-region names from parsed geometry — the fixtures keep changing.
+`npm run smoke` (self-seeding e2e; the run prints its own pass/fail count — don't pin the
+number here, it grows every pass) · `npm run call -- <tool> [args]` (drive a tool in a fresh
+process) · `npx tsc --noEmit`. Keep the smoke test deriving coordinates and region names from
+parsed geometry — the fixtures keep changing.

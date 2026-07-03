@@ -16,11 +16,12 @@ Before anything else, look at what the template already provides. `read_page` ha
 from the SVG itself (so a user-authored template reads the same as a shipped one). **Match
 its level; don't fight it.**
 
-- **`styled: false`** (a bare scaffold — no labels, banners, or stickers): *go full.* Pick a
+- **`styled: false`** (a bare scaffold — no colour-filled banners and no stickers; a faint
+  microcap label like "TODAY" doesn't count): *go full.* Pick a
   `theme`, add structure and art, and label the bare regions — a **region title** uses the
   region's `label` (a banner drawn in the margin above it); a **sub-section inside a box**
   (Important / Tomorrow) uses a line with `heading`.
-- **`styled: true`** (it prints its own banners/labels, or ships a `stickers.svg`): it did the
+- **`styled: true`** (it prints its own colour-filled banners, or ships a `stickers.svg`): it did the
   decorating. *Fill quietly into the existing slots* — no competing banners, little or no
   added art. And don't fall back to drab gold: **use `template.palette`** (the template's own
   accent colors) for your text/markers so the fill harmonizes with the design.
@@ -135,8 +136,13 @@ the same names on the call to **override** for a single day.
 | `varietyDial` | `0`…`1` | How much the surface rotates: `0` steady (one quiet accent, underline headings) … `1` surprising (fuller palette, banner pills). |
 | `fontPersonality` | `clean` · `handwritten` · `editorial` | AI-text voice only (orthogonal to colour): `clean` = the default Mulish/Newsreader; `handwritten` = Caveat/Fredoka; `editorial` = Newsreader-led. |
 
-So the usual flow is: **the chapter carries the mood** (set once), and you only pass theme params
-when a given day wants to deviate. Derived text is always floored dark enough to read on the
+So the usual flow is: **the chapter carries the mood** (set once — via `set_chapter_theme`,
+which writes the chapter's `.folder.json → theme`), and you only pass theme params when a given
+day wants to deviate. `set_chapter_theme` also takes an explicit **`accent`** hex (e.g.
+`#7B5EA7`) that tints body text / markers / banners for the whole chapter — the way to make e.g.
+lavender to-dos a default, since no named preset is lavender and `harmony` only derives from the
+template's own colours. A per-call `harmony`/preset still overrides it, and per-day exact colour
+is a line's `fill`. Derived text is always floored dark enough to read on the
 cream page — you don't need to check contrast. `harmony` takes precedence over a preset `theme`
 name; `chromeAccent` in the chapter theme is the app's chrome concern and is ignored here.
 
@@ -181,7 +187,10 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
   time into the text — the grid already shows the hour.
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
   dependency.
-- **`wrap: true`** — long notes/previews wrap to the region width instead of overflowing.
+- **`wrap`** — long text wraps to the region width instead of overflowing. **On by default**
+  for a flow-placed body line (no `row`/`time`/`y`) in a width-bounded region, so to-dos/notes
+  don't run off the panel; pass `wrap: false` to force a single segment, or `wrap: true` to
+  wrap a row/time-anchored line.
 - **Raw per-region `svg`** — when `lines` placement isn't enough, give a region a raw `svg`
   string instead; it's emitted verbatim inside that region's group and composes/merges like
   any region (mutually exclusive with `lines`/`calendar`). Stay within the renderer's
@@ -207,9 +216,22 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
 A region's `images` take PNG/JPEG as base64 `data` **or** a local file `path`. For the
 **overnight/automated** build, use `path`: the server reads the file off disk into the
 page's `media/ai/` folder, so a ~1 MB PNG never passes through the model context.
-Constraints: PNG/JPEG only, **≤ 2 MB** (no webp — the app rejects it), tucked into `notes`
-or an empty corner like a sticker. Generation lives outside this server; `fetch_image` is only
-a bridge from an HTTPS image URL to a local temp file for `images[].path`.
+Constraints: PNG/JPEG only, **≤ 2 MB** (no webp — the app rejects it). Generation lives
+outside this server; `fetch_image` is only a bridge from an HTTPS image URL to a local temp
+file for `images[].path`.
+
+**Where a sticker goes — an `ai` region or an empty corner, never over other content.** Put
+art in an **`ai`-fill region** (e.g. `ainotes`, whose intent is *"weather … plus a habit
+sticker or small image"*), or as a *small* corner sticker in an otherwise-empty spot. It must
+**not** cover another region — the `schedule`, the `todo`, the date/header band — or run off the
+page. Two things enforce this: a sticker is placed *region-local*, so size it to fit that
+region's box (`read_page` gives `width`/`height`); and the server now warns
+**`image_overlaps_region`** (the image's absolute box overlaps another region, naming it + its
+`fill`) and **`image_off_page`** (a negative-`y`/oversized image leaves the page — e.g. pushed up
+into the date band). If you see either, the sticker has no legitimate home on that template —
+shrink it, move it into an `ai` region, or drop it, rather than forcing it. `notes` is
+`fill: ink` (handwriting) — at most a *tiny* corner mark there, never a sticker over the writing
+area.
 
 **The sourcing recipe (generate the image however you like, land it on the Mac, embed by path):**
 
@@ -220,9 +242,11 @@ a bridge from an HTTPS image URL to a local temp file for `images[].path`.
    If the source is an HTTPS PNG/JPEG URL, `fetch_image` can download it to
    `/tmp/onionskin-fetch/`; optional `removeBackground` requires `rembg` and may increase file
    size, so the output is re-checked against the same 2 MB cap.
-3. `write_underlay(page, regions=[{ region:"notes",
+3. `write_underlay(page, regions=[{ region:"ainotes",
    images:[{ path:"/tmp/onionskin-img.png", width:140, corner:"bottom-right" }] }])` —
-   `format` is sniffed; the server validates (≤2 MB) and copies it into `media/ai/`.
+   an `ai` region sized to hold it; `format` is sniffed; the server validates (≤2 MB) and
+   copies it into `media/ai/`. Check the result's `warnings` for `image_overlaps_region` /
+   `image_off_page` before `ready`.
 
 `small` (1024px) keeps it well under the 2 MB cap. Never route through
 `convert_to_webp`/`get_generated_webp_images` — onionskin rejects webp (that path is for

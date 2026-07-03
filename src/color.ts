@@ -191,6 +191,32 @@ export function derivePalette(
   return { text, serif, accent, banners };
 }
 
+/**
+ * Build a legibility-shaped palette from a single explicit accent hex (a chapter's
+ * `theme.accent`) — the same flooring as `derivePalette`, but from one chosen colour
+ * instead of a template's swatches. Text/serif are floored dark so they read on cream;
+ * the accent sits a touch lighter; one banner is banded for white pill text. Throws on
+ * a non-hex string (the caller pre-validates or catches to fall back to the default).
+ */
+export function deriveAccentPalette(accent: string): DerivedPalette {
+  const base = hexToHsl(accent);
+  const text = hslToHex(darkenTo({ ...base, s: Math.min(base.s, 0.55) }, TEXT_L_MAX));
+  const serif = hslToHex(darkenTo(base, TEXT_L_MAX));
+  const acc = hslToHex(darkenTo(base, ACCENT_L_MAX));
+  const banner = hslToHex(bandLightness(base, BANNER_L_MIN, BANNER_L_MAX));
+  return { text, serif, accent: acc, banners: [banner] };
+}
+
+/** Floor a hex for use as body/serif text on cream (the same bound as derivePalette). */
+export function floorTextHex(hex: string): string {
+  return hslToHex(darkenTo(hexToHsl(hex), TEXT_L_MAX));
+}
+
+/** Floor a hex for accents — markers, rules, calendar day numbers — on cream. */
+export function floorAccentHex(hex: string): string {
+  return hslToHex(darkenTo(hexToHsl(hex), ACCENT_L_MAX));
+}
+
 /** Nudge a hue toward `target` by `amount` (0–1) along the shorter arc. */
 function blendHue(h: number, target: number, amount: number): number {
   let diff = ((target - h + 540) % 360) - 180; // shortest signed delta

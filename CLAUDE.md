@@ -67,7 +67,7 @@ to exercise the MCP transport itself.
 
 | File | Role |
 |---|---|
-| `src/index.ts` | MCP server + the 9 tools (zod schemas, annotations, error handling). |
+| `src/index.ts` | MCP server + the 10 tools (zod schemas, annotations, error handling). |
 | `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under `Shared/`, no traversal). |
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
@@ -75,12 +75,14 @@ to exercise the MCP transport itself.
 | `src/color.ts` | Pure colour helpers (hex↔HSL) + `harmony` palette derivation from the template's sampled colours, with a lightness floor on derived text so it reads on cream. No deps. |
 | `src/page.ts` | Read a page, **atomic** ai.svg + `media/ai/` image writes (`resolveImages`/`gcOrphanMedia`), manifest status flips, `create_page`. |
 
-The 9 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`, `read_ink`,
-`write_underlay`, `set_underlay_status`, `clear_underlay`, `create_page`, `fetch_image`. Only
-four mutate the library (`write_underlay`, `set_underlay_status`, `clear_underlay`,
-`create_page`); `read_ink` is read-only (the user's handwriting layer — read it before composing
-so you place AI content *around* a `shared` region's handwriting) and `fetch_image` only writes a
-validated download to `/tmp` (HTTPS image → temp file, PNG/JPEG + 2MB check, optional `rembg`
+The 10 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`, `read_ink`,
+`write_underlay`, `set_underlay_status`, `clear_underlay`, `create_page`, `set_chapter_theme`,
+`fetch_image`. Only five mutate the library (`write_underlay`, `set_underlay_status`,
+`clear_underlay`, `create_page`, and `set_chapter_theme` — which writes only the chapter's
+`.folder.json → theme` block); `read_ink` is read-only (the user's handwriting layer — read it before composing
+so you place AI content *around* a `shared` region's handwriting; bulky per-stroke `data-stroke`
+streams are stripped unless `includeStrokeData` is set) and `fetch_image` only writes a
+validated download to the OS temp dir (HTTPS image → temp file, PNG/JPEG + 2MB check, optional `rembg`
 background removal), never the library. `write_underlay` is the workhorse (structured `regions` →
 composed `ai.svg`).
 
@@ -159,17 +161,20 @@ Sunday-start, matching the `SUN…SAT` headers; emits a day number + a
 **tap-to-day** targets (tapping opens that day's daily page); the server only stamps the
 attribute, the app handles navigation. `lines` and `calendar` are mutually exclusive per region.
 
-`create_page` sources its `template.svg` from a **sibling page** in the chapter, or — when
-the chapter is new/empty (no sibling) — from the top-level **`Templates/<id>/` catalogue**
-(passed as `template`; a catalogue template may also ship a starter `stickers.svg`, copied
-on create). A fresh library ships the `Templates/` + `Stickers/` catalogues but no `Shared/`
+`create_page` resolves its template as: explicit `template` arg → the chapter's
+`.folder.json → defaultTemplate` → a **sibling page** in the chapter (sorted; a month
+chapter's monthly-overview grid is never used for a new day page) → the top-level
+**`Templates/<id>/` catalogue** (a catalogue template may also ship a starter
+`stickers.svg`, copied on create). A fresh library ships the `Templates/` + `Stickers/` catalogues but no `Shared/`
 pages, so catalogue instantiation is how the first page in a chapter gets made.
 
 ## Invariants (do not break)
 
 - **Only ever write** `ai.svg`, the manifest's `layers.ai` block (+ top-level `modified`),
   and the page's **`media/ai/`** subfolder (AI-owned images — written + garbage-collected
-  here); on create, the new page's own files + the chapter `.folder.json` order. Never touch
+  here); on create, the new page's own files + the chapter `.folder.json` order; and via
+  `set_chapter_theme`, the chapter `.folder.json → theme` block (only the passed keys, order +
+  other fields preserved). Never touch
   `ink.svg`, `stickers.svg`, `template.svg`, the rest of `media/`, or anything under `Private/`.
 - All writes go through `resolvePageRel` (enforces `Shared/` containment) and `atomicWrite`
   (temp + rename).

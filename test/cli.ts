@@ -23,6 +23,7 @@ import {
   setStatus,
   clearUnderlay,
   createPage,
+  writeChapterTheme,
   fetchImageToTemp,
   type AiStatus,
 } from "../src/page.js";
@@ -45,7 +46,8 @@ async function main() {
       "Usage: npm run call -- <tool> [args]\n" +
         "Tools: get_library | list_pages [chapter] [key=value filters] | read_page <page> [--template] |\n" +
         "  read_ink <page> | write_underlay <page> <json> | set_underlay_status <page> <status> |\n" +
-        "  clear_underlay <page> | create_page <json> | fetch_image <json:{url,name?}>",
+        "  clear_underlay <page> | create_page <json> | set_chapter_theme <chapter> <json> |\n" +
+        "  fetch_image <json:{url,name?}>",
     );
   }
 
@@ -68,8 +70,8 @@ async function main() {
         const key = a.slice(0, eq) as keyof PageFilter;
         (filter as any)[key] = a.slice(eq + 1);
       }
-      const rows = await listPageRows(root, filter);
-      return out({ count: rows.length, pages: rows });
+      const { rows, notes } = await listPageRows(root, filter);
+      return out({ count: rows.length, pages: rows, ...(notes.length ? { notes } : {}) });
     }
 
     case "read_page": {
@@ -79,7 +81,7 @@ async function main() {
 
     case "read_ink": {
       if (!args[0]) throw new Error("read_ink needs a page path.");
-      return out(await readInk(root, args[0]));
+      return out(await readInk(root, args[0], args.includes("--strokes")));
     }
 
     case "write_underlay": {
@@ -124,6 +126,13 @@ async function main() {
     case "create_page": {
       const body = parseJson(args[0], "create options");
       return out({ ok: true, ...(await createPage(root, body)) });
+    }
+
+    case "set_chapter_theme": {
+      // args: <chapter> <json:{accent?,harmony?,varietyDial?,fontPersonality?}>
+      if (!args[0]) throw new Error("set_chapter_theme needs <chapter> <json>.");
+      const body = parseJson(args[1], "theme");
+      return out({ ok: true, ...(await writeChapterTheme(root, args[0], body)) });
     }
 
     case "fetch_image": {

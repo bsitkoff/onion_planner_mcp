@@ -74,7 +74,7 @@ Walk `Documents/Shared/**`. Any directory containing a `manifest.json` is a page
 ```json
 {
   "title": "Friday",
-  "template": "daily",
+  "template": "daily-minimal",
   "size": [1024, 1366],
   "modified": "2026-06-13T09:14:22Z",
   "layers": {

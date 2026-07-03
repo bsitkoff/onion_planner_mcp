@@ -1,5 +1,11 @@
 import type { Region } from "./template.js";
-import { derivePalette, type Harmony } from "./color.js";
+import {
+  derivePalette,
+  deriveAccentPalette,
+  floorTextHex,
+  floorAccentHex,
+  type Harmony,
+} from "./color.js";
 
 /**
  * The single canonical Onionskin gold, per the contract — one value shared by the
@@ -25,6 +31,9 @@ export const RAW_SVG_ALLOWED_ELEMENTS = new Set([
   "text",
   "image",
   "circle",
+  "ellipse",
+  "polyline",
+  "polygon",
 ]);
 
 /** Element names used in `svg` that fall outside the renderer's set (sorted, unique). */
@@ -71,6 +80,21 @@ export interface Theme {
   fonts?: ThemeFonts;
 }
 
+/**
+ * Floor a preset's text/serif/accent to the same cream-legibility bounds the adaptive
+ * palette derives under (the contract's AA rule applies to every path, not just the
+ * derived one). Banners are untouched — they sit behind white pill text, a different
+ * bound. The gold preset skips this: gold is the one canonical value, tuned by hand.
+ */
+function legible(t: Theme): Theme {
+  return {
+    ...t,
+    text: floorTextHex(t.text),
+    serif: floorTextHex(t.serif),
+    accent: floorAccentHex(t.accent),
+  };
+}
+
 export const THEMES: Record<string, Theme> = {
   // The legacy monochrome default — unchanged output when no theme is chosen.
   gold: {
@@ -78,22 +102,22 @@ export const THEMES: Record<string, Theme> = {
     bannerText: "#FFFFFF", banners: [GOLD], headingStyle: "underline",
   },
   // Lively, saturated — closest to a colourful planner spread.
-  bright: {
+  bright: legible({
     text: "#3A3A3A", serif: "#8E6FC9", accent: "#E86A92",
     bannerText: "#FFFFFF", banners: ["#3FB6A8", "#F2884B", "#E86A92", "#8E6FC9"],
     headingStyle: "banner",
-  },
+  }),
   // Softer, hand-painted warmth.
-  cozy: {
+  cozy: legible({
     text: "#4A4A4A", serif: "#7E5A78", accent: "#C56B6B",
     bannerText: "#FFFFFF", banners: ["#C56B6B", "#7C8A5A", "#9C7C1A", "#7E5A78"],
     headingStyle: "banner",
-  },
+  }),
   // Restrained — one or two accents, quiet labels, lots of whitespace.
-  editorial: {
+  editorial: legible({
     text: "#33312E", serif: "#B5654A", accent: "#B5654A",
     bannerText: "#FFFFFF", banners: ["#B5654A", "#9A9081"], headingStyle: "underline",
-  },
+  }),
 };
 
 export const THEME_NAMES = Object.keys(THEMES);
@@ -129,6 +153,13 @@ export interface ThemeInput {
   fontPersonality?: FontPersonality;
   /** Template colours to harmonise to (most-saturated first). */
   templatePalette?: string[];
+  /**
+   * An explicit underlay accent (hex) from the chapter's `theme.accent` — tints body
+   * text / markers / banners so a chapter can carry a colour (e.g. lavender) the named
+   * presets don't. Applied when no adaptive `harmony` and no explicit preset `name` is
+   * given (harmony/preset win); floored dark for cream via `deriveAccentPalette`.
+   */
+  accent?: string;
   /** App-only chrome accent; accepted for contract-completeness, not used here. */
   chromeAccent?: string;
   /** Current month (1–12) for `seasonal` harmony; defaults to the real month. */
@@ -152,11 +183,11 @@ export interface ResolvedTheme {
 }
 
 /**
- * Resolve a theme. Precedence: an **adaptive** param block (any of
- * `harmony`/`varietyDial`/`fontPersonality`/`templatePalette`) derives a palette from
- * the template's colours; otherwise a named **preset**; otherwise the gold default.
- * `fontPersonality` always layers its fonts on top of whichever palette path is taken.
- * A string is treated as a bare preset name (back-compat).
+ * Resolve a theme. Precedence: an **adaptive** param block (`harmony` and/or
+ * `varietyDial` — see `isAdaptive`) derives a palette from the template's colours;
+ * otherwise a named **preset**; otherwise a chapter `accent`; otherwise the gold
+ * default. `fontPersonality` always layers its fonts on top of whichever palette
+ * path is taken (it never selects one). A string is a bare preset name (back-compat).
  */
 export function resolveTheme(input?: ThemeInput | string): ResolvedTheme {
   const t: ThemeInput = typeof input === "string" ? { name: input } : input ?? {};
@@ -183,8 +214,27 @@ export function resolveTheme(input?: ThemeInput | string): ResolvedTheme {
       // A steady day stays quiet (underline headings); past the midpoint, banner pills.
       headingStyle: variety < 0.4 ? "underline" : "banner",
     };
+  } else if (t.name && THEMES[t.name]) {
+    // An explicit preset name wins over a chapter accent (a per-day override).
+    theme = THEMES[t.name];
+  } else if (t.accent) {
+    // A chapter's explicit accent tints an otherwise-default page (e.g. lavender todos).
+    try {
+      const p = deriveAccentPalette(t.accent);
+      theme = {
+        text: p.text,
+        serif: p.serif,
+        accent: p.accent,
+        bannerText: "#FFFFFF",
+        banners: p.banners,
+        headingStyle: "underline",
+      };
+    } catch {
+      warnings.push(`theme: accent "${t.accent}" is not a hex colour — used the gold default.`);
+      theme = THEMES.gold;
+    }
   } else {
-    theme = (t.name && THEMES[t.name]) || THEMES.gold;
+    theme = THEMES.gold;
   }
 
   if (t.fontPersonality) {
@@ -270,7 +320,9 @@ export interface LineInput {
   /**
    * Wrap the text to the region width instead of overflowing. Continuation
    * segments stack just below the baseline (they do NOT consume the next ruled
-   * row, so a caller's row→content mapping stays intact).
+   * row, so a caller's row→content mapping stays intact). **Defaults ON** for a
+   * flow-placed body line in a width-bounded region (no `row`/`time`/`y`); set
+   * `false` to force a single segment, or `true` to wrap a row/time-anchored line.
    */
   wrap?: boolean;
   /**
@@ -390,10 +442,15 @@ export interface RegionInput {
 }
 
 function escapeXml(s: string): string {
+  // Quotes too — escapeXml also guards attribute values (font-family, href), where
+  // an unescaped `"` would end the attribute and leave malformed XML the app's
+  // parser rejects wholesale (an invisible AI layer).
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 /**
@@ -553,6 +610,19 @@ export function imageDims(buf: Uint8Array, format: "png" | "jpeg"): ImageDims {
   throw new Error("could not read JPEG dimensions.");
 }
 
+/** An axis-aligned rectangle, for overlap tests. */
+interface Bbox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** True when two rectangles overlap by more than a shared edge (touching is OK). */
+function bboxesOverlap(a: Bbox, b: Bbox): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
 /** Region-local placement of an image from its corner/margin (or explicit x/y). */
 function placeImage(region: Region, img: ImageInput): { x: number; y: number } {
   if (img.x !== undefined || img.y !== undefined) {
@@ -584,35 +654,6 @@ function rowOffset(region: Region): number {
   const r = region.ruledLines;
   const pitch = r.length >= 2 ? r[1] - r[0] : 40;
   return Math.round(pitch * 0.4);
-}
-
-function baselineFor(
-  region: Region,
-  line: LineInput,
-  autoIndex: number,
-  size: number,
-  lineCount: number,
-): number {
-  if (line.y !== undefined) return line.y;
-
-  const row = line.row !== undefined ? Math.max(0, Math.floor(line.row)) : autoIndex;
-
-  if (region.ruledLines.length > 0) {
-    const idx = Math.min(row, region.ruledLines.length - 1);
-    const localRuled = region.ruledLines[idx] - region.y;
-    return localRuled + rowOffset(region);
-  }
-
-  // No ruled lines (e.g. ainotes, an unruled box): stack by line height...
-  const lineHeight = Math.round(size * 1.5);
-  const topPad = Math.round(size * 1.2);
-  // ...but center a region's single auto-placed line vertically (nice for a one-line
-  // ainotes message). Only when it's truly the sole line — otherwise a multi-line
-  // todo would center line 0 and stack the rest from the top, overlapping it.
-  if (line.row === undefined && lineCount === 1 && region.height) {
-    return Math.round(region.height / 2 + size / 3);
-  }
-  return topPad + row * lineHeight;
 }
 
 /**
@@ -695,7 +736,12 @@ function gridBounds(
  * in LOCAL coordinates (the caller wraps them in the region's translate group, so
  * we subtract the region origin from the absolute grid boundaries).
  */
-function composeCalendar(region: Region, spec: CalendarSpec, theme: Theme): string[] {
+function composeCalendar(
+  region: Region,
+  spec: CalendarSpec,
+  theme: Theme,
+  onDroppedDays?: (days: number[]) => void,
+): string[] {
   const m = /^(\d{4})-(\d{2})$/.exec(spec.month.trim());
   if (!m) throw new Error(`calendar.month must be "YYYY-MM", got "${spec.month}".`);
   const year = Number(m[1]);
@@ -728,11 +774,17 @@ function composeCalendar(region: Region, spec: CalendarSpec, theme: Theme): stri
   const byDay = new Map((spec.days ?? []).map((d) => [d.day, d]));
 
   const parts: string[] = [];
+  const droppedDays: number[] = [];
   for (let day = 1; day <= daysInMonth; day++) {
     const index = firstDow + day - 1;
     const col = index % 7;
     const row = Math.floor(index / 7);
-    if (col >= nCols || row >= nRows) continue; // outside the printed grid; skip defensively
+    if (col >= nCols || row >= nRows) {
+      // Outside the printed grid (e.g. a 5-row grid on a 6-week month) — skip, but
+      // tell the caller which days went missing rather than losing them silently.
+      droppedDays.push(day);
+      continue;
+    }
 
     const left = Math.round(cols[col] - region.x);
     const top = Math.round(rows[row] - region.y);
@@ -765,6 +817,7 @@ function composeCalendar(region: Region, spec: CalendarSpec, theme: Theme): stri
       );
     }
   }
+  if (droppedDays.length > 0) onDroppedDays?.(droppedDays);
   return parts;
 }
 
@@ -787,16 +840,27 @@ export interface ComposeResult {
 }
 
 /**
+ * Templates that print their own to-do checkboxes (the locked visual rule in
+ * `docs/SHARED-VISUAL-SPEC.md` §2): on these, an authored `marker: "checkbox"`
+ * draws a second box beside the printed one. Matched on the template id — a
+ * heuristic until printed-box detection reads the geometry itself.
+ */
+const PRINTS_OWN_CHECKBOXES_RE = /^todo-|^daily(-weekend)?-(cozy|colorful)$/;
+
+/**
  * Compose a complete ai.svg document from structured region input, positioning
  * each line using the parsed region geometry. Throws if a region name is unknown.
  * Returns the SVG plus non-fatal `warnings` (estimated overflow, more lines than
  * ruled rows) so an unattended caller can catch a bad layout before shipping it.
+ * `templateName` (the page's `manifest.template`) is advisory — it powers
+ * template-specific warnings like the printed-checkbox rule.
  */
 export function composeAiSvg(
   size: [number, number],
   inputs: RegionInput[],
   regions: Region[],
   themeInput?: ThemeInput | string,
+  templateName?: string,
 ): ComposeResult {
   const { theme, warnings: themeWarnings } = resolveTheme(themeInput);
   const byName = new Map(regions.map((r) => [r.name, r]));
@@ -906,6 +970,43 @@ export function composeAiSvg(
           region.name,
         );
       }
+      // Absolute placement (region origin + local offset) for page/cross-region checks.
+      const absX = region.x + x;
+      const absY = region.y + y;
+      const iw = img.width;
+      const ih = img.height;
+      // Off the page: catches a negative-y sticker pushed up into the date/chrome band.
+      const off: string[] = [];
+      if (absX < 0) off.push(`left (x=${Math.round(absX)})`);
+      if (absY < 0) off.push(`top (y=${Math.round(absY)})`);
+      if (absX + iw > w) off.push(`right (x=${Math.round(absX + iw)} > ${w})`);
+      if (absY + ih > h) off.push(`bottom (y=${Math.round(absY + ih)} > ${h})`);
+      if (off.length > 0) {
+        warn(
+          "image_off_page",
+          `region "${region.name}": image (${iw}×${ih}) extends past the page ` +
+            `${w}×${h} — ${off.join(", ")}.`,
+          "warning",
+          region.name,
+        );
+      }
+      // Cross-region overlap: catches a sticker dropped on top of another region's
+      // content (e.g. the habit sticker over the schedule, or over the date header).
+      // Names the overlapped region + its fill so an unattended caller can react.
+      const imgBox: Bbox = { x: absX, y: absY, w: iw, h: ih };
+      for (const other of regions) {
+        if (other.name === region.name) continue;
+        if (other.width === null || other.height === null) continue;
+        if (bboxesOverlap(imgBox, { x: other.x, y: other.y, w: other.width, h: other.height })) {
+          warn(
+            "image_overlaps_region",
+            `region "${region.name}": image (${iw}×${ih}) overlaps region ` +
+              `"${other.name}" (${other.fill}) — a sticker should not cover another region.`,
+            "warning",
+            region.name,
+          );
+        }
+      }
     }
     if (input.svg !== undefined) {
       // Raw fragment, emitted verbatim inside the region group (escape hatch).
@@ -924,7 +1025,17 @@ export function composeAiSvg(
         parts.push(`    ${frag}`);
       }
     } else if (input.calendar) {
-      parts.push(...composeCalendar(region, input.calendar, theme));
+      parts.push(
+        ...composeCalendar(region, input.calendar, theme, (days) => {
+          warn(
+            "calendar_days_outside_grid",
+            `region "${region.name}": day(s) ${days.join(", ")} fall outside the printed ` +
+              `${region.cols ?? "?"}×${region.rows ?? "?"} grid and were not drawn.`,
+            "warning",
+            region.name,
+          );
+        }),
+      );
     } else {
       const def = REGION_DEFAULTS[region.name] ?? FALLBACK_DEFAULT;
       const lines = input.lines ?? [];
@@ -941,6 +1052,23 @@ export function composeAiSvg(
             region.name,
           );
         }
+      }
+      // The locked visual rule: where the template prints its own checkboxes, the
+      // author writes text only — a `marker: "checkbox"` would draw a second box.
+      if (
+        templateName &&
+        PRINTS_OWN_CHECKBOXES_RE.test(templateName) &&
+        (region.name === "todo" || region.name.startsWith("list")) &&
+        lines.some((l) => l.marker === "checkbox")
+      ) {
+        warn(
+          "printed_checkboxes",
+          `region "${region.name}": template "${templateName}" prints its own ` +
+            `checkboxes — write text only (drop \`marker: "checkbox"\`) to avoid ` +
+            `double boxes.`,
+          "warning",
+          region.name,
+        );
       }
       // Body text uses the theme's ink; the ainotes box uses its serif colour
       // (quote/affirmation are legacy aliases for it).
@@ -1064,10 +1192,18 @@ export function composeAiSvg(
           x += m.advance;
         }
 
-        // Wrap to the region width when asked; otherwise a single segment.
+        // Wrap defaults ON for flow-placed body text in a width-bounded region (so a
+        // long to-do/note doesn't run off the panel); an explicit `wrap` still wins,
+        // and a row/time/y-anchored line keeps today's single-segment placement.
+        const effWrap =
+          line.wrap ??
+          (region.width !== null &&
+            effLine.row === undefined &&
+            effLine.y === undefined &&
+            line.time === undefined);
         const maxWidth = region.width !== null ? region.width - x : null;
         const segments =
-          line.wrap && maxWidth !== null && maxWidth > 0
+          effWrap && maxWidth !== null && maxWidth > 0
             ? wrapText(line.text, font, size, maxWidth)
             : [line.text];
         const subPitch = Math.round(size * 1.3);
@@ -1080,7 +1216,7 @@ export function composeAiSvg(
         });
 
         if (region.width !== null) {
-          if (!line.wrap) {
+          if (!effWrap) {
             // Warn if the (unwrapped) text likely runs past the right edge.
             const end = x + estimateTextWidth(line.text, font, size);
             if (end > region.width) {
@@ -1144,21 +1280,32 @@ function truncate(s: string, max = 32): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
+/** mergeRegions output: the merged document + whether unmergeable content was lost. */
+export interface MergeResult {
+  svg: string;
+  /**
+   * True when the existing ai.svg had content but no `data-region` groups to carry
+   * over (e.g. a prior raw-`svg` write) — the merge silently starts from just the
+   * fresh regions, so the caller should surface a warning.
+   */
+  discardedExisting: boolean;
+}
+
 /**
  * Merge freshly composed region groups into an existing ai.svg: groups whose
  * `data-region` matches are replaced, every other group is preserved **verbatim**,
  * and genuinely new regions are appended. This is write_underlay's `merge` mode —
  * an update to one region (e.g. the schedule) leaves the rest of the page intact.
  *
- * Relies on the flat structure composeAiSvg emits (one non-nested
- * `<g data-region="…">` per region); raw hand-authored ai.svg with nested groups
- * inside a region is not a supported merge input.
+ * Only top-level `<g data-region="…">` groups are merge units; content outside them
+ * (a raw hand-authored document with no region groups) can't be carried over —
+ * that case is reported via `discardedExisting`.
  */
 export function mergeRegions(
   existingSvg: string | null,
   composed: string,
   size: [number, number],
-): string {
+): MergeResult {
   const [w, h] = size;
   const existing = extractRegionGroups(existingSvg ?? "");
   const fresh = extractRegionGroups(composed);
@@ -1174,12 +1321,22 @@ export function mergeRegions(
     if (group) parts.push("  " + group.trim());
   }
   parts.push(`</svg>`);
-  return parts.join("\n") + "\n";
+
+  // Existing content with no region groups (a prior raw write) can't be merged —
+  // detect it so the caller can warn instead of dropping it silently.
+  const inner = (existingSvg ?? "")
+    .replace(/<svg\b[^>]*>/, "")
+    .replace(/<\/svg>\s*$/, "")
+    .trim();
+  const discardedExisting = inner.length > 0 && existing.byName.size === 0;
+
+  return { svg: parts.join("\n") + "\n", discardedExisting };
 }
 
-// One non-nested `<g … data-region="NAME"> … </g>` block. Region groups never
-// nest other <g>, so the first </g> is the correct close (non-greedy is safe).
-const REGION_GROUP_RE = /<g\b[^>]*\bdata-region="([^"]+)"[^>]*>[\s\S]*?<\/g>/g;
+// Opening tag of a region group. The group's extent is found by walking <g> nesting
+// depth from here — a region's raw `svg` fragment may legitimately nest <g> elements,
+// so "first </g>" is NOT a safe close (it corrupts the document; see extractRegionGroups).
+const REGION_OPEN_RE = /<g\b[^>]*\bdata-region="([^"]+)"[^>]*>/g;
 
 function extractRegionGroups(svg: string): {
   order: string[];
@@ -1187,12 +1344,34 @@ function extractRegionGroups(svg: string): {
 } {
   const byName = new Map<string, string>();
   const order: string[] = [];
-  REGION_GROUP_RE.lastIndex = 0;
+  REGION_OPEN_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = REGION_GROUP_RE.exec(svg)) !== null) {
+  while ((m = REGION_OPEN_RE.exec(svg)) !== null) {
     const name = m[1];
+    let end: number;
+    if (m[0].endsWith("/>")) {
+      end = REGION_OPEN_RE.lastIndex; // self-closing region group (empty)
+    } else {
+      // Depth-aware scan for the matching </g>: nested <g> opens (from raw fragments)
+      // increment, self-closing <g/> don't, </g> decrements.
+      const tagRe = /<g\b[^>]*?(\/?)>|<\/g\s*>/g;
+      tagRe.lastIndex = REGION_OPEN_RE.lastIndex;
+      let depth = 1;
+      end = -1;
+      let t: RegExpExecArray | null;
+      while ((t = tagRe.exec(svg)) !== null) {
+        if (t[0].startsWith("</")) depth--;
+        else if (t[1] !== "/") depth++;
+        if (depth === 0) {
+          end = tagRe.lastIndex;
+          break;
+        }
+      }
+      if (end === -1) continue; // unbalanced group — skip it rather than corrupt the merge
+    }
     if (!byName.has(name)) order.push(name);
-    byName.set(name, m[0]); // last write wins for a duplicated name
+    byName.set(name, svg.slice(m.index, end)); // last write wins for a duplicated name
+    REGION_OPEN_RE.lastIndex = end; // don't re-match a nested data-region inside this group
   }
   return { order, byName };
 }

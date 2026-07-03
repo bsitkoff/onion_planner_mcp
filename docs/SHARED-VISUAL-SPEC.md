@@ -124,6 +124,23 @@ to the on-device composer.
 > is independent of the template's *style* (§0). The orchestrator picks the theme to fit the day,
 > or sets it once on the chapter (see `AUTHORING.md`).
 
+## 7. Washi-tape schedule blocks — MCP only
+
+> **Resolved — MCP-only decoration.** The on-device sibling draws no duration blocks; this is
+> underlay-authored, matching the app renderer's confirmed support for `rx` + `fill-opacity`.
+
+A schedule line with `time` + (`endTime` or `durationMin`) draws a block instead of a single
+baseline: rounded `<rect rx="6">` (reusing §5's one corner-radius convention) with
+`fill-opacity` (default **0.22**, a translucent "tape" tint) instead of a solid fill — the only
+element in this file to use `fill-opacity` rather than `opacity`. Tint defaults to the chapter's
+`theme.accent` (the same per-line-override pattern as a label's `labelFill` over
+`theme.banners[...]`), overridable per-block via `blockFill`. The label text sits vertically
+centred inside the block at `y1 + height − round(height × 0.28)` — the same centring ratio as
+§5's label-slot text. Left inset = the region's `xPad`; right edge = `region.width − xPad`
+(mirroring the underline-heading rule's right-edge convention). A span partly outside the
+region's ruled grid is pinned to fit and still drawn (warns `washi_block_clamped`); a
+zero/negative-duration span isn't drawn at all (warns `washi_block_zero_duration`).
+
 ## Resolved decisions (consolidated)
 
 1. **Gold:** `#9C7C1A` is canonical everywhere; `#C9A227` retired. (§0)
@@ -140,3 +157,6 @@ to the on-device composer.
    `write_underlay` reads the chapter theme as default + accepts per-call overrides. MCP picks the
    per-day theme; on-device renders one quiet/matched style. Template *style* and underlay *theme*
    stay independent axes. Underlay gold stays the single `#9C7C1A` (no fill/text split). (§0, §6)
+8. **Washi-tape schedule blocks:** MCP-only, drawn via `time`+`endTime`/`durationMin`; tint
+   defaults to `theme.accent`, `fill-opacity` default 0.22, `rx 6` reusing §5's corner radius;
+   overflow clamps and warns rather than distorting the grid. (§7)

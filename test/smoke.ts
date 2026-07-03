@@ -324,6 +324,71 @@ async function main() {
   } catch { badTime = true; }
   check("rejects malformed time string", badTime);
 
+  console.log("\nwashi-tape duration blocks (time + endTime/durationMin; dry-run)");
+  const washi = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "Team sync", time: "09:00", endTime: "10:00" }] }],
+  });
+  const washiGroup = regionGroup(washi.aiSvg, "schedule") ?? "";
+  const rectMatch = washiGroup.match(/<rect[^>]*fill-opacity="[\d.]+"[^>]*\/>/);
+  check("duration block draws a fill-opacity rect", !!rectMatch, washiGroup.slice(0, 300));
+  const yAttr = Number(rectMatch?.[0].match(/y="(-?\d+)"/)?.[1]);
+  const hAttr = Number(rectMatch?.[0].match(/height="(\d+)"/)?.[1]);
+  // 09:00 -> row 2, 10:00 -> row 3, given the schedule's own startHour 7 / rowsPerHour 1.
+  check("block y matches the start row (09:00 -> row 2)", yAttr === Math.round(rl[2]), `y=${yAttr} expected=${Math.round(rl[2])}`);
+  check("block height spans start->end row (10:00 -> row 3)", yAttr + hAttr === Math.round(rl[3]), `y+h=${yAttr + hAttr} expected=${Math.round(rl[3])}`);
+  check("block reuses the rx=6 corner-radius convention", rectMatch![0].includes('rx="6"'), rectMatch?.[0]);
+  check("block draws the label text inside it", washiGroup.includes(">Team sync</text>"), washiGroup.slice(0, 300));
+
+  const zeroDur = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "Oops", time: "10:00", endTime: "09:00" }] }],
+  });
+  check(
+    "zero/negative duration warns and skips drawing",
+    zeroDur.warningDetails.some((w) => w.code === "washi_block_zero_duration") && !(zeroDur.aiSvg ?? "").includes("Oops"),
+    JSON.stringify(zeroDur.warningDetails),
+  );
+
+  const overrun = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "Late", time: "23:00", endTime: "23:59" }] }],
+  });
+  check("block past the grid clamps and warns", overrun.warningDetails.some((w) => w.code === "washi_block_clamped"), JSON.stringify(overrun.warningDetails));
+
+  const dangling = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "No start", endTime: "10:00" }] }],
+  });
+  check("endTime without time warns, doesn't throw", dangling.warningDetails.some((w) => w.code === "washi_block_missing_start"), JSON.stringify(dangling.warningDetails));
+
+  const durMin = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    // 60 min at the schedule's own rowsPerHour (1) crosses exactly one ruled row.
+    regions: [{ region: "schedule", lines: [{ text: "Standup", time: "09:00", durationMin: 60 }] }],
+  });
+  check(
+    "durationMin computes an end time internally, no warnings",
+    !durMin.warningDetails.some((w) => w.code.startsWith("washi_block")),
+    JSON.stringify(durMin.warningDetails),
+  );
+  check("durationMin block draws a fill-opacity rect", /<rect[^>]*fill-opacity="[\d.]+"/.test(regionGroup(durMin.aiSvg, "schedule") ?? ""));
+
+  // endTime + durationMin together are rejected at the MCP schema (index.ts .refine,
+  // mirroring marker/icon) — not reachable through this direct compose path. At the
+  // compose layer itself, confirm `endTime` takes precedence (a 15-min durationMin
+  // from 09:00 would round to the SAME row and warn zero-duration; endTime "10:00"
+  // must win instead, drawing a real block with no such warning).
+  const bothSet = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "x", time: "09:00", endTime: "10:00", durationMin: 15 } as any] }],
+  });
+  check(
+    "endTime takes precedence over durationMin if both are set on one line",
+    !bothSet.warningDetails.some((w) => w.code === "washi_block_zero_duration"),
+    JSON.stringify(bothSet.warningDetails),
+  );
+
   console.log("\nauto text-wrap (wrap long lines to region width; dry-run)");
   const longLine = "This is a very long schedule entry that will not fit on one line and must wrap";
   const wrapped = await writeUnderlay(root, daily, {
@@ -784,6 +849,31 @@ async function main() {
   await fs.writeFile(monthlyFolderFile, JSON.stringify(monthlyFolder, null, 2) + "\n");
   const dayInMonth2 = await createPage(root, { chapter: "Monthly", name: "2026-02-11", title: "Feb 11" });
   check("sibling clone skips the monthly-overview page", dayInMonth2.template === "daily-minimal" && dayInMonth2.clonedFrom !== "Shared/Monthly/2026-02", `${dayInMonth2.template} from ${dayInMonth2.clonedFrom}`);
+
+  console.log("\ncreate_page honors weekdayTemplates + deletedDays");
+  const dailyFolderFile2 = path.join(root, "Shared", "Daily", ".folder.json");
+  const dailyFolder2 = JSON.parse(await fs.readFile(dailyFolderFile2, "utf8").catch(() => "{}"));
+  dailyFolder2.weekdayTemplates = { sat: "todo-minimal" };
+  await fs.writeFile(dailyFolderFile2, JSON.stringify(dailyFolder2, null, 2) + "\n");
+  // 2026-06-27 is a Saturday.
+  const satPage = await createPage(root, { chapter: "Daily", name: "2026-06-27", title: "Sat" });
+  check("Saturday page picks up weekdayTemplates.sat", satPage.template === "todo-minimal", satPage.template);
+  // 2026-06-29 is a Monday — unaffected, falls through to the sibling/default resolution.
+  const monPage = await createPage(root, { chapter: "Daily", name: "2026-06-29", title: "Mon" });
+  check("non-weekend day ignores weekdayTemplates", monPage.template !== "todo-minimal", monPage.template);
+  dailyFolder2.deletedDays = ["2026-06-30"];
+  await fs.writeFile(dailyFolderFile2, JSON.stringify(dailyFolder2, null, 2) + "\n");
+  let refusedTombstone = false;
+  try {
+    await createPage(root, { chapter: "Daily", name: "2026-06-30", title: "Nope" });
+  } catch {
+    refusedTombstone = true;
+  }
+  check("create_page refuses a tombstoned deletedDays entry", refusedTombstone);
+  const clearedDay = await createPage(root, { chapter: "Daily", name: "2026-06-30", title: "Cleared", clearDeleted: true });
+  check("clearDeleted: true recreates the tombstoned day", clearedDay.page.endsWith("2026-06-30"), clearedDay.page);
+  const foldedAfterClear = JSON.parse(await fs.readFile(dailyFolderFile2, "utf8"));
+  check("clearDeleted splices the entry out of deletedDays", !foldedAfterClear.deletedDays.includes("2026-06-30"), JSON.stringify(foldedAfterClear.deletedDays));
 
   console.log("\nprinted-checkbox templates warn on a redundant checkbox marker");
   const todoPage = "Shared/Daily/todo-day";

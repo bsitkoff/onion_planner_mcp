@@ -186,6 +186,12 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
   surfaced as `startHour`/`rowsPerHour` on the region from `read_page`. Pass a per-call
   `startHour`/`rowsPerHour` only to override. Don't hand-compute `row`/`y`, and don't bake the
   time into the text — the grid already shows the hour.
+- **Duration blocks (washi tape)** — give a schedule line both `time` and (`endTime` or
+  `durationMin`) to draw a soft, rounded, tinted block spanning that span on the grid instead of
+  a single baseline — the "washi tape over the hours" look, for a meeting with a real start and
+  end rather than a point-in-time note. Tint defaults to the theme's accent colour; override
+  per-block with `blockFill`/`blockOpacity`. `endTime`/`durationMin` without a `time` start is
+  ignored (mirrors how `marker`/`wrap` are ignored on a heading).
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
   dependency.
 - **`icon`** — a leading Phosphor glyph (font-rendered) instead of a marker; mutually exclusive

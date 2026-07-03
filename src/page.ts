@@ -745,6 +745,30 @@ function isMonthlyOverview(folderName: string, manifest: Manifest): boolean {
   return /^\d{4}-\d{2}$/.test(folderName) || /monthly/i.test(manifest.template ?? "");
 }
 
+const WEEKDAY_ABBR = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+
+/**
+ * Resolve a per-weekday template override from the chapter's declared
+ * `weekdayTemplates` (FORMAT.md §4, e.g. `{ sat: "weekend", sun: "weekend" }`). `name`
+ * is only parsed as `YYYY-MM-DD`; any other shape (a slug, a duplicate-suffix sibling
+ * name) returns undefined rather than throwing — this is advisory, not a contract on
+ * `name`'s format.
+ */
+function weekdayTemplateFor(
+  name: string,
+  weekdayTemplates: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!weekdayTemplates) return undefined;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(name);
+  if (!m) return undefined;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  // Guard an invalid calendar date (e.g. "2026-02-30") rolling over silently.
+  if (d.getMonth() !== Number(m[2]) - 1) return undefined;
+  const abbr = WEEKDAY_ABBR[d.getDay()];
+  const v = weekdayTemplates[abbr];
+  return typeof v === "string" ? v : undefined;
+}
+
 /**
  * Find a sibling page in the chapter to clone a template from, if any.
  *
@@ -788,6 +812,36 @@ async function findSiblingTemplate(
   return overviewFallback;
 }
 
+/**
+ * Refuse to recreate a day the user explicitly deleted (chapter `.folder.json →
+ * deletedDays`), unless the caller opts in via `clearDeleted` — silently resurrecting
+ * a tombstoned day is the more surprising default for an unattended caller. When
+ * `clearDeleted` is set, splices the entry out of `deletedDays` and rewrites
+ * `.folder.json` (mutate-then-rewrite, same pattern as the order-append below).
+ */
+async function checkNotDeleted(
+  chapterAbs: string,
+  folderCfg: Record<string, any> | null,
+  name: string,
+  clearDeleted: boolean | undefined,
+): Promise<void> {
+  const deletedDays = Array.isArray(folderCfg?.deletedDays) ? (folderCfg!.deletedDays as unknown[]) : [];
+  if (!deletedDays.includes(name)) return;
+  if (!clearDeleted) {
+    throw new Error(
+      `"${name}" is tombstoned in this chapter's deletedDays (the user removed it) — ` +
+        `pass \`clearDeleted: true\` to recreate it anyway.`,
+    );
+  }
+  const folderFile = path.join(chapterAbs, ".folder.json");
+  const existing = await readIfExists(folderFile);
+  const folder = existing ? (JSON.parse(existing) as any) : {};
+  folder.deletedDays = (Array.isArray(folder.deletedDays) ? folder.deletedDays : []).filter(
+    (d: unknown) => d !== name,
+  );
+  await atomicWrite(folderFile, JSON.stringify(folder, null, 2) + "\n");
+}
+
 /** Load a template from the top-level `Templates/<id>/` catalogue, if it exists. */
 async function loadCatalogueTemplate(
   root: string,
@@ -822,14 +876,23 @@ async function listCatalogueTemplates(root: string): Promise<string[]> {
 /**
  * Create a new shared page, writing manifest + layers + media/ and appending the
  * new folder to the chapter's .folder.json order. Template resolution: an explicit
- * `template` arg wins; else the chapter's declared `.folder.json → defaultTemplate`;
- * with a template id in hand, a matching **sibling page** is cloned (keeps a chapter
- * consistent), else the id is instantiated from the top-level **`Templates/`
- * catalogue**. With no id at all, any non-overview sibling is cloned.
+ * `template` arg wins; else the chapter's declared `.folder.json → weekdayTemplates`
+ * (a weekend-specific choice for a page named `YYYY-MM-DD`); else the chapter's
+ * declared `.folder.json → defaultTemplate`; with a template id in hand, a matching
+ * **sibling page** is cloned (keeps a chapter consistent), else the id is instantiated
+ * from the top-level **`Templates/` catalogue**. With no id at all, any non-overview
+ * sibling is cloned. A page named in the chapter's `.folder.json → deletedDays`
+ * tombstone list is refused unless `clearDeleted` is set.
  */
 export async function createPage(
   root: string,
-  opts: { chapter: string; name: string; title?: string; template?: string },
+  opts: {
+    chapter: string;
+    name: string;
+    title?: string;
+    template?: string;
+    clearDeleted?: boolean;
+  },
 ): Promise<CreateResult> {
   if (/[/\\]/.test(opts.name) || opts.name.trim() === "") {
     throw new Error(
@@ -853,8 +916,14 @@ export async function createPage(
   // The chapter's declared default template (FORMAT.md §4) fills in when the caller
   // doesn't pass one — a calendar chapter's day pages come out right by default.
   const folderCfg = await readFolderConfig(chapterAbs);
+  await checkNotDeleted(chapterAbs, folderCfg, opts.name, opts.clearDeleted);
+  const weekdayTemplates =
+    folderCfg?.weekdayTemplates && typeof folderCfg.weekdayTemplates === "object"
+      ? (folderCfg.weekdayTemplates as Record<string, unknown>)
+      : undefined;
   const effTemplate =
     opts.template ??
+    weekdayTemplateFor(opts.name, weekdayTemplates) ??
     (typeof folderCfg?.defaultTemplate === "string" ? folderCfg.defaultTemplate : undefined);
 
   // Prefer a sibling; fall back to the Templates/ catalogue.

@@ -252,8 +252,36 @@ const lineSchema = z.object({
       'Clock time "HH:MM" (24-hour) for schedule lines — the server snaps it to the ' +
         "nearest ruled row using the region's `startHour`/`rowsPerHour`, so you needn't " +
         "compute row indices. Ignored if `y` or `row` is set, or if the region has no " +
-        "`startHour`.",
+        "`startHour`. Pair with `endTime`/`durationMin` to draw a washi-tape duration " +
+        "block instead of a single baseline.",
     ),
+  endTime: z
+    .string()
+    .optional()
+    .describe(
+      'Clock time "HH:MM" marking the END of a duration block that started at `time` — ' +
+        "draws a rounded, tinted washi-tape-style block spanning start→end rows instead " +
+        "of a single baseline. Mutually exclusive with `durationMin`. Ignored (with a " +
+        "warning) if `time` is not also set.",
+    ),
+  durationMin: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      "Alternative to `endTime`: block length in minutes from `time` (e.g. 45 for a " +
+        "45-minute meeting). Mutually exclusive with `endTime`. Ignored (with a warning) " +
+        "if `time` is not also set.",
+    ),
+  blockFill: HEX_COLOR.optional().describe(
+    "Override the washi block's tint (hex). Defaults to the theme's accent colour.",
+  ),
+  blockOpacity: z
+    .number()
+    .min(0.05)
+    .max(1)
+    .optional()
+    .describe("Washi block fill opacity, 0–1 (default 0.22 — a translucent 'tape' tint)."),
   y: z
     .number()
     .optional()
@@ -306,6 +334,9 @@ const lineSchema = z.object({
   .strict()
   .refine((l) => !(l.marker && l.icon), {
     message: "A line may carry `marker` OR `icon`, not both.",
+  })
+  .refine((l) => !(l.endTime && l.durationMin), {
+    message: "A line may carry `endTime` OR `durationMin`, not both.",
   });
 
 // Calendar grid for the month region — the server computes each day's cell from
@@ -601,12 +632,14 @@ server.tool(
 server.tool(
   "create_page",
   "Create a new shared page (e.g. tomorrow's daily). Template resolution: an explicit " +
-    "`template` wins; else the chapter's `.folder.json → defaultTemplate`; a matching " +
-    "sibling page is cloned when one exists (a month chapter's monthly-overview grid is " +
-    "never used for a new day page), else the id is instantiated from the top-level " +
-    "Templates/ catalogue — so a brand-new/empty chapter can still be seeded. " +
-    "Writes manifest + layers + media/ and adds it to the chapter order. Prefer letting the " +
-    "user create pages in the app; use this only when asked.",
+    "`template` wins; else the chapter's `.folder.json → weekdayTemplates` (a weekend-specific " +
+    "choice for a page named YYYY-MM-DD); else the chapter's `.folder.json → defaultTemplate`; " +
+    "a matching sibling page is cloned when one exists (a month chapter's monthly-overview " +
+    "grid is never used for a new day page), else the id is instantiated from the top-level " +
+    "Templates/ catalogue — so a brand-new/empty chapter can still be seeded. A page named in " +
+    "the chapter's `.folder.json → deletedDays` tombstone list is refused unless `clearDeleted` " +
+    "is set. Writes manifest + layers + media/ and adds it to the chapter order. Prefer " +
+    "letting the user create pages in the app; use this only when asked.",
   {
     chapter: z
       .string()
@@ -629,11 +662,18 @@ server.tool(
         'Catalogue template id, e.g. "daily-minimal". Used to seed an empty chapter from the ' +
           "Templates/ catalogue, and to require a matching template when cloning a sibling.",
       ),
+    clearDeleted: z
+      .boolean()
+      .optional()
+      .describe(
+        "Recreate a day the chapter's `.folder.json → deletedDays` marks as tombstoned. " +
+          "Without this, create_page refuses (the user explicitly removed that day).",
+      ),
   },
-  async ({ chapter, name, title, template }) => {
+  async ({ chapter, name, title, template, clearDeleted }) => {
     try {
       const root = await requireLibrary();
-      const res = await createPage(root, { chapter, name, title, template });
+      const res = await createPage(root, { chapter, name, title, template, clearDeleted });
       return json({ ok: true, ...res });
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {

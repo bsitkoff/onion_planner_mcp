@@ -335,6 +335,18 @@ export interface LineInput {
    * or if the region has no ruled rows / no `startHour`.
    */
   time?: string;
+  /**
+   * End of a washi-tape duration block starting at `time` — draws a rounded, tinted
+   * block spanning start→end rows instead of a single baseline. Mutually exclusive
+   * with `durationMin`. Ignored (with a warning) if `time` isn't also set.
+   */
+  endTime?: string;
+  /** Duration in minutes from `time`, alternative to `endTime`. */
+  durationMin?: number;
+  /** Override the washi block's tint (hex). Defaults to `theme.accent`. */
+  blockFill?: string;
+  /** Washi block fill opacity, 0–1 (default 0.22). */
+  blockOpacity?: number;
   /** Explicit baseline y, local to the region's top-left. Overrides `row`. */
   y?: number;
   /** Local x offset from the region's left edge. Defaults to 24. */
@@ -537,6 +549,21 @@ function rowForTime(time: string, startHour: number, rowsPerHour: number): numbe
 }
 
 /**
+ * "HH:MM" + minutes -> "HH:MM", for a washi block's `durationMin`. Clock-wrap past
+ * midnight is out of scope — no template's grid spans a day boundary — so an
+ * out-of-range result is left as-is for `rowForTime` to reject downstream with its
+ * own clear error.
+ */
+function addMinutes(time: string, minutes: number): string {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time.trim());
+  if (!m) return time;
+  const total = Number(m[1]) * 60 + Number(m[2]) + minutes;
+  const hh = String(Math.floor(total / 60) % 24).padStart(2, "0");
+  const mm = String(total % 60).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+/**
  * Greedily break `text` into segments that each fit within `maxWidth` (per the
  * width heuristic). A single over-long word is hard-broken at the character
  * level so one token can't overflow. Returns `[text]` unchanged when it already
@@ -623,6 +650,39 @@ function iconFragment(
     svg: `<text x="${x}" y="${baseline}" font-family="Phosphor" font-size="${size}" fill="${fill}">${escapeXml(codepoint)}</text>`,
     advance: Math.round(size * CHAR_WIDTH_RATIO.Phosphor) + Math.round(size * 0.3),
   };
+}
+
+const WASHI_RX = 6; // reuses the one corner-radius convention (SHARED-VISUAL-SPEC §5)
+const WASHI_DEFAULT_OPACITY = 0.22;
+
+/**
+ * A washi-tape-style duration block: a rounded, translucent-tint rect spanning
+ * [y1, y2) (region-local), with the label text vertically centred inside — the same
+ * centring ratio used for the printed label-slot banner text, so a block's label
+ * sits consistently with every other "text inside a box" convention in this file.
+ */
+function washiBlockFragment(
+  x: number,
+  y1: number,
+  y2: number,
+  width: number,
+  text: string,
+  font: string,
+  size: number,
+  weight: number,
+  textFill: string,
+  blockFill: string,
+  opacity: number,
+): string {
+  const h = y2 - y1;
+  const rect =
+    `<rect x="${x}" y="${y1}" width="${width}" height="${h}" rx="${WASHI_RX}" ` +
+    `fill="${blockFill}" fill-opacity="${opacity}"/>`;
+  const labelY = y1 + h - Math.round(h * 0.28);
+  const label =
+    `<text x="${x + BANNER_PAD_X}" y="${labelY}" font-family="${escapeXml(font)}" ` +
+    `font-size="${size}" font-weight="${weight}" fill="${textFill}">${escapeXml(text)}</text>`;
+  return `${rect}\n    ${label}`;
 }
 
 /** Intrinsic pixel dimensions of an encoded image. */
@@ -1164,6 +1224,96 @@ export function composeAiSvg(
         const weight = line.weight ?? def.weight;
         const fill = line.fill ?? baseFill;
         let x = line.x ?? def.xPad ?? DEFAULT_X_PAD;
+
+        // A washi-tape duration block: `time` + (`endTime`/`durationMin`) draws a
+        // rounded, tinted rect spanning start->end rows instead of a single baseline —
+        // a fundamentally different draw (a span + centred label, not a baseline text
+        // run), so it's resolved and drawn here, then returns early for this line.
+        if (
+          line.time !== undefined &&
+          line.y === undefined &&
+          line.row === undefined &&
+          (line.endTime !== undefined || line.durationMin !== undefined)
+        ) {
+          if (region.ruledLines.length === 0 || region.width === null) {
+            warn(
+              "time_unruled_region",
+              `region "${region.name}": block "${truncate(line.text)}" has a time but the ` +
+                `region has no ruled rows or usable width — block not drawn.`,
+              "warning",
+              region.name,
+            );
+            return;
+          }
+          if (effStartHour === undefined) {
+            warn(
+              "time_missing_start_hour",
+              `region "${region.name}": block "${truncate(line.text)}" has time "${line.time}" ` +
+                `but no startHour was set (neither the call nor the template's ` +
+                `data-start-hour) — block not drawn.`,
+              "warning",
+              region.name,
+            );
+            return;
+          }
+          const endTimeStr = line.endTime ?? addMinutes(line.time, line.durationMin!);
+          let r1 = rowForTime(line.time, effStartHour, rowsPerHour);
+          let r2 = rowForTime(endTimeStr, effStartHour, rowsPerHour);
+          const maxIdx = region.ruledLines.length - 1;
+          if (r1 < 0 || r1 > maxIdx || r2 < 0 || r2 > maxIdx) {
+            warn(
+              "washi_block_clamped",
+              `region "${region.name}": block "${truncate(line.text)}" (${line.time}–${endTimeStr}) ` +
+                `extends past the ${region.ruledLines.length}-row grid — clamped to fit.`,
+              "warning",
+              region.name,
+            );
+            r1 = Math.min(Math.max(0, r1), maxIdx);
+            r2 = Math.min(Math.max(0, r2), maxIdx);
+          }
+          if (r2 <= r1) {
+            warn(
+              "washi_block_zero_duration",
+              `region "${region.name}": block "${truncate(line.text)}" (${line.time}–${endTimeStr}) ` +
+                `has zero/negative duration — not drawn.`,
+              "warning",
+              region.name,
+            );
+            return;
+          }
+          const y1 = Math.round(region.ruledLines[r1] - region.y);
+          const y2 = Math.round(region.ruledLines[r2] - region.y);
+          const bx = line.x ?? def.xPad ?? DEFAULT_X_PAD;
+          const bw = region.width - bx - (def.xPad ?? DEFAULT_X_PAD);
+          parts.push(
+            `    ${washiBlockFragment(
+              bx,
+              y1,
+              y2,
+              bw,
+              line.text,
+              font,
+              size,
+              weight,
+              fill,
+              line.blockFill ?? theme.accent,
+              line.blockOpacity ?? WASHI_DEFAULT_OPACITY,
+            )}`,
+          );
+          return;
+        }
+        if (
+          line.time === undefined &&
+          (line.endTime !== undefined || line.durationMin !== undefined)
+        ) {
+          warn(
+            "washi_block_missing_start",
+            `region "${region.name}": line "${truncate(line.text)}" has \`endTime\`/` +
+              `\`durationMin\` but no \`time\` start — ignored.`,
+            "warning",
+            region.name,
+          );
+        }
 
         // Resolve a clock time to a ruled row (precedence: y > row > time).
         let effLine = line;

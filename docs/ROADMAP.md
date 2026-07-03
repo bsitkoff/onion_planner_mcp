@@ -110,6 +110,29 @@ contract this server writes against. What that settles here:
 
 ## Done (previous passes)
 
+- **2.6 — washi-tape schedule blocks.** A schedule line carrying `time` + (`endTime` or
+  `durationMin`) now draws a soft, rounded, translucent-tinted block spanning start→end rows
+  (`washiBlockFragment` in `svg.ts`) instead of a single baseline — the "washi tape over the
+  hours" look. Tint defaults to the chapter's `theme.accent` (palette-derived, per the roadmap's
+  original framing), overridable per-block via `blockFill`/`blockOpacity`. `endTime`/
+  `durationMin` are mutually exclusive (`.refine()` in `index.ts`, mirroring `marker`/`icon`);
+  `endTime` wins if a caller somehow sends both to the compose layer directly. Three new warning
+  codes: `washi_block_clamped` (span partly outside the grid — pinned to fit, still drawn),
+  `washi_block_zero_duration` (end ≤ start — not drawn), `washi_block_missing_start` (`endTime`/
+  `durationMin` without a `time` start — ignored); reuses `time_unruled_region`/
+  `time_missing_start_hour` for the shared no-grid conditions. Renderer support (`rx` corner
+  radius, `fill-opacity` translucency) confirmed directly against
+  `../onionskin/Onionskin/SVG/SVGCanvasRenderer.swift` — no workaround needed. Unparked once the
+  app's region/template contract (E0) settled with no further churn expected.
+- **Calendar-chapter-aware `create_page` — remainder (`weekdayTemplates` + `deletedDays`).**
+  Template precedence now reads the chapter's `.folder.json → weekdayTemplates`
+  (`weekdayTemplateFor` in `page.ts`) between the explicit `template` arg and the chapter's
+  `defaultTemplate` — an MCP-created Saturday/Sunday page picks up the declared weekend
+  template. A page named in `.folder.json → deletedDays` is refused by default
+  (`checkNotDeleted` in `page.ts`) — a new `clearDeleted: true` create-page option opts into
+  clearing the tombstone and recreating the day, rather than silently resurrecting a day the
+  user deliberately deleted. Unblocked once the app's own materializer started actually
+  writing/reading both keys (previously parked pending a real calendar-chapter-creation flow).
 - **2.8 — read `settings.json → underlayVoice`.** `readUnderlayVoice` (`library.ts`) reads the
   library root's `settings.json → underlayVoice` defensively (absent/garbled → `null`, never
   throws), mirroring the existing `.folder.json → theme` pattern. Surfaced on both `get_library`
@@ -316,34 +339,10 @@ Opt-in `wrap: true` per line breaks long text to the region width (reusing the P
 overflow estimator), stacking continuations below the baseline without consuming the next
 ruled row. Vertical-fit warning replaces the width-overflow warning when wrapping.
 
-### 2.6 Washi-tape schedule blocks (drawn, not a sticker) · Effort M · Feasibility HIGH · **PARKED**
-**Park until the app is stable** — Claude Code is still implementing the template redesign;
-do not start this while the app is in flux. Roadmap-only for now.
-
-Today the schedule shows time via a **sticker** (the user's current MCP approach). The goal is
-to draw **washi-tape-style time-blocks** directly in `ai.svg`: a soft, rounded, semi-opaque
-filled box spanning an event's start→end on the grid, with the label inside — the paper-planner
-"washi over the hours" look, instead of text-on-a-line or a sticker glyph. This is exactly what
-the **redesigned templates already ask for**: `schedule`/`agenda` carry
-`data-start-hour`/`data-rows-per-hour` and an intent of *"AI places **bars by clock**, not text
-on lines"* (`../onionskin` Templates, 2026-06 redesign). The grid is already self-describing —
-the server now parses those attributes and anchors `time` to them (see Done) — so what's left is
-the *drawing*, which is why this stays parked separately from the contract match.
-
-Shape of the work (all server-side, renderer-safe):
-- **A duration primitive.** A schedule line needs an end as well as a start — e.g. `time` +
-  `endTime` (or `durationMin`) → a block from start-row to end-row, vs. today's single-baseline
-  `time` snap (`rowForTime`, `svg.ts`). Precedence and the existing `time`-only behaviour stay.
-  The start/end → row math reuses the parsed `startHour`/`rowsPerHour` already on the region.
-- **Washi styling within the renderer subset.** A rounded `<rect>` (`rx`) + low-opacity solid
-  fill + the label `<text>`; **solid fills only — no gradients** (renderer limitation), so a
-  washi "tint" is one translucent solid, palette-derived (`harmony`) or per-block `fill`.
-  Confirm the renderer honours `rx`/`fill-opacity`; drawn-shape fallback (plain rect) otherwise.
-- **Overflow/fit warnings** reuse the existing machinery (block past the region box, zero/negative
-  duration, a `time`/`endTime` outside the grid).
-
-Out of scope here: a `star` *marker primitive* — the contract uses a typographic ★ in the to-do
-text, which needs no new code.
+### 2.6 Washi-tape schedule blocks — ✅ shipped (see Done above)
+A schedule line carrying `time` + (`endTime` or `durationMin`) now draws a rounded, tinted
+block spanning start→end rows instead of a single baseline. Unparked once the app's region
+contract (E0) settled — no more template churn to react to.
 
 ### 2.7 Surface the templates' printed label slots — ✅ shipped (see Done above)
 `parseRegions` distinguishes a region's box rect from its nested label-slot rect by attribute,
@@ -365,14 +364,6 @@ Read-only; the server never writes `settings.json`.
 - **`ai.svg` history / undo** — tension with the "only write `ai.svg` + manifest ai block"
   invariant; the app may own undo. `merge` + `clear_underlay` already cover most "oops" cases.
 - **New template types / regions** — owned by the app; the server follows once templates ship.
-- **Calendar-chapter-aware `create_page` — remainder** — `defaultTemplate` is now honoured
-  and the monthly-overview page is never cloned for a day page (2026-07-02 pass, above). Still
-  unread from the chapter's `.folder.json`: **`weekdayTemplates`** (an MCP-created Saturday
-  page should get the declared weekend template) and **`deletedDays`** (recreating a
-  tombstoned day leaves a contradictory state — the server should refuse, or clear the
-  tombstone). Revisit when auto-creating dated pages into a calendar chapter is a real flow;
-  note the app's materializer usually creates day pages first anyway (create-on-write is a
-  safety net beyond its rolling window).
 - **`resolvePageRel` change when the app retires the Shared/ gate (app C7)** — see the
   2026-07-02 sync section: coordinated release, nothing to do until the app's E2 lock ships.
 - **Live `Shared/` watcher** — app-side; out of server scope.

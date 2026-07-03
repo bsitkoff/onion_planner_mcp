@@ -18,6 +18,7 @@ import {
   listChapters,
   listPages,
   listPageRows,
+  readUnderlayVoice,
   LibraryMissingError,
 } from "../src/library.js";
 import {
@@ -30,7 +31,7 @@ import {
   writeChapterTheme,
   fetchImageToTemp,
 } from "../src/page.js";
-import { GOLD, resolveTheme, composeAiSvg } from "../src/svg.js";
+import { GOLD, resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS } from "../src/svg.js";
 import { hexToHsl } from "../src/color.js";
 import { inspectTemplate, parseRegions } from "../src/template.js";
 
@@ -88,6 +89,21 @@ async function main() {
   const names = chapters.map((c) => c.name);
   check("finds the seeded Daily + Monthly chapters", names.includes("Daily") && names.includes("Monthly"), JSON.stringify(names));
 
+  console.log("\nunderlayVoice (settings.json, defensive read)");
+  const settingsPath = path.join(root, "settings.json");
+  check("no settings.json → underlayVoice is null", (await readUnderlayVoice(root)) === null);
+  await fs.writeFile(
+    settingsPath,
+    JSON.stringify({ underlayVoice: { name: "Bridget", tone: "calm", notes: "training for a 10k; keep it short" } }),
+  );
+  const voice = await readUnderlayVoice(root);
+  check(
+    "settings.json underlayVoice is read (name/tone/notes)",
+    voice?.name === "Bridget" && voice?.tone === "calm" && voice?.notes === "training for a 10k; keep it short",
+    JSON.stringify(voice),
+  );
+  // Left in place (valid) so the read_page surfacing check below sees it too.
+
   console.log("\ncreate_page from the Templates/ catalogue (no sibling yet)");
   const daily = "Shared/Daily/2026-06-22";
   const createdDaily = await createPage(root, { chapter: "Daily", name: "2026-06-22", title: "Monday", template: "daily-minimal" });
@@ -108,9 +124,33 @@ async function main() {
   const ainotes = read.regions.find((r) => r.name === "ainotes");
   const todo = read.regions.find((r) => r.name === "todo");
   check("size is 1024x1366", read.size[0] === 1024 && read.size[1] === 1366, JSON.stringify(read.size));
+  check("read_page surfaces the same underlayVoice as get_library's reader", read.underlayVoice?.name === "Bridget" && read.underlayVoice?.tone === "calm", JSON.stringify(read.underlayVoice));
+  await fs.writeFile(settingsPath, "{ this is not valid json");
+  check("garbled settings.json degrades to null (no throw)", (await readUnderlayVoice(root)) === null);
+  check("read_page also degrades to null on garbled settings.json", (await readPage(root, daily)).underlayVoice === null);
+  await fs.writeFile(settingsPath, JSON.stringify({ underlayVoice: { name: "Bridget", tone: "bogus-tone" } }));
+  const partialVoice = await readUnderlayVoice(root);
+  check(
+    "an invalid tone value is dropped, valid keys kept",
+    partialVoice?.name === "Bridget" && partialVoice?.tone === undefined,
+    JSON.stringify(partialVoice),
+  );
+  await fs.rm(settingsPath, { force: true });
+  check("settings.json absent again after cleanup", (await readUnderlayVoice(root)) === null);
   check("schedule region parsed with ruled lines", (schedule?.ruledLines.length ?? 0) >= 8, String(schedule?.ruledLines.length));
   check("ainotes region parsed (no-ruled box)", !!ainotes && ainotes.ruledLines.length === 0, String(ainotes?.ruledLines.length));
   check("todo region parsed", !!todo);
+  // The template prints a dashed label slot nested in schedule's own <g> — parseRegions
+  // must surface it (Region.labelSlot) without confusing it for the region's own box.
+  check("schedule region exposes its printed label slot", !!schedule?.labelSlot, JSON.stringify(schedule?.labelSlot));
+  check(
+    "schedule's box width/height are the region's own box, not the label slot's",
+    !!schedule?.labelSlot && schedule.width !== schedule.labelSlot.width && schedule.height !== schedule.labelSlot.height,
+    JSON.stringify({ box: [schedule?.width, schedule?.height], slot: schedule?.labelSlot }),
+  );
+  // header's dashed art-banner rect has no data-region, so it's NOT a label slot.
+  const header = read.regions.find((r) => r.name === "header");
+  check("header's decorative dashed rect (no data-region) is not read as a label slot", header?.labelSlot === null, JSON.stringify(header?.labelSlot));
   // Template inspection: minimal prints a faint "TODAY" microcap (hasLabels) but no
   // banners/art/palette — labels alone must NOT mark it styled, or the "bare → go
   // full" guidance would be unreachable on every shipped template. Cozy is fully
@@ -195,6 +235,42 @@ async function main() {
   // checkbox marker: a gold stroked <rect> inside the todo group, before its text.
   const todoGroup = regionGroup(ai, "todo") ?? "";
   check("to-do lines draw a gold checkbox", new RegExp(`<rect[^>]*stroke="${GOLD}"`).test(todoGroup), todoGroup.slice(0, 120));
+
+  console.log("\nPhosphor icon glyphs (font-rendered leading mark; dry-run)");
+  const iconWrite = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    // ainotes wraps by default (Phase 2.5) — force a single segment so this test is
+    // about the icon glyph, not wrap behavior.
+    regions: [{ region: "ainotes", lines: [{ text: "Home", icon: "house", wrap: false }] }],
+  });
+  const iconGroup = regionGroup(iconWrite.aiSvg, "ainotes") ?? "";
+  check(
+    "known icon name renders its confirmed codepoint in a Phosphor <text>",
+    iconGroup.includes(`font-family="Phosphor"`) && iconGroup.includes(`>${PHOSPHOR_CODEPOINTS.house}</text>`),
+    iconGroup.slice(0, 260),
+  );
+  check("the line's own text still follows the icon glyph", iconGroup.includes(">Home</text>"), iconGroup.slice(0, 260));
+  // marker/icon are mutually exclusive at the schema layer (index.ts .refine); at the
+  // compose layer itself marker simply takes precedence if both somehow arrive together.
+  const bothWrite = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: "Both set", marker: "bullet", icon: "house" } as any] }],
+  });
+  const bothGroup = regionGroup(bothWrite.aiSvg, "ainotes") ?? "";
+  check("marker takes precedence over icon if both are set on one line", /<circle\b/.test(bothGroup) && !bothGroup.includes("Phosphor"), bothGroup.slice(0, 260));
+  // An unrecognized icon name is rejected at the MCP schema (index.ts zod enum), not
+  // reachable through this direct compose path — but composeAiSvg itself must still
+  // degrade defensively (empty fragment, no crash) rather than emit a broken glyph.
+  const unknownIconWrite = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: "Unknown icon", icon: "not-a-real-icon" } as any] }],
+  });
+  const unknownIconGroup = regionGroup(unknownIconWrite.aiSvg, "ainotes") ?? "";
+  check(
+    "an unrecognized icon name at the compose layer degrades to no glyph, not a crash",
+    !unknownIconGroup.includes("Phosphor") && unknownIconGroup.includes(">Unknown icon</text>"),
+    unknownIconGroup.slice(0, 260),
+  );
   // Derive the expected slot from geometry: row 2's baseline lands below ruled line 2.
   const rl = schedule!.ruledLines.map((v) => v - schedule!.y);
   const slotTop = rl[2];
@@ -388,6 +464,30 @@ async function main() {
   check("label draws a banner above the region (negative y)", /<rect[^>]*y="-\d+"[^>]*rx="6"/.test(lgroup), lgroup.slice(0, 200));
   check("label text is the title, white on the banner", lgroup.includes(">SCHEDULE</text>") && lgroup.includes('fill="#FFFFFF"'), lgroup.slice(0, 260));
   check("label does not consume row 0 (the line still lands in its slot)", lgroup.includes(">9:00 standup</text>"), lgroup);
+  // schedule has a printed label slot (see above) — the banner pill must fill that
+  // slot's exact box (geometry-derived, not hard-coded) rather than the old fixed
+  // margin placement.
+  const slot = schedule!.labelSlot!;
+  const slotRect = `<rect x="${slot.x}" y="${slot.y}" width="${slot.width}" height="${slot.height}" rx="6"`;
+  check("banner pill fills the printed label slot's exact box", lgroup.includes(slotRect), `expected ${slotRect} in ${lgroup.slice(0, 260)}`);
+  // Underline-style theme (e.g. gold): no box to fill, so it only anchors off the
+  // slot's origin — text baseline inside the slot's vertical range, no pill rect.
+  const underlineLabeled = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true, theme: "gold",
+    regions: [{ region: "schedule", label: "SCHEDULE", lines: [{ text: "x", row: 0 }] }],
+  });
+  const ulgroup = regionGroup(underlineLabeled.aiSvg, "schedule") ?? "";
+  const ulY = Number((ulgroup.match(new RegExp(`<text x="${slot.x}" y="(-?\\d+)"`)) ?? [])[1]);
+  check("underline-style label baseline sits within the slot's vertical range", ulY >= slot.y && ulY <= slot.y + slot.height, `y=${ulY} slot=${JSON.stringify(slot)}`);
+  check("underline style draws no pill rect (text + rule only)", !/<rect[^>]*rx="6"/.test(ulgroup), ulgroup.slice(0, 200));
+  // A region with no printed label slot (header's dashed rect has no data-region) —
+  // the banner falls back to the old fixed margin placement (x=24).
+  const headerLabeled = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true, theme: "bright",
+    regions: [{ region: "header", label: "TODAY", lines: [{ text: "placeholder" }] }],
+  });
+  const hgroup = regionGroup(headerLabeled.aiSvg, "header") ?? "";
+  check("no label slot -> banner falls back to the fixed margin (x=24)", /<rect x="24" y="-\d+"[^>]*rx="6"/.test(hgroup), hgroup.slice(0, 260));
   // No label, default theme → no banner emitted (back-compat).
   const noLabel = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", lines: [{ text: "x", row: 0 }] }] })).aiSvg, "schedule") ?? "";
   check("no label → no banner rect", !/<rect[^>]*rx="6"/.test(noLabel), noLabel);

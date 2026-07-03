@@ -52,6 +52,14 @@ export interface Region {
   ruledLines: number[];
   /** Absolute x of each vertical ruled line (for grid templates like month). */
   colLines: number[];
+  /**
+   * The template's printed dashed label slot for this region (a `<rect
+   * data-region="label-<name>">` nested in the region's own <g>), region-local coords
+   * (same convention as width/height — an offset within the group, not absolute).
+   * null when the template prints no slot — callers fall back to the default margin
+   * placement for the region-title banner.
+   */
+  labelSlot: { x: number; y: number; width: number; height: number } | null;
 }
 
 const parser = new XMLParser({
@@ -250,9 +258,26 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
     const { x, y } = parseTranslate(g["@_transform"]);
     const name: string = g["@_data-region"] ?? id.replace(/^region-/, "");
 
-    const rect = Array.isArray(g.rect) ? g.rect[0] : g.rect;
+    // A region's <g> may nest one or more other <rect>s (a decorative border, a dot
+    // pattern) plus a dashed <rect data-region="label-<name>"> sub-region (the printed
+    // label slot) alongside its own box rect. Disambiguate the label rect by its
+    // "label-" prefix rather than assuming it's absent/last — order isn't guaranteed
+    // across templates, and the box rect is whichever non-label rect comes first.
+    const rects: any[] = Array.isArray(g.rect) ? g.rect : g.rect ? [g.rect] : [];
+    const labelRect = rects.find(
+      (r) => typeof r["@_data-region"] === "string" && r["@_data-region"].startsWith("label-"),
+    );
+    const rect = rects.find((r) => r !== labelRect) ?? null;
     const width = rect ? num(rect["@_width"]) : null;
     const height = rect ? num(rect["@_height"]) : null;
+    const labelSlot = labelRect
+      ? {
+          x: num(labelRect["@_x"]) ?? 0,
+          y: num(labelRect["@_y"]) ?? 0,
+          width: num(labelRect["@_width"]) ?? 0,
+          height: num(labelRect["@_height"]) ?? 0,
+        }
+      : null;
 
     const lines: any[] = Array.isArray(g.line) ? g.line : g.line ? [g.line] : [];
     const ruledLines: number[] = [];
@@ -296,6 +321,7 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
       list,
       ruledLines,
       colLines,
+      labelSlot,
     });
   }
   return regions;

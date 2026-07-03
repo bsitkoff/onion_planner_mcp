@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { resolvePageRel, normalizeChapter } from "./paths.js";
 import { parseRegions, parseViewBox, inspectTemplate, type Region, type TemplateInfo } from "./template.js";
+import { readUnderlayVoice, type UnderlayVoice } from "./library.js";
 import {
   composeAiSvg,
   mergeRegions,
@@ -425,7 +426,7 @@ async function readJson<T>(absFile: string): Promise<T> {
   return JSON.parse(await fs.readFile(absFile, "utf8")) as T;
 }
 
-async function readIfExists(absFile: string): Promise<string | null> {
+export async function readIfExists(absFile: string): Promise<string | null> {
   try {
     return await fs.readFile(absFile, "utf8");
   } catch {
@@ -460,6 +461,12 @@ export interface PageRead {
    * before composing — write_underlay applies it as the default, overridable per call.
    */
   theme: ChapterTheme | null;
+  /**
+   * The library's `settings.json → underlayVoice` (name/tone/notes), or null if
+   * absent/garbled — personalizes the `ainotes` note's voice. Read-only; the server
+   * never writes settings.json.
+   */
+  underlayVoice: UnderlayVoice | null;
   templateSvg?: string;
 }
 
@@ -477,6 +484,7 @@ export async function readPage(
   const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
   const size = pageSize(manifest, templateSvg);
   const theme = await readChapterTheme(abs);
+  const underlayVoice = await readUnderlayVoice(root);
   return {
     page: rel,
     manifest,
@@ -488,6 +496,7 @@ export async function readPage(
       ? inspectTemplate(templateSvg, stickersSvg)
       : { styled: false, hasLabels: false, hasBanners: false, stickersPresent: false, palette: [] },
     theme,
+    underlayVoice,
     ...(includeTemplate && templateSvg ? { templateSvg } : {}),
   };
 }

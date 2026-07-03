@@ -1,7 +1,44 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveRoot, sharedDir, normalizeChapter, resolvePageRel } from "./paths.js";
-import { type AiStatus, type Manifest } from "./page.js";
+import { type AiStatus, type Manifest, readIfExists } from "./page.js";
+
+/**
+ * The library's `settings.json → underlayVoice` (the app's `FORMAT.md §4` contract) —
+ * personalizes the gold daily note. All keys optional; `tone: "none"` means no written
+ * note at all. Read-only here — the server never writes settings.json.
+ */
+export interface UnderlayVoice {
+  name?: string;
+  tone?: "calm" | "warm" | "upbeat" | "dry" | "none";
+  notes?: string;
+}
+
+const VALID_UNDERLAY_TONES = new Set(["calm", "warm", "upbeat", "dry", "none"]);
+
+/**
+ * Read `settings.json → underlayVoice` from the library root. Returns null when the
+ * file is absent, unparseable, or has no usable `underlayVoice` block — an external
+ * MCP reading this global, single-writer file must degrade gracefully rather than
+ * fail a tool call over a garbled or missing settings.json.
+ */
+export async function readUnderlayVoice(root: string): Promise<UnderlayVoice | null> {
+  const raw = await readIfExists(path.join(root, "settings.json"));
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw)?.underlayVoice;
+    if (!v || typeof v !== "object") return null;
+    const out: UnderlayVoice = {};
+    if (typeof v.name === "string") out.name = v.name;
+    if (typeof v.tone === "string" && VALID_UNDERLAY_TONES.has(v.tone)) {
+      out.tone = v.tone as UnderlayVoice["tone"];
+    }
+    if (typeof v.notes === "string") out.notes = v.notes;
+    return Object.keys(out).length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Thrown when the iCloud library / Shared folder isn't present yet. */
 export class LibraryMissingError extends Error {

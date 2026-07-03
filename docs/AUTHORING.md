@@ -19,8 +19,9 @@ its level; don't fight it.**
 - **`styled: false`** (a bare scaffold — no colour-filled banners and no stickers; a faint
   microcap label like "TODAY" doesn't count): *go full.* Pick a
   `theme`, add structure and art, and label the bare regions — a **region title** uses the
-  region's `label` (a banner drawn in the margin above it); a **sub-section inside a box**
-  (Important / Tomorrow) uses a line with `heading`.
+  region's `label` (a banner that fills the template's printed dashed label slot when it has
+  one, else drawn in the margin above it); a **sub-section inside a box** (Important /
+  Tomorrow) uses a line with `heading`.
 - **`styled: true`** (it prints its own colour-filled banners, or ships a `stickers.svg`): it did the
   decorating. *Fill quietly into the existing slots* — no competing banners, little or no
   added art. And don't fall back to drab gold: **use `template.palette`** (the template's own
@@ -187,6 +188,11 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
   time into the text — the grid already shows the hour.
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
   dependency.
+- **`icon`** — a leading Phosphor glyph (font-rendered) instead of a marker; mutually exclusive
+  with `marker`. Only a small confirmed-codepoint subset is available (mirrored from the app's
+  `Phosphor.swift` — house/gear/bookOpen/sticker/smiley/etc.); an unrecognized name is rejected
+  rather than silently rendering nothing. The weather/decoration icons (umbrella, sun, cloud,
+  check, star) aren't published by the app yet — don't guess codepoints for them.
 - **`wrap`** — long text wraps to the region width instead of overflowing. **On by default**
   for a flow-placed body line (no `row`/`time`/`y`) in a width-bounded region, so to-dos/notes
   don't run off the panel; pass `wrap: false` to force a single segment, or `wrap: true` to

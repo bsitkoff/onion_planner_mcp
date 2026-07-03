@@ -110,6 +110,29 @@ contract this server writes against. What that settles here:
 
 ## Done (previous passes)
 
+- **2.8 — read `settings.json → underlayVoice`.** `readUnderlayVoice` (`library.ts`) reads the
+  library root's `settings.json → underlayVoice` defensively (absent/garbled → `null`, never
+  throws), mirroring the existing `.folder.json → theme` pattern. Surfaced on both `get_library`
+  and `read_page` (the latter so a caller filling one page's `ainotes` doesn't need a prior
+  `get_library` round-trip just for the voice hint). Read-only — the server never writes
+  `settings.json`.
+- **2.7 — surface printed label slots.** `parseRegions` (`template.ts`) now disambiguates a
+  region's own box `<rect>` from a nested `<rect data-region="label-*">` label slot by attribute
+  rather than assuming a fixed child order (today's shipped templates happen to put the label
+  rect last, but that's a convention, not a guarantee `parseRegions` should lean on). The new
+  `Region.labelSlot` field surfaces the slot's region-local box; `write_underlay`'s region-title
+  `label` banner (`svg.ts`) now aims at that geometry when present — banner style fills the slot's box exactly,
+  underline style anchors off its origin — falling back to the old fixed-margin placement
+  (`x=24, y=-12`) for templates without a slot.
+- **2.1 — Phosphor icon glyphs (plumbing only, scoped-partial).** A line may carry `icon`
+  (mutually exclusive with `marker`), font-rendering a Phosphor glyph via a new
+  `PHOSPHOR_CODEPOINTS` map (`svg.ts`) and `iconFragment` helper (parallel to `markerFragment`).
+  **Deliberately incomplete:** the map only includes the 22 names confirmed in the app's
+  `Phosphor.swift` (house, gear, bookOpen, sticker, smiley, etc.) — an unrecognized name is
+  rejected at the schema. The actually-useful weather/decoration set the roadmap wanted
+  (umbrella, sun, cloud, check, star) is **not yet published by the app** and stays deferred;
+  wiring those up is a follow-on once `Phosphor.swift` adds them — don't guess codepoints.
+
 - **Fixes from the 2026-06-30 CoWork struggle** — the nightly run put a habit sticker over the
   schedule and a surprise sticker over the date, to-dos came out gold not lavender, and long
   to-do text ran off the panel. Three server changes address the *placement/theming* side (the
@@ -254,16 +277,12 @@ contract this server writes against. What that settles here:
 
 ## Phase 2 — the delight layer (richer content, some app-side unknowns)
 
-### 2.1 Phosphor icon glyphs (weather, decoration) · Effort M · Feasibility MEDIUM
-The "umbrella in the corner." `Phosphor` is in `FONT_ENUM` but otherwise unused. Add an
-`icon` on a line/element mapping a friendly name (`umbrella`, `sun`, `cloud`, `check`,
-`star`) to its Phosphor codepoint. **Needs** the codepoint map and confirmation the app
-ships the Phosphor cut; drawn-shape fallback otherwise. (Markers already prove the
-drawn-shape path.) **Now unblocked on the app side:** the 2026-06 handoff's icon-set request
-was resolved to **map glyphs to the bundled Phosphor webfont** (no bespoke commission) — the
-canonical name→codepoint mapping is published at
-`../onionskin/design/design-system/readme.md` § Iconography (`Phosphor.swift`). Pull our
-codepoints from there rather than guessing (wrong ones render tofu).
+### 2.1 Phosphor icon glyphs (weather, decoration) — 🟡 plumbing shipped, scoped-partial (see Done above)
+The mechanism (schema field, glyph rendering, codepoint map) is done for the 22 names
+confirmed in the app's `Phosphor.swift`. **Still open:** the actually-useful weather/decoration
+set — `umbrella`, `sun`, `cloud`, `check`, `star` — isn't published by the app yet. Once
+`Phosphor.swift` adds those codepoints, add them to `PHOSPHOR_CODEPOINTS` (`svg.ts`) the same
+way — no other code changes needed.
 
 ### 2.2 Embed generated images into `ai.svg` — ✅ shipped (see Done above)
 A region may carry `images` (base64 art the caller supplies). **Design settled by reading the
@@ -326,26 +345,15 @@ Shape of the work (all server-side, renderer-safe):
 Out of scope here: a `star` *marker primitive* — the contract uses a typographic ★ in the to-do
 text, which needs no new code.
 
-### 2.7 Surface the templates' printed label slots · Effort M · Feasibility HIGH
-The 2026-06 catalogue templates print a dashed **label slot** *inside* each region — a
-`<rect data-region="label-…" data-fill="shared" data-intent="optional section label…">`
-nested in the region's `<g>` (e.g. `daily-minimal`'s slot at region-local `(0,-54) 118×34`).
-`parseRegions` only scans top-level `<g id="region-*">`, so these sub-regions (and their
-fills/intents) are invisible to `read_page` — and the server's own `label` banner hard-codes
-`x=24, baseline y=-12` (`svg.ts`), so its pill half-overlaps the printed dashed slot instead
-of filling it: visible double decoration on every shipped template. Work: parse label
-sub-regions onto `Region` (or a `labelSlot` field), aim the `label` banner at the printed
-slot's geometry when one exists, and keep today's margin placement as the fallback for
-templates without slots.
+### 2.7 Surface the templates' printed label slots — ✅ shipped (see Done above)
+`parseRegions` distinguishes a region's box rect from its nested label-slot rect by attribute,
+not child order; `Region.labelSlot` surfaces the slot's geometry; the `label` banner fills it
+when present, falling back to the old margin placement otherwise.
 
-### 2.8 Read `settings.json → underlayVoice` · Effort S · Feasibility HIGH
-The app's `FORMAT.md §4` publishes a root-level `settings.json` with
-`underlayVoice { name, tone, notes }` (`tone ∈ calm·warm·upbeat·dry·none`; `none` = no
-written note) and explicitly invites an external MCP to read it to personalize the `ainotes`
-voice. No code here touches it, so an orchestrator can't honour the user's chosen tone/name
-through the tool surface. Work: read it defensively (absent/garbled → null) and surface it on
-`get_library` (and/or `read_page`) so the note-writing prompt can use it. Read-only — the
-server never writes `settings.json`.
+### 2.8 Read `settings.json → underlayVoice` — ✅ shipped (see Done above)
+`get_library` and `read_page` both surface the library root's `underlayVoice` setting
+(name/tone/notes), read defensively — absent/garbled degrades to `null`, never throws.
+Read-only; the server never writes `settings.json`.
 
 ---
 

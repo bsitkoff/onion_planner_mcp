@@ -83,10 +83,14 @@
   height `round(1.15 × size) + 6`, top `baseline − round(0.82 × size) − 3`; label **weight 700**,
   **letter-spacing 0.08em**, color `#FFFFFF`, inset `12px`. "Underline" style instead: bold
   label + hairline rule (`stroke = ink`, `opacity 0.4`) at `baseline + round(0.45 × size)`.
-- **Region label** (title banner): same pill at **size 15 / weight 800 / letter-spacing 0.1em**,
-  drawn in the **margin above** the region (local baseline `y = −12`).
-- Pill width: `round(len × size × 0.82) + 2 × 12` — deliberately generous (the app's bold,
-  tracked label renders wider than the body-text width heuristic).
+- **Region label** (title banner): same pill at **size 15 / weight 800 / letter-spacing 0.1em**.
+  When the template prints a dashed label slot (`<rect data-region="label-<name>">` nested in
+  the region's own `<g>`), the banner pill stretches to **fill that slot's box exactly**
+  (underline style anchors its text off the slot's origin only, since it draws no box); when a
+  template prints no slot, it falls back to the **margin above** the region (local baseline
+  `y = −12`), unchanged from before.
+- Pill width (no-slot fallback only): `round(len × size × 0.82) + 2 × 12` — deliberately
+  generous (the app's bold, tracked label renders wider than the body-text width heuristic).
 
 ## 6. Themes (MCP underlay mood — the second axis)
 

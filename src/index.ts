@@ -6,6 +6,7 @@ import {
   requireLibrary,
   listChapters,
   listPageRows,
+  readUnderlayVoice,
   LibraryMissingError,
 } from "./library.js";
 import {
@@ -18,6 +19,7 @@ import {
   writeChapterTheme,
   fetchImageToTemp,
 } from "./page.js";
+import { PHOSPHOR_CODEPOINTS } from "./svg.js";
 
 const server = new McpServer(
   {
@@ -45,16 +47,18 @@ const json = (o: unknown) => text(JSON.stringify(o, null, 2));
 server.tool(
   "get_library",
   "Resolve and validate the Onionskin iCloud library. Returns the library root path, " +
-    "whether it exists, and the chapters under Shared/ with page counts. Call this FIRST. " +
-    "If the library is missing, its error explains how to fix it (run the app once, or set " +
-    "ONIONSKIN_CONTAINER).",
+    "whether it exists, the chapters under Shared/ with page counts, and the global " +
+    "underlayVoice setting (name/tone/notes for personalizing the ainotes note), if set. " +
+    "Call this FIRST. If the library is missing, its error explains how to fix it (run the " +
+    "app once, or set ONIONSKIN_CONTAINER).",
   {},
   { readOnlyHint: true },
   async () => {
     try {
       const root = await requireLibrary();
       const chapters = await listChapters(root);
-      return json({ root, exists: true, sharedChapters: chapters });
+      const underlayVoice = await readUnderlayVoice(root);
+      return json({ root, exists: true, sharedChapters: chapters, underlayVoice });
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {
         return {
@@ -226,6 +230,10 @@ const FONT_ENUM = z.enum([
   "Phosphor",
 ]);
 
+// The confirmed-codepoint subset (see svg.ts PHOSPHOR_CODEPOINTS) — an icon name
+// outside this set is rejected here rather than silently rendering nothing.
+const PHOSPHOR_ICON_NAMES = Object.keys(PHOSPHOR_CODEPOINTS) as [string, ...string[]];
+
 const lineSchema = z.object({
   text: z.string().describe("The text to draw (gold)."),
   row: z
@@ -268,6 +276,14 @@ const lineSchema = z.object({
       "Leading mark before the text (drawn, no font dependency): 'checkbox' for " +
         "to-do items, 'bullet' for bulleted notes. The text is shifted past it.",
     ),
+  icon: z
+    .enum(PHOSPHOR_ICON_NAMES)
+    .optional()
+    .describe(
+      "Leading Phosphor icon glyph before the text (font-rendered), from a small " +
+        "confirmed-codepoint set — an unrecognized name is rejected. Mutually " +
+        "exclusive with `marker`.",
+    ),
   wrap: z
     .boolean()
     .optional()
@@ -286,7 +302,11 @@ const lineSchema = z.object({
         "region the lines flow top-down, so a heading + its items stack naturally. " +
         "`marker`/`wrap` are ignored on a heading.",
     ),
-}).strict();
+})
+  .strict()
+  .refine((l) => !(l.marker && l.icon), {
+    message: "A line may carry `marker` OR `icon`, not both.",
+  });
 
 // Calendar grid for the month region — the server computes each day's cell from
 // the template's column/row lines and emits day numbers + data-date tap targets.

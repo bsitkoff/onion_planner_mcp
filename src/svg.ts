@@ -292,6 +292,39 @@ const FALLBACK_DEFAULT: RegionDefault = { font: "Mulish", size: 14, weight: DEFA
 /** A leading mark drawn before a line's text (todo lists, bulleted notes). */
 export type LineMarker = "checkbox" | "bullet";
 
+/**
+ * Confirmed Phosphor codepoints, mirrored 1:1 from the app's canonical
+ * `Onionskin/DesignSystem/Phosphor.swift`. ONLY names with a verified codepoint belong
+ * here — a wrong guess renders tofu on device (no glyph, just a missing-character box).
+ * Deliberately incomplete: umbrella/sun/cloud/check/star — the weather/decoration set
+ * roadmap item 2.1 actually wanted — are NOT yet published by the app and are deferred
+ * until they are (see docs/ROADMAP.md).
+ */
+export const PHOSPHOR_CODEPOINTS: Record<string, string> = {
+  bookOpen: "",
+  calendarBlank: "",
+  lockSimple: "",
+  circleHalf: "",
+  magnifyingGlass: "",
+  house: "",
+  gear: "",
+  pencilSimple: "",
+  hand: "",
+  arrowsClockwise: "",
+  lightning: "",
+  caretRight: "",
+  files: "",
+  eraser: "",
+  sticker: "",
+  smiley: "",
+  trash: "",
+  x: "",
+  export: "",
+  shareNetwork: "",
+  plus: "",
+  minus: "",
+};
+
 export interface LineInput {
   text: string;
   /** Ruled-row index to align to (0-based). Ignored if `y` is given. */
@@ -317,6 +350,12 @@ export interface LineInput {
    * shapes (no font dependency).
    */
   marker?: LineMarker;
+  /**
+   * Draw a leading Phosphor icon glyph (font-rendered) before the text and shift the
+   * text past it, from the confirmed-codepoint subset in `PHOSPHOR_CODEPOINTS`.
+   * Mutually exclusive with `marker` (one leading mark per line).
+   */
+  icon?: string;
   /**
    * Wrap the text to the region width instead of overflowing. Continuation
    * segments stack just below the baseline (they do NOT consume the next ruled
@@ -562,6 +601,27 @@ function markerFragment(
   return {
     svg: `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}"/>`,
     advance: 2 * r + Math.round(size * 0.4),
+  };
+}
+
+/**
+ * A leading Phosphor icon glyph drawn at local (x, baseline), parallel to
+ * `markerFragment` but font-rendered instead of a drawn shape. Returns an empty
+ * fragment for an unrecognized name — schema validation already guarantees a known
+ * key, so this is a defensive fallback only, not the primary error path.
+ */
+function iconFragment(
+  name: string,
+  x: number,
+  baseline: number,
+  size: number,
+  fill: string,
+): { svg: string; advance: number } {
+  const codepoint = PHOSPHOR_CODEPOINTS[name];
+  if (!codepoint) return { svg: "", advance: 0 };
+  return {
+    svg: `<text x="${x}" y="${baseline}" font-family="Phosphor" font-size="${size}" fill="${fill}">${escapeXml(codepoint)}</text>`,
+    advance: Math.round(size * CHAR_WIDTH_RATIO.Phosphor) + Math.round(size * 0.3),
   };
 }
 
@@ -909,13 +969,18 @@ export function composeAiSvg(
       `  <g transform="translate(${region.x},${region.y})" data-region="${region.name}">`,
     );
     // Region title banner, in the margin just above the box (never consumes a row).
+    // When the template prints a dashed label slot (region.labelSlot), aim the banner
+    // at it instead of the default margin position — banner style fills the slot's box
+    // exactly; underline style just anchors its text off the slot's origin (it draws no
+    // box of its own, so there's nothing to stretch).
     if (input.label) {
       const lsize = 15;
-      const ly = -12; // baseline above the region's top edge
-      const lx = DEFAULT_X_PAD;
+      const slot = region.labelSlot;
       const lw = bannerLabelWidth(input.label, lsize);
       const labelFont = themeFontFor(theme, region.name, true) ?? "Mulish";
-      if (region.y + ly - lsize < 0) {
+      // A printed slot sits inside the region's authored space, so it can't be
+      // off-page by construction — only check the fallback margin placement.
+      if (!slot && region.y - 12 - lsize < 0) {
         warn(
           "label_above_page",
           `region "${region.name}": label "${truncate(input.label)}" may sit above the page top.`,
@@ -923,14 +988,17 @@ export function composeAiSvg(
           region.name,
         );
       }
+      const lx = slot ? slot.x : DEFAULT_X_PAD;
+      const ly = slot ? slot.y + slot.height - Math.round(slot.height * 0.28) : -12;
       if (theme.headingStyle === "banner") {
         const padX = BANNER_PAD_X;
-        const bh = Math.round(lsize * 1.15) + 6;
-        const by = ly - Math.round(lsize * 0.82) - 3;
+        const bh = slot ? slot.height : Math.round(lsize * 1.15) + 6;
+        const by = slot ? slot.y : ly - Math.round(lsize * 0.82) - 3;
+        const bw = slot ? slot.width : lw + padX * 2;
         const color = input.labelFill ?? theme.banners[bannerIdx % theme.banners.length];
         bannerIdx++;
         parts.push(
-          `    <rect x="${lx}" y="${by}" width="${lw + padX * 2}" height="${bh}" rx="6" fill="${color}"/>`,
+          `    <rect x="${lx}" y="${by}" width="${bw}" height="${bh}" rx="6" fill="${color}"/>`,
         );
         parts.push(
           `    <text x="${lx + padX}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
@@ -1190,6 +1258,10 @@ export function composeAiSvg(
           const m = markerFragment(line.marker, x, y, size, line.fill ?? theme.accent);
           parts.push(`    ${m.svg}`);
           x += m.advance;
+        } else if (line.icon) {
+          const ic = iconFragment(line.icon, x, y, size, line.fill ?? theme.accent);
+          parts.push(`    ${ic.svg}`);
+          x += ic.advance;
         }
 
         // Wrap defaults ON for flow-placed body text in a width-bounded region (so a

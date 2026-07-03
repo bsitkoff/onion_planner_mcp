@@ -22,7 +22,7 @@ app composites it on next foreground.
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `get_library` | read | Resolve & validate the iCloud library; list Shared chapters. **Call first.** |
+| `get_library` | read | Resolve & validate the iCloud library; list Shared chapters + the global `underlayVoice` setting, if set. **Call first.** |
 | `list_pages` | read | List shared pages with title, template, size, modified, ai status. Optional filters (AND): `chapter`, `template`, `aiStatus`, `titleContains`, `modifiedAfter`/`modifiedBefore`. |
 | `read_page` | read | One page's manifest + parsed **regions** (geometry) + current ai.svg. |
 | `read_ink` | read | Read the user's `ink.svg` layer for context without modifying it. |

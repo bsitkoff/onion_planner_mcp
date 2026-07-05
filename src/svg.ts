@@ -1419,35 +1419,38 @@ export function composeAiSvg(
             r2 = Math.min(Math.max(0, r2), maxIdx);
           }
           if (r2 <= r1) {
+            // Too short to span rows on this grid (e.g. a 20-min meeting on a
+            // 1-row-per-hour grid: both ends snap to the same row). The event must
+            // still appear — fall through to the normal time-anchored text line.
             warn(
               "washi_block_zero_duration",
               `region "${region.name}": block "${truncate(line.text)}" (${line.time}–${endTimeStr}) ` +
-                `has zero/negative duration — not drawn.`,
-              "warning",
+                `is too short to span rows on this grid — drawn as a plain time line instead.`,
+              "info",
               region.name,
+            );
+          } else {
+            const y1 = Math.round(region.ruledLines[r1] - region.y);
+            const y2 = Math.round(region.ruledLines[r2] - region.y);
+            const bx = line.x ?? def.xPad ?? DEFAULT_X_PAD;
+            const bw = region.width - bx - (def.xPad ?? DEFAULT_X_PAD);
+            parts.push(
+              `    ${washiBlockFragment(
+                bx,
+                y1,
+                y2,
+                bw,
+                line.text,
+                font,
+                size,
+                weight,
+                fill,
+                line.blockFill ?? theme.accent,
+                line.blockOpacity ?? WASHI_DEFAULT_OPACITY,
+              )}`,
             );
             return;
           }
-          const y1 = Math.round(region.ruledLines[r1] - region.y);
-          const y2 = Math.round(region.ruledLines[r2] - region.y);
-          const bx = line.x ?? def.xPad ?? DEFAULT_X_PAD;
-          const bw = region.width - bx - (def.xPad ?? DEFAULT_X_PAD);
-          parts.push(
-            `    ${washiBlockFragment(
-              bx,
-              y1,
-              y2,
-              bw,
-              line.text,
-              font,
-              size,
-              weight,
-              fill,
-              line.blockFill ?? theme.accent,
-              line.blockOpacity ?? WASHI_DEFAULT_OPACITY,
-            )}`,
-          );
-          return;
         }
         if (
           line.time === undefined &&

@@ -24,8 +24,13 @@ each of those into a write-time signal (issues #1–#6, closed by `135d2e5`):
 - Schema + `AUTHORING.md` now state the washi preference outright: an event with a real
   start/end gets `endTime`/`durationMin` (duration block); a bare `time` line is for
   point-in-time notes. And: omit image `height` to aspect-fill.
+- **Sub-hour events no longer vanish** (#17): a `time`+`endTime` span that snaps to zero rows
+  (a 20-min meeting on a 1-row-per-hour grid) used to drop the whole line — block *and* text.
+  It now falls back to a plain time-anchored line; `washi_block_zero_duration` downgraded to
+  info ("drawn as a plain time line instead"). Found by dryRun against the live 2026-07-06
+  page while switching the skills to washi blocks.
 
-Smoke 260 passed / 0 failed (+7) · tsc clean.
+Smoke 261 passed / 0 failed (+8) · tsc clean.
 
 ---
 

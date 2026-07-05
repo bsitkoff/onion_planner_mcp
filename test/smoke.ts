@@ -352,9 +352,22 @@ async function main() {
     regions: [{ region: "schedule", lines: [{ text: "Oops", time: "10:00", endTime: "09:00" }] }],
   });
   check(
-    "zero/negative duration warns and skips drawing",
-    zeroDur.warningDetails.some((w) => w.code === "washi_block_zero_duration") && !(zeroDur.aiSvg ?? "").includes("Oops"),
+    "zero/negative duration warns (info) and falls back to a plain time line — the event still appears",
+    zeroDur.warningDetails.some((w) => w.code === "washi_block_zero_duration" && w.severity === "info") &&
+      (zeroDur.aiSvg ?? "").includes(">Oops</text>") &&
+      !(regionGroup(zeroDur.aiSvg, "schedule") ?? "").includes('rx="6"'),
     JSON.stringify(zeroDur.warningDetails),
+  );
+  // The real-world case that motivated the fallback: a 20-minute meeting on a
+  // 1-row-per-hour grid snaps both ends to the same row — it must not vanish.
+  const shortMeeting = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "Morning Meeting", time: "08:00", endTime: "08:20" }] }],
+  });
+  check(
+    "a sub-row meeting (08:00-08:20) keeps its text as a time line",
+    (shortMeeting.aiSvg ?? "").includes(">Morning Meeting</text>"),
+    (regionGroup(shortMeeting.aiSvg, "schedule") ?? "").slice(0, 300),
   );
 
   const overrun = await writeUnderlay(root, daily, {

@@ -7,7 +7,9 @@ planner integration is **filesystem-only**: it reads `template.svg` for region g
 writes `ai.svg` + the manifest's status flag. The optional `fetch_image` helper only downloads
 HTTPS image files to local temp paths for later filesystem embedding. Full contract:
 [`docs/MCP-INTEGRATION.md`](docs/MCP-INTEGRATION.md).
-Shipped + planned work: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Planned work: [`docs/ROADMAP.md`](docs/ROADMAP.md) · shipped history:
+[`docs/CHANGELOG.md`](docs/CHANGELOG.md) · bugs/polish:
+[issues](https://github.com/bsitkoff/onion_planner_mcp/issues).
 
 ## What it does
 

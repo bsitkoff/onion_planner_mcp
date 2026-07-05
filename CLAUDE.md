@@ -1,7 +1,8 @@
 # CLAUDE.md
 
-Guidance for working on this repo. See `README.md` for usage and `docs/ROADMAP.md` for what's
-shipped and what's next. **The file-format contract lives in the Onionskin app repo at
+Guidance for working on this repo. See `README.md` for usage, `docs/ROADMAP.md` for planned
+features (each linking its GitHub issue — bugs/polish live on the issue tracker), and
+`docs/CHANGELOG.md` for what's shipped. **The file-format contract lives in the Onionskin app repo at
 `design/FORMAT.md` — the single source of truth;** `docs/MCP-INTEGRATION.md` is the standalone
 integration quickstart
 that points back to it, and `docs/AUTHORING.md` covers how to fill pages.

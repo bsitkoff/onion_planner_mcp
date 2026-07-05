@@ -46,6 +46,16 @@ export function scanRawSvgElements(svg: string): string[] {
   return [...unsupported].sort();
 }
 
+/**
+ * True when raw svg contains an <image href="data:..."> — the app renderer resolves
+ * <image href> only as a page-relative file path (never a data: URI; CLAUDE.md Gotchas),
+ * so this would write fine but never render. Only `href` is checked — this codebase never
+ * emits `xlink:href` for <image> (see the href emission below, in composeAiSvg).
+ */
+export function scanRawSvgDataUriImages(svg: string): boolean {
+  return /<image\b[^>]*\bhref\s*=\s*["']\s*data:/i.test(svg);
+}
+
 /** Font roles applied when a `fontPersonality` is chosen (else region defaults stand). */
 export interface ThemeFonts {
   /** Body lines (schedule, to-do, ainotes…). */
@@ -273,7 +283,7 @@ interface RegionDefault {
   xPad?: number;
 }
 const REGION_DEFAULTS: Record<string, RegionDefault> = {
-  ainotes: { font: "Newsreader", size: 26, weight: 500 }, // the serif AI-voice register
+  ainotes: { font: "Newsreader", size: 16, weight: 500 }, // the serif AI-voice register
   header: { font: "Mulish", size: 20, weight: 700 },
   schedule: { font: "Mulish", size: 15, weight: 600, xPad: 52 },
   agenda: { font: "Mulish", size: 15, weight: 600, xPad: 52 },
@@ -282,8 +292,8 @@ const REGION_DEFAULTS: Record<string, RegionDefault> = {
   focus: { font: "Mulish", size: 15, weight: 600 },
   month: { font: "Mulish", size: 13, weight: 600 },
   // legacy region names (retired 2026-06) — kept so older pages still style correctly.
-  quote: { font: "Newsreader", size: 26, weight: 500 },
-  affirmation: { font: "Newsreader", size: 26, weight: 500 },
+  quote: { font: "Newsreader", size: 16, weight: 500 },
+  affirmation: { font: "Newsreader", size: 16, weight: 500 },
   priorities: { font: "Mulish", size: 15, weight: 600 },
   goals: { font: "Mulish", size: 15, weight: 600 },
 };
@@ -450,6 +460,20 @@ export interface ImageInput {
   margin?: number;
   /** Image opacity, 0–1. */
   opacity?: number;
+  /**
+   * Cut a background out of the image before placing it, resolved in
+   * `page.ts:resolveImages` before the `media/ai/` write. `"subject"` runs a
+   * saliency cutout (rembg) — best for a clean single subject. `"chroma"` keys a
+   * solid uniform background colour to transparent — the reliable path for
+   * diffuse/soft art where saliency erases the subject; requires a PNG source and
+   * `chromaColor`. Default `"none"`. A knocked-out image's resolved format is
+   * always `"png"` regardless of any declared `format`. See `docs/AUTHORING.md`.
+   */
+  knockout?: "subject" | "chroma" | "none";
+  /** Background colour to key transparent (hex) — required with `knockout: "chroma"`. */
+  chromaColor?: string;
+  /** Per-channel colour-distance tolerance for `knockout: "chroma"` (0–255, default 30). */
+  tolerance?: number;
   /** Resolved by page.ts: the `media/ai/<file>` reference written into ai.svg. */
   href?: string;
 }
@@ -490,6 +514,13 @@ export interface RegionInput {
   startHour?: number;
   /** Ruled rows per hour (default 1; 2 = a half-hour grid). Anchors `line.time`. */
   rowsPerHour?: number;
+  /**
+   * Stamp small hour labels ("7a"/"12p") at each whole-hour ruled row, from this
+   * region's resolved `startHour`/`rowsPerHour` — for a timed grid whose template
+   * prints no hour numbers. No-op (with an info warning) if there are no ruled
+   * rows or no startHour resolves. Only applies to the `lines`-bearing branch.
+   */
+  showHours?: boolean;
 }
 
 function escapeXml(s: string): string {
@@ -563,6 +594,14 @@ function addMinutes(time: string, minutes: number): string {
   return `${hh}:${mm}`;
 }
 
+/** A 24h hour (0-23, wrapped) as compact "7a"/"12p" shorthand — for `showHours`. */
+function formatHour(hour: number): string {
+  const h = ((hour % 24) + 24) % 24;
+  const period = h < 12 ? "a" : "p";
+  const displayHour = h % 12 === 0 ? 12 : h % 12;
+  return `${displayHour}${period}`;
+}
+
 /**
  * Greedily break `text` into segments that each fit within `maxWidth` (per the
  * width heuristic). A single over-long word is hard-broken at the character
@@ -601,6 +640,15 @@ function wrapText(text: string, font: string, size: number, maxWidth: number): s
   return out.length > 0 ? out : [text];
 }
 
+/** How far a `marker` (checkbox/bullet) pushes the text x past it. Shared by
+ *  `markerFragment` (drawing) and `flowLineAdvance` (box-region wrap width). */
+function markerAdvance(marker: LineMarker, size: number): number {
+  if (marker === "checkbox") {
+    return Math.round(size * 0.85) + Math.round(size * 0.4);
+  }
+  return 2 * Math.max(2, Math.round(size * 0.16)) + Math.round(size * 0.4);
+}
+
 /**
  * A leading marker drawn at local (x, baseline). Returns the SVG fragment and how
  * far to advance the text x past it. Pure shapes — no font dependency.
@@ -612,13 +660,14 @@ function markerFragment(
   size: number,
   fill: string,
 ): { svg: string; advance: number } {
+  const advance = markerAdvance(marker, size);
   if (marker === "checkbox") {
     const box = Math.round(size * 0.85);
     const top = baseline - box; // sit the box just above the baseline
     const sw = Math.max(1, Math.round(size / 12));
     return {
       svg: `<rect x="${x}" y="${top}" width="${box}" height="${box}" rx="2" fill="none" stroke="${fill}" stroke-width="${sw}"/>`,
-      advance: box + Math.round(size * 0.4),
+      advance,
     };
   }
   // bullet
@@ -627,8 +676,15 @@ function markerFragment(
   const cy = baseline - Math.round(size * 0.32);
   return {
     svg: `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}"/>`,
-    advance: 2 * r + Math.round(size * 0.4),
+    advance,
   };
+}
+
+/** How far an `icon` (Phosphor glyph) pushes the text x past it — `0` for an
+ *  unrecognized name. Shared by `iconFragment` (drawing) and `flowLineAdvance`. */
+function iconAdvance(name: string, size: number): number {
+  if (!PHOSPHOR_CODEPOINTS[name]) return 0;
+  return Math.round(size * CHAR_WIDTH_RATIO.Phosphor) + Math.round(size * 0.3);
 }
 
 /**
@@ -648,7 +704,7 @@ function iconFragment(
   if (!codepoint) return { svg: "", advance: 0 };
   return {
     svg: `<text x="${x}" y="${baseline}" font-family="Phosphor" font-size="${size}" fill="${fill}">${escapeXml(codepoint)}</text>`,
-    advance: Math.round(size * CHAR_WIDTH_RATIO.Phosphor) + Math.round(size * 0.3),
+    advance: iconAdvance(name, size),
   };
 }
 
@@ -777,6 +833,35 @@ function rowOffset(region: Region): number {
 }
 
 /**
+ * How much vertical space a flow-placed (non-heading) line needs, so the cursor
+ * that fixes the *next* line's baseline reserves enough room — including when
+ * this line wraps into multiple continuation segments. Mirrors the render loop's
+ * own wrap predicate/width math (composeAiSvg, the `effWrap`/`segments` block) so
+ * the two never disagree about whether/how much a line wraps. Returns the plain
+ * `lineH` for a non-wrapping line, so the common case is unchanged.
+ */
+function flowLineAdvance(
+  region: Region,
+  line: LineInput,
+  sz: number,
+  lineH: number,
+  def: RegionDefault,
+  theme: Theme,
+): number {
+  const effWrap = line.wrap ?? (region.width !== null && line.time === undefined);
+  if (!effWrap || region.width === null) return lineH;
+  const font = line.font ?? themeFontFor(theme, region.name, false) ?? def.font;
+  let x = line.x ?? def.xPad ?? DEFAULT_X_PAD;
+  if (line.marker) x += markerAdvance(line.marker, sz);
+  else if (line.icon) x += iconAdvance(line.icon, sz);
+  const maxWidth = region.width - x;
+  if (maxWidth <= 0) return lineH;
+  const segments = wrapText(line.text, font, sz, maxWidth);
+  const subPitch = Math.round(sz * 1.3);
+  return Math.max(lineH, segments.length * subPitch);
+}
+
+/**
  * Vertical baselines for an *unruled* (box) region, laid out as a top-down flow:
  * a running cursor that gives each line its height, plus extra breathing room
  * above a `heading`. This is what lets the AI stack dynamic sections (heading +
@@ -784,7 +869,12 @@ function rowOffset(region: Region): number {
  * them. Honours explicit `y` (kept verbatim) and legacy box `row` (an absolute
  * slot). A single plain line is vertically centred (nice for the quote).
  */
-function flowBaselines(region: Region, lines: LineInput[], def: RegionDefault): number[] {
+function flowBaselines(
+  region: Region,
+  lines: LineInput[],
+  def: RegionDefault,
+  theme: Theme,
+): number[] {
   const first = lines.length ? (lines[0].size ?? def.size) : def.size;
   if (
     lines.length === 1 &&
@@ -812,7 +902,10 @@ function flowBaselines(region: Region, lines: LineInput[], def: RegionDefault): 
     }
     if (line.heading && i > 0) cursor += Math.round(sz * 0.6); // gap before a new section
     out[i] = cursor;
-    cursor += line.heading ? lineH + 10 : lineH; // headings reserve room for their rule
+    // Headings reserve room for their rule; other lines reserve enough for
+    // however many segments they wrap into, so the next line's baseline never
+    // lands inside this line's own wrapped continuations.
+    cursor += line.heading ? lineH + 10 : flowLineAdvance(region, line, sz, lineH, def, theme);
   });
   return out;
 }
@@ -1214,10 +1307,41 @@ export function composeAiSvg(
           : region.rowsPerHour && region.rowsPerHour > 0
             ? region.rowsPerHour
             : 1;
+      // Optional server-stamped hour gutter for a timed grid whose template prints
+      // no hour numbers (an agenda-style schedule) — a no-op info warning, not a
+      // dropped-content warning, since it never touches authored lines.
+      if (input.showHours) {
+        if (region.ruledLines.length === 0) {
+          warn(
+            "time_unruled_region",
+            `region "${region.name}": showHours requested but the region has no ruled rows.`,
+            "info",
+            region.name,
+          );
+        } else if (effStartHour === undefined) {
+          warn(
+            "time_missing_start_hour",
+            `region "${region.name}": showHours requested but no startHour was set ` +
+              `(neither the call nor the template's data-start-hour).`,
+            "info",
+            region.name,
+          );
+        } else {
+          region.ruledLines.forEach((lineY, idx) => {
+            if (idx % rowsPerHour !== 0) return; // only whole-hour rows on a half-hour+ grid
+            const hour = Math.floor(effStartHour + idx / rowsPerHour);
+            const ly = Math.round(lineY - region.y + rowOffset(region));
+            parts.push(
+              `    <text x="4" y="${ly}" font-family="Mulish" font-size="11" font-weight="700" ` +
+                `fill="${theme.text}" opacity="0.55">${formatHour(hour)}</text>`,
+            );
+          });
+        }
+      }
       // All regions default to top-down flow so AI content sits in the white space
       // above/between the ruled lines, leaving the lines free for the user's ink.
       // A line with an explicit `row` or `time` still snaps to the ruled grid.
-      const flowBases = flowBaselines(region, lines, def);
+      const flowBases = flowBaselines(region, lines, def, theme);
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
         const font = line.font ?? themeFontFor(theme, region.name, !!line.heading) ?? def.font;
@@ -1459,7 +1583,19 @@ export function composeAiSvg(
             const collidesRow = pitch !== null && dropped > pitch;
             const pastBox =
               region.height !== null && y + dropped + Math.round(size * 0.3) > region.height;
-            if (collidesRow || pastBox) {
+            // A box region (no ruled pitch to check against) can still have its
+            // wrapped block run into the *next* flow-placed line — flowLineAdvance
+            // (E) already reserves the right gap, but check the actual next
+            // baseline too as a backstop (e.g. an explicit-y next line placed too
+            // close to a wrapping flow line above it).
+            const usedFlowBaseline = effLine.row === undefined && effLine.y === undefined;
+            const nextFlowY =
+              region.ruledLines.length === 0 && usedFlowBaseline && i + 1 < lines.length
+                ? flowBases[i + 1]
+                : null;
+            const collidesNextFlowLine =
+              nextFlowY !== null && y + dropped + Math.round(size * 0.3) > nextFlowY;
+            if (collidesRow || collidesNextFlowLine || pastBox) {
               warn(
                 "wrapped_text_vertical_overflow",
                 `region "${region.name}": wrapped line "${truncate(line.text)}" ` +
@@ -1560,7 +1696,14 @@ export function mergeRegions(
 // so "first </g>" is NOT a safe close (it corrupts the document; see extractRegionGroups).
 const REGION_OPEN_RE = /<g\b[^>]*\bdata-region="([^"]+)"[^>]*>/g;
 
-function extractRegionGroups(svg: string): {
+/**
+ * Split a composed/existing ai.svg into its top-level `<g data-region="…">` groups.
+ * Depth-aware (a region's raw `svg` fragment may legitimately nest `<g>` elements —
+ * "first `</g>`" is not a safe close). Exported for `page.ts:readPage`'s `labelFilled`
+ * detection (H), which scans a region's own group for a rendered label banner,
+ * in addition to its original use in `mergeRegions`.
+ */
+export function extractRegionGroups(svg: string): {
   order: string[];
   byName: Map<string, string>;
 } {

@@ -232,6 +232,14 @@ Constraints: PNG/JPEG only, **≤ 2 MB** (no webp — the app rejects it). Gener
 outside this server; `fetch_image` is only a bridge from an HTTPS image URL to a local temp
 file for `images[].path`.
 
+**Never embed art in raw `svg` — it's a hard write error.** A raw `svg`/region-`svg`
+`<image href="data:...">` isn't just discouraged, it now makes `write_underlay` throw
+immediately (rather than silently write a page whose image never renders, since the app
+resolves `<image href>` only as a page-relative file path — see the "Raw per-region `svg`"
+bullet above). Art belongs **only** in the structured `images` array (`data` or `path`);
+if you already have image bytes in hand, decode/write them to a local file with code and pass
+`images[].path` — never hand-build a full `<svg>` string to embed them.
+
 **Where a sticker goes — an `ai` region or an empty corner, never over other content.** Put
 art in an **`ai`-fill region** (e.g. `ainotes`, whose intent is *"weather … plus a habit
 sticker or small image"*), or as a *small* corner sticker in an otherwise-empty spot. It must
@@ -250,10 +258,14 @@ area.
 1. Generate a small square image with whatever image tool you use. Prompt for the planner
    look: soft watercolour / doodle / washi-sticker, simple subject. Prefer a tool that returns
    a **file path**, not base64, so a ~1 MB PNG never rides through the model context.
-2. Make sure the file is on this Mac (e.g. saved or copied to `/tmp/onionskin-img.png`).
-   If the source is an HTTPS PNG/JPEG URL, `fetch_image` can download it to
-   `/tmp/onionskin-fetch/`; optional `removeBackground` requires `rembg` and may increase file
-   size, so the output is re-checked against the same 2 MB cap.
+2. Make sure the file is on this Mac (e.g. saved or copied to `/tmp/onionskin-img.png`). If
+   the image tool only returns **base64 JSON** (common for remote image-gen MCPs), the correct
+   move — especially for an overnight/automated run — is to **decode it to a local temp file
+   yourself** (e.g. `/tmp/onionskin-img.png`) and pass `images[].path`, not to inline the
+   base64 as `images[].data`; only inline `data` for a small one-off where this isn't an
+   automated write. If the source is an HTTPS PNG/JPEG URL instead, `fetch_image` can download
+   it to `/tmp/onionskin-fetch/`; optional `removeBackground` requires `rembg` and may increase
+   file size, so the output is re-checked against the same 2 MB cap.
 3. `write_underlay(page, regions=[{ region:"ainotes",
    images:[{ path:"/tmp/onionskin-img.png", width:140, corner:"bottom-right" }] }])` —
    an `ai` region sized to hold it; `format` is sniffed; the server validates (≤2 MB) and
@@ -263,6 +275,32 @@ area.
 `small` (1024px) keeps it well under the 2 MB cap. Never route through
 `convert_to_webp`/`get_generated_webp_images` — onionskin rejects webp (that path is for
 WordPress). More detail in the project memory (`onionskin-image-gen-pipeline`).
+
+### Getting *clean* art into the underlay (no checkerboard, no halo)
+
+Getting a **clean cutout** into the underlay is the fragile part of the pipeline — it depends
+on the image model's quirks, not this server's. Don't rely on prompting for "a transparent
+background": many models bake an **opaque checkerboard pattern into the actual pixels**
+instead of real alpha (confirmed empirically against a real model — the "transparent" PNG's
+corner pixels were solid grey, alpha ~250/255; this is baked into the image, not a rendering
+bug). Use one of the three recipes below instead, matched to the art:
+
+- **Clean single subject** (a mug, an animal, an object) → generate normally, on any
+  background → `images[].knockout:"subject"`. This runs a saliency cutout (rembg) that finds
+  and isolates the one subject — the reliable path when there's a single clear thing to keep.
+- **Diffuse/soft art** (a floral spray, a wash, foliage — anything without one crisp subject
+  boundary) → generate on **a solid uniform colour absent from the subject** (e.g. magenta for
+  a red/white/blue/green floral) → `images[].knockout:"chroma"` + matching `chromaColor`
+  (+ optional `tolerance`, default 30). Saliency cutout tends to erase diffuse art along with
+  the background; chroma-keying a known solid colour is the reliable path for it instead.
+  Requires a PNG source (chroma-keying needs pixel-level alpha) — generate/save as PNG, not JPEG.
+- **Soft-edged vignette** (art meant to fade into the page, no hard edge at all) → generate on
+  the page's own **paper colour** (`read_page`'s `template.paperColor`) → place it **opaque**,
+  no `knockout`. Matching the paper exactly means there's no edge to cut out or halo around.
+
+State the format constraints once: PNG/JPEG, ≤2 MB, ≤~1536px, `format` is sniffed when omitted
+(except a PNG source is required for `knockout:"chroma"` specifically, since only PNG carries
+per-pixel alpha).
 
 ## Smell test before `ready`
 

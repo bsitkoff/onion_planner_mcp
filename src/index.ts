@@ -138,7 +138,10 @@ server.tool(
   "read_page",
   "Read one shared page: its manifest, parsed regions (name, x, y, width, height, rows, " +
     "cols, startHour/rowsPerHour for timed grids, a `list` bucket, absolute ruled-line " +
-    "positions, a `fill`, and a free-text `intent`), current ai.svg, " +
+    "positions, a `fill`, a free-text `intent`, and `labelFilled` — whether a region's " +
+    "printed label slot, if it has one, actually has a label banner drawn into it yet " +
+    "(null if the region has no slot; false means the template prints a slot but nothing's " +
+    "there — don't assume a slot means content exists, pass `label` to fill it)), current ai.svg, " +
     "and a `template` summary, and optionally template.svg. Use the regions to target " +
     "write_underlay — never hard-code coordinates. Each region's `fill` says who fills it: " +
     "`ai` (you own it — fill it), `shared` (you seed it — calendar/tasks — but read_ink first " +
@@ -149,8 +152,10 @@ server.tool(
     "free to repurpose; it's null when the template set none. Honour each region by its `fill` " +
     "+ `intent` rather than expecting specific names (not every template has ainotes/todo). " +
     "`template` reports whether the template already decorates itself " +
-    "(`styled`/`hasLabels`/`hasBanners`/`stickersPresent`) and its own `palette`: if styled, " +
-    "fill quietly in those colours; if bare, go full (theme + banners + art). Also returns " +
+    "(`styled`/`hasLabels`/`hasBanners`/`stickersPresent`), its own `palette`, and its " +
+    "`paperColor` (the page's paper/background colour — generate soft-edged art on this to " +
+    "place it opaque with no knockout/halo; see docs/AUTHORING.md): if styled, fill quietly " +
+    "in those colours; if bare, go full (theme + banners + art). Also returns " +
     "the chapter's `theme` (harmony/varietyDial/fontPersonality + an explicit `accent` + " +
     "chromeAccent), which write_underlay applies as the default palette/fonts unless you " +
     "override it per call. Set it with set_chapter_theme.",
@@ -401,8 +406,38 @@ const imageSchema = z.object({
     .describe("Placement within the region box (default center). Ignored if x/y are set."),
   margin: z.number().optional().describe("Inset from the region edge for corner placement (default 8)."),
   opacity: z.number().min(0).max(1).optional().describe("Image opacity, 0–1."),
+  knockout: z
+    .enum(["subject", "chroma", "none"])
+    .optional()
+    .describe(
+      "Cut a background out of the image before placing it. \"subject\" runs a saliency " +
+        "cutout (rembg) — best for a clean single subject; requires the same optional local " +
+        "deps as fetch_image's removeBackground (python3 + `pip install rembg[cpu]`) and " +
+        "fails clearly if missing. \"chroma\" keys a solid uniform background colour to " +
+        "transparent — requires PNG input + `chromaColor`; use for diffuse/soft art where " +
+        "saliency cutout erases the subject. A knocked-out image's resolved format is always " +
+        "\"png\". Default \"none\". See docs/AUTHORING.md for when to use which.",
+    ),
+  chromaColor: HEX_COLOR.optional().describe(
+    "Background colour to key transparent (hex) — required with knockout:\"chroma\". " +
+      "Generate the art on this solid colour; pick one absent from the subject (e.g. magenta).",
+  ),
+  tolerance: z
+    .number()
+    .min(0)
+    .max(255)
+    .optional()
+    .describe(
+      "Per-channel colour-distance tolerance for knockout:\"chroma\" (0–255, default 30). " +
+        "Raise it if anti-aliased edges leave a colour fringe; lower it if the subject " +
+        "shares the background hue.",
+    ),
 }).strict().refine((i) => (i.data === undefined) !== (i.path === undefined), {
   message: "Provide exactly one of `data` or `path` for an image.",
+}).refine((i) => i.knockout !== "chroma" || i.chromaColor !== undefined, {
+  message: '`chromaColor` is required when knockout is "chroma".',
+}).refine((i) => i.knockout === "chroma" || (i.chromaColor === undefined && i.tolerance === undefined), {
+  message: '`chromaColor`/`tolerance` only apply when knockout is "chroma".',
 });
 
 server.tool(
@@ -410,8 +445,9 @@ server.tool(
   "Write a shared page's gold ai.svg (atomically) and set its status. Provide EITHER " +
     "`regions` (structured — the server positions each line from the page's geometry; " +
     "preferred) OR `svg` (a full <svg> document you composed yourself). A region may also " +
-    "carry `images` (base64 art the server writes to the page's media/ai/ folder and " +
-    "references from ai.svg). Sets status to 'ready' by default so the app will composite " +
+    "carry `images` (base64/path art the server writes to the page's media/ai/ folder and " +
+    "references from ai.svg, optionally cut out via `knockout` — see docs/AUTHORING.md for " +
+    "the recipe). Sets status to 'ready' by default so the app will composite " +
     "it. Use `merge` to update only the named regions and keep the rest of the page; use " +
     "`dryRun` to preview the result + fit warnings without writing. Returns non-fatal " +
     "`warnings` plus structured `warningDetails` for likely overflow. Refuses any page outside Shared/.",
@@ -481,6 +517,15 @@ server.tool(
             .describe(
               "Ruled rows per hour (2 = a half-hour grid). Defaults to the template's " +
                 "`data-rows-per-hour`, else 1. Anchors `time`.",
+            ),
+          showHours: z
+            .boolean()
+            .optional()
+            .describe(
+              "Stamp small hour labels (e.g. \"7a\", \"12p\") at each whole-hour ruled row, " +
+                "using this region's startHour/rowsPerHour — for a timed grid whose template " +
+                "prints no hour numbers. No-op (with an info warning) if the region has no " +
+                "ruled rows or no startHour is resolvable.",
             ),
         }).strict(),
       )

@@ -31,9 +31,10 @@ import {
   writeChapterTheme,
   fetchImageToTemp,
 } from "../src/page.js";
-import { GOLD, resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS } from "../src/svg.js";
+import { GOLD, resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages } from "../src/svg.js";
 import { hexToHsl } from "../src/color.js";
-import { inspectTemplate, parseRegions } from "../src/template.js";
+import { inspectTemplate, parseRegions, PAPER_COLOR } from "../src/template.js";
+import { decodePng, encodePng, chromaKeyPixels } from "../src/png.js";
 
 let pass = 0;
 let fail = 0;
@@ -159,6 +160,12 @@ async function main() {
   const cozyInfo = inspectTemplate(await fs.readFile(path.join(root, "Templates", "daily-cozy", "template.svg"), "utf8"));
   check("template info: cozy is styled with its own banners", cozyInfo.styled && cozyInfo.hasBanners && cozyInfo.hasLabels, JSON.stringify(cozyInfo));
   check("template info: cozy palette is non-empty and non-neutral", cozyInfo.palette.length > 0 && cozyInfo.palette.every((h) => /^#[0-9a-f]{6}$/.test(h)), JSON.stringify(cozyInfo.palette));
+  // No shipped template (as of the 2026-06 redesign catalogue) draws its own
+  // full-bleed background rect — paperColor falls back to the app's shared canvas
+  // constant. This documents that current behavior; it should fail loudly (and get
+  // a deliberate look) the day a template DOES draw its own background.
+  check("template info: paperColor falls back to the shared PAPER_COLOR constant", read.template.paperColor === PAPER_COLOR, read.template.paperColor);
+  check("template info: cozy also has no own background rect -> same fallback", cozyInfo.paperColor === PAPER_COLOR, cozyInfo.paperColor);
 
   console.log("\nregion fill (who fills each region: ink / ai / shared) + designer intent");
   // Derived from the region name: schedule is shared (AI seeds, user augments), the
@@ -557,6 +564,34 @@ async function main() {
   const noLabel = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", lines: [{ text: "x", row: 0 }] }] })).aiSvg, "schedule") ?? "";
   check("no label → no banner rect", !/<rect[^>]*rx="6"/.test(noLabel), noLabel);
 
+  console.log("\nI: server-stamped hour labels (showHours)");
+  const hoursResult = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", showHours: true, lines: [{ text: "9:00 standup", row: 0 }] }],
+  });
+  const hoursGroup = regionGroup(hoursResult.aiSvg, "schedule") ?? "";
+  const hourLabels = [...hoursGroup.matchAll(/<text x="4" y="[^"]*"[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  check(
+    "showHours stamps one label per ruled row (derived from parsed geometry)",
+    hourLabels.length === (schedule?.ruledLines.length ?? -1),
+    `labels=${JSON.stringify(hourLabels)} rows=${schedule?.ruledLines.length}`,
+  );
+  check("first hour label matches the template's data-start-hour (7 -> \"7a\")", hourLabels[0] === "7a", JSON.stringify(hourLabels));
+  const noRuledHours = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", showHours: true, lines: [{ text: "note" }] }],
+  });
+  check(
+    "showHours on an unruled region is a no-op that warns time_unruled_region (info)",
+    noRuledHours.warningDetails.some((w) => w.code === "time_unruled_region" && w.severity === "info" && w.region === "ainotes"),
+    JSON.stringify(noRuledHours.warningDetails),
+  );
+  check(
+    "showHours no-op draws no hour-label text on the unruled region",
+    !(regionGroup(noRuledHours.aiSvg, "ainotes") ?? "").includes('x="4"'),
+    regionGroup(noRuledHours.aiSvg, "ainotes") ?? "",
+  );
+
   console.log("\noverflow warnings + default-on wrap (dry-run, no write)");
   const longText = "This is an absurdly long line of text that cannot possibly fit the box";
   // Default-on wrap: a flow-placed long line in a box region wraps instead of overflowing.
@@ -582,6 +617,68 @@ async function main() {
   check("wrap:false warns about likely overflow", noWrapOverflow.warnings.some((w) => w.includes("overflow")), JSON.stringify(noWrapOverflow.warnings));
   check("warnings remain a string array for compatibility", noWrapOverflow.warnings.every((w) => typeof w === "string"));
   check("structured warning details include region + code", noWrapOverflow.warningDetails.some((w) => w.code === "text_overflow" && w.region === "ainotes"), JSON.stringify(noWrapOverflow.warningDetails));
+
+  console.log("\nE: box-region wrap cursor reserves space for wrapped continuations");
+  // Regression: the cursor used to advance by a flat line-height regardless of how
+  // many segments a wrapped line rendered, so the NEXT line's baseline landed on
+  // top of this line's own wrapped continuations.
+  const wrapCursor = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: longText }, { text: "Should not overlap" }] }],
+  });
+  const wrapCursorGroup = regionGroup(wrapCursor.aiSvg, "ainotes") ?? "";
+  const wrapCursorTexts = [...wrapCursorGroup.matchAll(/<text x="[^"]*" y="(-?\d+)"[^>]*>([^<]*)<\/text>/g)]
+    .map((m) => ({ y: Number(m[1]), text: m[2] }));
+  const longSegs = wrapCursorTexts.filter((t) => t.text !== "Should not overlap");
+  const nextLine = wrapCursorTexts.find((t) => t.text === "Should not overlap");
+  check("wrapped line produced multiple segments", longSegs.length > 1, JSON.stringify(wrapCursorTexts));
+  check(
+    "next line's baseline sits below every one of the wrapped line's continuations",
+    !!nextLine && longSegs.every((s) => nextLine!.y > s.y),
+    JSON.stringify(wrapCursorTexts),
+  );
+
+  console.log("\nF: wrapped-text overflow warning extends to the box-region case");
+  // An explicit-y next line placed inside a wrapping flow line's reach: no ruled
+  // pitch to check against (box region) and it doesn't reach the region's bottom
+  // edge either — only the box-region-vs-next-flow-baseline check (F) catches it.
+  const closeNextLine = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: longText }, { text: "too close", y: 20 }] }],
+  });
+  check(
+    "explicit-y next line inside the wrap block's reach warns wrapped_text_vertical_overflow",
+    closeNextLine.warningDetails.some((w) => w.code === "wrapped_text_vertical_overflow" && w.region === "ainotes"),
+    JSON.stringify(closeNextLine.warningDetails),
+  );
+
+  console.log("\nG: ainotes default font size (16, not 26) fits typical multi-sentence prose");
+  const sentences = [
+    "Weather looks clear today with a light breeze from the northwest.",
+    "Remember to grab the dry cleaning on the way home from work.",
+    "Team standup moved to 10am, check the calendar for the new link.",
+    "Dinner reservations are confirmed for 7pm at the usual spot.",
+    "Don't forget dad's birthday call this evening.",
+  ];
+  const atDefaultSize = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: sentences.map((text) => ({ text })) }],
+  });
+  const atOldSize = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: sentences.map((text) => ({ text, size: 26 })) }],
+  });
+  const overflowCodes = new Set(["wrapped_text_vertical_overflow", "text_overflow"]);
+  check(
+    "ainotes default (16) fits a 5-sentence note without overflow warnings",
+    !atDefaultSize.warningDetails.some((w) => overflowCodes.has(w.code)),
+    JSON.stringify(atDefaultSize.warningDetails),
+  );
+  check(
+    "the same content at the OLD default (26, via explicit override) does overflow",
+    atOldSize.warningDetails.some((w) => overflowCodes.has(w.code)),
+    JSON.stringify(atOldSize.warningDetails),
+  );
 
   console.log("\ndry-run writes nothing to disk");
   const diskBefore = await fs.readFile(aiPath, "utf8");
@@ -698,6 +795,19 @@ async function main() {
   });
   check("raw svg warns on unsupported app-renderer elements", rawWarn.warningDetails.some((w) => w.code === "raw_svg_unsupported_element"), JSON.stringify(rawWarn.warningDetails));
   check("raw svg warns on viewBox/page-size mismatch", rawWarn.warningDetails.some((w) => w.code === "raw_svg_viewbox_mismatch"), JSON.stringify(rawWarn.warningDetails));
+  let threwDataUriTopLevel = false;
+  try {
+    await writeUnderlay(root, daily, {
+      status: "ready",
+      dryRun: true,
+      svg:
+        '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg">' +
+        '<image href="data:image/png;base64,AAAA" x="0" y="0" width="10" height="10"/></svg>',
+    });
+  } catch {
+    threwDataUriTopLevel = true;
+  }
+  check("raw svg throws on data-URI <image href>", threwDataUriTopLevel);
   let rejectedMergeSvg = false;
   try {
     await writeUnderlay(root, daily, { status: "ready", merge: true, svg: "<svg/>" });
@@ -720,6 +830,16 @@ async function main() {
     regions: [{ region: "ainotes", svg: '<foreignObject x="0" y="0" width="10" height="10"/>' }],
   });
   check("per-region svg warns on unsupported app-renderer elements", perRegionBad.warningDetails.some((w) => w.code === "raw_svg_unsupported_element" && w.region === "ainotes"), JSON.stringify(perRegionBad.warningDetails));
+  let threwDataUriPerRegion = false;
+  try {
+    await writeUnderlay(root, daily, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "ainotes", svg: '<image href="data:image/png;base64,AAAA" x="0" y="0" width="10" height="10"/>' }],
+    });
+  } catch {
+    threwDataUriPerRegion = true;
+  }
+  check("per-region svg throws on data-URI <image href>", threwDataUriPerRegion);
   // Backstop: a region named but given nothing renderable surfaces a warning (never
   // a silent ok) — this is what catches a stray/typo'd key on the direct/CLI path.
   const emptyReg = await writeUnderlay(root, daily, {
@@ -875,6 +995,38 @@ async function main() {
   const foldedAfterClear = JSON.parse(await fs.readFile(dailyFolderFile2, "utf8"));
   check("clearDeleted splices the entry out of deletedDays", !foldedAfterClear.deletedDays.includes("2026-06-30"), JSON.stringify(foldedAfterClear.deletedDays));
 
+  console.log("\nH: read_page labelFilled — geometry (labelSlot) vs. actually-filled");
+  const labelPage = "Shared/Daily/2026-06-26";
+  await createPage(root, { chapter: "Daily", name: "2026-06-26", title: "Friday" });
+  await writeUnderlay(root, labelPage, {
+    status: "ready",
+    regions: [{ region: "schedule", lines: [{ text: "9:00 standup", row: 0 }] }],
+  });
+  const beforeLabel = await readPage(root, labelPage);
+  const scheduleBeforeLabel = beforeLabel.regions.find((r) => r.name === "schedule");
+  const headerBeforeLabel = beforeLabel.regions.find((r) => r.name === "header");
+  check(
+    "a region with a labelSlot but no label banner drawn -> labelFilled false",
+    scheduleBeforeLabel?.labelFilled === false,
+    JSON.stringify(scheduleBeforeLabel?.labelFilled),
+  );
+  check(
+    "a region with no labelSlot -> labelFilled null (not applicable)",
+    headerBeforeLabel?.labelSlot === null && headerBeforeLabel?.labelFilled === null,
+    JSON.stringify(headerBeforeLabel),
+  );
+  await writeUnderlay(root, labelPage, {
+    status: "ready", merge: true,
+    regions: [{ region: "schedule", label: "SCHEDULE", lines: [{ text: "9:00 standup", row: 0 }] }],
+  });
+  const afterLabel = await readPage(root, labelPage);
+  const scheduleAfterLabel = afterLabel.regions.find((r) => r.name === "schedule");
+  check(
+    "once a label banner is actually drawn -> labelFilled true",
+    scheduleAfterLabel?.labelFilled === true,
+    JSON.stringify(scheduleAfterLabel?.labelFilled),
+  );
+
   console.log("\nprinted-checkbox templates warn on a redundant checkbox marker");
   const todoPage = "Shared/Daily/todo-day";
   await createPage(root, { chapter: "Daily", name: "todo-day", title: "Lists", template: "todo-minimal" });
@@ -926,6 +1078,7 @@ async function main() {
   check("height filled from aspect (1×1 → 120²)", /width="120" height="120"/.test(imgAi), imgAi);
   check("image file written under media/ai/", await exists(imgFile));
   check("written bytes equal the decoded base64", (await fs.readFile(imgFile)).equals(Buffer.from(PNG_1x1, "base64")));
+  check("a real media/ai href never trips the data-URI guard", !scanRawSvgDataUriImages(imgAi), imgAi.slice(0, 200));
 
   // Orphan GC: re-write the page without the image → its file is removed.
   await writeUnderlay(root, imgPage, { status: "ready", regions: [{ region: "todo", lines: [{ text: "no image now" }] }] });
@@ -981,6 +1134,116 @@ async function main() {
   try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, path: srcPng, format: "png", width: 40 }] }] }); } catch { bothErr = true; }
   check("rejects an image with both data and path", bothErr);
   await fs.rm(srcPng, { force: true });
+
+  console.log("\nA0: PNG codec round-trip + chromaKeyPixels (unit-level, src/png.ts)");
+  const rtPixels = new Uint8Array([10, 20, 30, 255, 40, 50, 60, 128]);
+  const rtEncoded = encodePng({ width: 2, height: 1, pixels: rtPixels });
+  const rtDecoded = decodePng(rtEncoded);
+  check(
+    "codec round-trip preserves pixel bytes exactly",
+    Buffer.from(rtDecoded.pixels).equals(Buffer.from(rtPixels)),
+    JSON.stringify([...rtDecoded.pixels]),
+  );
+  const keyPixels = new Uint8Array([255, 0, 255, 255, 0, 0, 255, 255]); // magenta, blue
+  chromaKeyPixels(keyPixels, { r: 255, g: 0, b: 255 }, 10);
+  check("chromaKeyPixels zeroes alpha on the matching pixel", keyPixels[3] === 0, JSON.stringify([...keyPixels]));
+  check("chromaKeyPixels leaves a non-matching pixel opaque", keyPixels[7] === 255, JSON.stringify([...keyPixels]));
+
+  console.log("\nA: images[].knockout — chroma (end-to-end through write_underlay)");
+  const chromaSrc = encodePng({
+    width: 2,
+    height: 1,
+    pixels: new Uint8Array([255, 0, 255, 255, 0, 0, 255, 255]), // magenta, blue
+  });
+  const chromaResult = await writeUnderlay(root, imgPage, {
+    status: "ready",
+    regions: [{
+      region: "todo",
+      images: [{
+        data: chromaSrc.toString("base64"),
+        format: "png",
+        name: "chroma-out",
+        width: 40,
+        knockout: "chroma",
+        chromaColor: "#ff00ff",
+        tolerance: 10,
+      }],
+    }],
+  });
+  check("chroma knockout's resolved format is png regardless of declared format", (chromaResult.aiSvg ?? await fs.readFile(path.join(root, imgPage, "ai.svg"), "utf8")).includes('href="media/ai/chroma-out.png"'));
+  const chromaBytes = await fs.readFile(path.join(root, imgPage, "media", "ai", "chroma-out.png"));
+  const chromaDecoded = decodePng(chromaBytes);
+  check("chroma knockout zeroed alpha on the matching magenta pixel", chromaDecoded.pixels[3] === 0, JSON.stringify([...chromaDecoded.pixels]));
+  check("chroma knockout left the non-matching blue pixel opaque", chromaDecoded.pixels[7] === 255, JSON.stringify([...chromaDecoded.pixels]));
+
+  let chromaOnJpeg = false;
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString("base64"), width: 40, knockout: "chroma", chromaColor: "#ff00ff" }] }],
+    });
+  } catch (e: any) {
+    chromaOnJpeg = /requires a PNG source/.test(e.message);
+  }
+  check("knockout:\"chroma\" on a JPEG-sniffed source rejects with a clear message", chromaOnJpeg);
+
+  let chromaMissingColor = false;
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: chromaSrc.toString("base64"), width: 40, knockout: "chroma" }] }],
+    });
+  } catch (e: any) {
+    chromaMissingColor = /needs `chromaColor`/.test(e.message);
+  }
+  check("knockout:\"chroma\" without chromaColor rejects clearly (CLI bypasses the zod refine)", chromaMissingColor);
+
+  // A hand-built 16-bit/RGB PNG (IHDR + IEND only, no IDAT needed — decodePng
+  // rejects on bitDepth before ever touching pixel data) exercises the codec's
+  // declared scope limit.
+  const fakePng16 = (() => {
+    const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(1, 0);
+    ihdr.writeUInt32BE(1, 4);
+    ihdr[8] = 16; // bit depth
+    ihdr[9] = 2; // colour type: RGB
+    const chunk = (type: string, data: Buffer) => {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length, 0);
+      return Buffer.concat([len, Buffer.from(type, "ascii"), data, Buffer.alloc(4)]); // CRC unverified on decode
+    };
+    return Buffer.concat([sig, chunk("IHDR", ihdr), chunk("IEND", Buffer.alloc(0))]);
+  })();
+  let scopeRejected = false;
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: fakePng16.toString("base64"), format: "png", width: 40, knockout: "chroma", chromaColor: "#ff00ff" }] }],
+    });
+  } catch (e: any) {
+    scopeRejected = /requires a plain 8-bit RGB\/RGBA PNG/.test(e.message);
+  }
+  check("a 16-bit PNG source is rejected with the codec's declared scope limit", scopeRejected);
+
+  console.log("\nA: images[].knockout — subject (rembg) via the deps test seam");
+  const subjectResult = await writeUnderlay(root, imgPage, {
+    status: "ready",
+    regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "subject-cut", width: 40, knockout: "subject" }] }],
+  }, { knockoutSubjectImpl: async (_input, output) => { await fs.writeFile(output, Buffer.from(PNG_1x1, "base64")); } });
+  const subjectAi = await fs.readFile(path.join(root, imgPage, "ai.svg"), "utf8");
+  check("knockout:\"subject\" writes via the stubbed rembg impl", subjectAi.includes('href="media/ai/subject-cut.png"'), subjectAi.slice(0, 200));
+
+  let subjectFail = false;
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "bad-subject", width: 40, knockout: "subject" }] }],
+    }, { knockoutSubjectImpl: async () => { throw new Error("rembg not installed"); } });
+  } catch (e: any) {
+    subjectFail = /knockout:"subject" failed/.test(e.message) && /rembg not installed/.test(e.message);
+  }
+  check("knockout:\"subject\" surfaces a clear, wrapped error on failure", subjectFail);
 
   console.log("\nimage placement warnings (cross-region + off-page; dry-run)");
   // A big image in ainotes spills onto a sibling region → image_overlaps_region.

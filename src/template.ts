@@ -104,6 +104,15 @@ export interface TemplateInfo {
    * palette to MATCH when filling a styled template, instead of defaulting to gold.
    */
   palette: string[];
+  /**
+   * The page's paper/background colour — generate soft-edged art on this to place it
+   * opaque with no knockout/halo (see docs/AUTHORING.md). Drawn from the template's
+   * own full-bleed background `<rect>` when it has one; otherwise `PAPER_COLOR`, the
+   * app's shared canvas colour (as of the 2026-06 redesign catalogue, no shipped
+   * template draws its own — this is always `PAPER_COLOR` today, forward-compatible
+   * with a future template that does).
+   */
+  paperColor: string;
 }
 
 /** Expand #abc → #aabbcc, lowercased; null if not a hex colour. */
@@ -123,6 +132,50 @@ function isNeutral(hex: string): boolean {
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   return max - min < 28 || min > 225 || max < 30;
+}
+
+/**
+ * The app's shared canvas-paper colour, drawn beneath every page (design-system
+ * `--paper-0` / Swift `Palette.swift paper0`) — a fixed cross-repo constant, same
+ * role as `GOLD` in `svg.ts`. `paperColorOf`'s fallback when a template draws no
+ * background of its own, which (as of the 2026-06 redesign catalogue) is every
+ * shipped template — the app paints its own canvas surface instead.
+ */
+export const PAPER_COLOR = "#FFFEFB";
+
+/** A single attribute value off a raw `<tag ...>` string, or undefined if absent. */
+function attrValue(tag: string, name: string): string | undefined {
+  const m = new RegExp(`${name}\\s*=\\s*"([^"]*)"`).exec(tag);
+  return m ? m[1] : undefined;
+}
+
+/**
+ * The template's own full-bleed page-background colour, if it draws one explicitly:
+ * a `<rect>` positioned at ~(0,0) matching the viewBox size, drawn before any
+ * `region-*` group. Bypasses `isNeutral` — paper IS expected to be near-white,
+ * unlike the accent palette. Falls back to `PAPER_COLOR` when no such rect is
+ * found/parseable.
+ */
+export function paperColorOf(templateSvg: string): string {
+  const viewBox = parseViewBox(templateSvg);
+  if (!viewBox) return PAPER_COLOR;
+  const [vw, vh] = viewBox;
+  const regionIdx = templateSvg.search(/id\s*=\s*"region-/);
+  const preamble = regionIdx >= 0 ? templateSvg.slice(0, regionIdx) : templateSvg;
+  for (const m of preamble.matchAll(/<rect\b[^>]*>/g)) {
+    const tag = m[0];
+    const x = num(attrValue(tag, "x")) ?? 0;
+    const y = num(attrValue(tag, "y")) ?? 0;
+    const w = num(attrValue(tag, "width"));
+    const h = num(attrValue(tag, "height"));
+    const fill = attrValue(tag, "fill");
+    if (w === null || h === null || !fill) continue;
+    if (Math.abs(x) <= 2 && Math.abs(y) <= 2 && Math.abs(w - vw) <= 4 && Math.abs(h - vh) <= 4) {
+      const hex = normalizeHex(fill);
+      if (hex) return hex;
+    }
+  }
+  return PAPER_COLOR;
 }
 
 /**
@@ -154,6 +207,7 @@ export function inspectTemplate(templateSvg: string, stickersSvg?: string | null
     hasBanners,
     stickersPresent,
     palette,
+    paperColor: paperColorOf(templateSvg),
   };
 }
 

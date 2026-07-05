@@ -33,6 +33,94 @@ to render everything beautifully and safely into `ai.svg`. The north-star scenar
 
 ---
 
+## Image-authoring hardening — 2026-07-03
+
+A live end-to-end run — generate art with a remote image MCP (`gemini-image`), decode to a
+local PNG, place it into a real daily page (`Shared/2026-07/2026-07-03`), render on the iPad —
+proved the **pipeline works** (generate → decode → `images[].path` → `media/ai/` href → composited
+on device; a clean die-cut sticker landed correctly). But it surfaced that **getting *clean* art
+into the underlay was the fragile part, and the fragility fell on the *agent***: the author had to
+*know* model quirks (Gemini's `transparent_bg` paints an opaque **checkerboard**, not alpha —
+confirmed: corner pixels `srgba(97,97,97,1)`, alpha mean 250/255) and hand-roll image surgery
+(rembg cleanly cut a solid subject but **erased** a diffuse floral spray; a magenta chroma-key
+preserved it where rembg failed). This pass moved that burden into the server + docs, and fixed
+the wrap-correctness bugs the same test exposed. All items below shipped.
+
+### Correctness bugs the test exposed (`svg.ts`)
+- **E. Box-region wrap cursor now reserves space for wrapped continuations.** `flowBaselines`
+  previously advanced its running cursor by a flat line-height regardless of how many segments a
+  line wrapped into, so the next line's baseline landed on top of the previous line's own
+  continuations. `flowLineAdvance` mirrors the render loop's own wrap predicate/width math (font,
+  marker/icon advance, `wrapText`) to reserve `Math.max(lineH, segments.length * subPitch)`
+  instead — the common non-wrapping case keeps today's rhythm; a wrapping line reserves real height.
+- **F. Overflow warnings now catch a box-region wrap collision, not just ruled-row/box-bottom
+  overflow.** The Phase-2.5 `wrapped_text_vertical_overflow` check gained a box-region-only branch
+  comparing a wrapped line's reach against the *next* line's own reserved flow baseline
+  (`flowBases[i+1]`) — a defense-in-depth backstop once E's cursor fix is in place, and the only
+  guard for an explicit-`y` next line placed too close to a wrapping flow line above it.
+- **G. `ainotes`/`quote`/`affirmation` default size dropped 26px → 16px** (`REGION_DEFAULTS`,
+  `svg.ts`) — the old default all but guaranteed overflow for a multi-sentence AI-voice note.
+
+### The server absorbs the image knockout (`page.ts` / `index.ts` / new `src/png.ts`)
+- **A. `images[].knockout` — background removal in the placement path.** A region's `images[]`
+  (base64 `data` or local `path`) can now carry `knockout: "subject" | "chroma" | "none"`
+  (default `"none"`), resolved in `page.ts:resolveImages` before the `media/ai/` write:
+  - `"subject"` — a saliency cutout via the same rembg pipeline `fetch_image`'s `removeBackground`
+    already uses (same Python-API-direct invocation, same clear-error-on-missing-dep behaviour) —
+    best for a clean single subject.
+  - `"chroma"` + `chromaColor` (+ `tolerance`, default 30) — keys a solid uniform background to
+    transparent. A pure pixel op needing no new dependency: a new minimal PNG codec (`src/png.ts`)
+    hand-rolls chunk framing/CRC32/scanline (un)filtering on top of Node's built-in `zlib` for the
+    DEFLATE stream, scoped to 8-bit RGB/RGBA non-interlaced PNGs (sufficient for AI-generated art;
+    other PNG shapes reject with a clear, actionable error rather than mis-decoding).
+  A knocked-out image's resolved format is always `"png"` regardless of any declared `format`
+  (chroma needs alpha; rembg's own output is already PNG).
+- **D. base64→path decode pattern — documented, not built.** Scoped to `docs/AUTHORING.md` only
+  (extends the existing "sourcing recipe"): decode a remote image MCP's base64 response to a local
+  temp file and pass `images[].path`, rather than inlining `data`, for overnight/automated writes.
+  `fetch_image` stays URL-only — building a generalized base64/file-input bridge for it was lower
+  leverage than the correctness fixes and knockout feature in this same pass.
+
+### Teaching the agent to prompt *any* image model (`docs/AUTHORING.md`)
+- **B. Model-agnostic prompting recipe**, added to `docs/AUTHORING.md`: don't rely on "transparent
+  background" (many models bake an opaque checkerboard into the actual pixels); clean single
+  subject → generate normally → `knockout:"subject"`; diffuse/soft art (sprays, washes, foliage) →
+  generate on a solid uniform colour absent from the subject (e.g. magenta) → `knockout:"chroma"` +
+  matching `chromaColor`; soft-edged vignette → generate on the page's own `paperColor` (C) and
+  place it opaque, no knockout. Format constraints (PNG/JPEG, ≤2MB, ≤~1536px) stated once.
+- **C. `read_page` surfaces `template.paperColor`.** Investigating this against the real
+  `../onionskin` template fixtures found that **no shipped template draws its own full-bleed
+  background rect** — the page's paper colour is the app's own fixed canvas constant. `paperColorOf`
+  (`template.ts`) still scans for a template-drawn background rect first (forward-compatible with a
+  future template that has one), but falls back to a new `PAPER_COLOR = "#FFFEFB"` constant (the
+  app's `--paper-0` / `Palette.swift paper0`) rather than `null` — the same shared-constant pattern
+  as `GOLD` — so the field is actually usable today instead of shipping as a no-op.
+
+### Label / grid ergonomics the test surfaced
+- **H. `read_page` regions report `labelFilled`.** `template.hasLabels`/`Region.labelSlot` only
+  ever reported the *template's* geometry, not whether a region's printed label slot was actually
+  filled — a page of blank pills, wrongly assumed styled. `read_page` now cross-references each
+  region's `labelSlot` against the current `ai.svg`: it extracts that region's own group (via
+  `extractRegionGroups`, now exported from `svg.ts` — the same depth-aware scanner the
+  2026-07-02 merge fix introduced) and checks for the label banner's `letter-spacing="0.1em"`
+  marker (unique to that render path). `RegionRead.labelFilled` is `true`/`false`/`null` (no slot
+  to begin with) — so an agent no longer has to assume a printed slot means content exists.
+- **I. Optional server-stamped hour labels (`showHours`).** A region with ruled rows and a
+  resolvable `startHour` can now request compact hour labels ("7a"/"12p") stamped at each
+  whole-hour row — for an agenda-style grid that prints no hour numbers of its own. A no-op with
+  an info-level `time_unruled_region`/`time_missing_start_hour` warning (reusing the existing
+  codes, not a content-dropping severity) when there's nothing to anchor to.
+
+**Not an app bug.** The on-device renderer faithfully drew the *opaque* checkerboard pixels our PNG
+contained — the checkerboard was baked into our generated image, not a render fault (the clean sticker
+confirms alpha is honoured). No app-side items came out of this test.
+
+Smoke test: +25 (250 total, 0 failed) · `npx tsc --noEmit` clean · chroma knockout additionally
+verified against a real fixture library over the actual filesystem/CLI path (not just the smoke
+suite's synthetic fixtures), decoding the written `media/ai/*.png` back to confirm per-pixel alpha.
+
+---
+
 ## App-contract sync — 2026-07-02
 
 The app's 2026-07-02 evening audit (its `design/DECISIONS.md` C1–C7 / #42–#48) pinned the

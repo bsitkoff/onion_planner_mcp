@@ -4,7 +4,14 @@ import os from "node:os";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { resolvePageRel, normalizeChapter } from "./paths.js";
-import { parseRegions, parseViewBox, inspectTemplate, type Region, type TemplateInfo } from "./template.js";
+import {
+  parseRegions,
+  parseViewBox,
+  inspectTemplate,
+  PAPER_COLOR,
+  type Region,
+  type TemplateInfo,
+} from "./template.js";
 import { readUnderlayVoice, type UnderlayVoice } from "./library.js";
 import {
   composeAiSvg,
@@ -12,10 +19,14 @@ import {
   emptySvg,
   imageDims,
   scanRawSvgElements,
+  scanRawSvgDataUriImages,
+  extractRegionGroups,
   type RegionInput,
+  type ImageInput,
   type ThemeInput,
   type WarningDetail,
 } from "./svg.js";
+import { decodePng, encodePng, chromaKeyPixels } from "./png.js";
 
 /**
  * The underlay-relevant slice of a chapter's `.folder.json → theme` (the app's
@@ -213,6 +224,41 @@ function imageTooLargeMessage(bytes: number): string {
   return `Image too large: ${bytes} bytes (max ${MAX_IMAGE_BYTES} bytes / 2 MB).`;
 }
 
+/**
+ * Hard cap (throws) + soft cap (warns) on an image buffer's size — shared between
+ * the pre-knockout check and the post-knockout re-check (`resolveImages`), since a
+ * chroma/subject knockout re-encodes the image and can change its byte size.
+ */
+function checkImageSize(
+  buf: Buffer,
+  regionLabel: string,
+  warnings: string[],
+  warningDetails: WarningDetail[],
+): void {
+  if (buf.length > MAX_IMAGE_BYTES) {
+    throw new Error(
+      `image in region "${regionLabel}" is ${buf.length} bytes — over the ` +
+        `${MAX_IMAGE_BYTES}-byte cap. Downscale it (≤1536px JPEG) before sending.`,
+    );
+  }
+  if (buf.length > WARN_IMAGE_BYTES) {
+    const message =
+      `region "${regionLabel}": image is ${Math.round(buf.length / 1024)}KB — large for ` +
+      `iCloud sync; consider downscaling.`;
+    warnings.push(message);
+    warningDetails.push({ code: "image_large_for_sync", severity: "info", region: regionLabel, message });
+  }
+}
+
+/** Normalize #rgb/#rrggbb to 0-255 channel values — exact, unlike color.ts's HSL round-trip. */
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  let h = hex.slice(1);
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+}
+
+const DEFAULT_CHROMA_TOLERANCE = 30;
+
 function validateFetchedImageBuffer(
   buf: Buffer,
   expectedFormat?: "png" | "jpeg",
@@ -259,6 +305,79 @@ function spawnRembg(inputPath: string, outputPath: string): Promise<void> {
       }
     });
   });
+}
+
+/**
+ * `knockout: "subject"` — a saliency cutout via rembg, run through a temp-file
+ * round trip (mirrors `spawnRembg`'s own file-in/file-out shape exactly, so the
+ * default `knockoutSubjectImpl` here IS `spawnRembg`, zero duplicated invocation
+ * logic). Re-validates the output the same way `fetchImageToTemp`'s rembg path
+ * does, since the cutout can grow past the size caps.
+ */
+async function knockoutSubject(
+  buf: Buffer,
+  regionLabel: string,
+  knockoutSubjectImpl: (inputPath: string, outputPath: string) => Promise<void> = spawnRembg,
+): Promise<Buffer> {
+  const dir = path.join(os.tmpdir(), "onionskin-knockout");
+  await fs.mkdir(dir, { recursive: true });
+  const stem = `${process.pid}-${tmpCounter++}`;
+  const inPath = path.join(dir, `${stem}.in`);
+  const outPath = path.join(dir, `${stem}.out.png`);
+  await fs.writeFile(inPath, buf);
+  try {
+    await knockoutSubjectImpl(inPath, outPath);
+    const out = await fs.readFile(outPath);
+    validateFetchedImageBuffer(out, "png");
+    return out;
+  } catch (e) {
+    throw new Error(
+      `image in region "${regionLabel}": knockout:"subject" failed — ${(e as Error).message}`,
+    );
+  } finally {
+    await fs.rm(inPath, { force: true });
+    await fs.rm(outPath, { force: true });
+  }
+}
+
+/**
+ * Resolve an image's `knockout` before it's sized/hashed/written — the caller
+ * (`resolveImages`) treats the result as the image's real bytes from here on
+ * (format becomes unconditionally "png"). `"chroma"` is a pure pixel op (no
+ * external dep); `"subject"` shells out to rembg like `fetch_image` already does.
+ */
+async function applyKnockout(
+  buf: Buffer,
+  img: ImageInput,
+  regionLabel: string,
+  deps: ResolveImagesDeps,
+): Promise<Buffer> {
+  if (img.knockout === "subject") {
+    return knockoutSubject(buf, regionLabel, deps.knockoutSubjectImpl);
+  }
+  // "chroma" — the zod schema (index.ts) requires chromaColor with this knockout,
+  // but the dev CLI (test/cli.ts) calls writeUnderlay directly, bypassing it — so
+  // this is re-checked here too (same belt-and-suspenders pattern as the existing
+  // data/path mutual-exclusivity check just above, in `resolveImages`).
+  if (!img.chromaColor) {
+    throw new Error(`image in region "${regionLabel}": knockout:"chroma" needs \`chromaColor\`.`);
+  }
+  const format = sniffFormat(buf);
+  if (format !== "png") {
+    throw new Error(
+      `image in region "${regionLabel}": knockout:"chroma" requires a PNG source (needs ` +
+        `pixel-level alpha) — got ${format ?? "unrecognised"}. Generate/save the art as PNG.`,
+    );
+  }
+  let decoded;
+  try {
+    decoded = decodePng(buf);
+  } catch (e) {
+    throw new Error(`image in region "${regionLabel}": ${(e as Error).message}`);
+  }
+  const target = hexToRgb(img.chromaColor);
+  chromaKeyPixels(decoded.pixels, target, img.tolerance ?? DEFAULT_CHROMA_TOLERANCE);
+  return encodePng(decoded);
 }
 
 /**
@@ -309,6 +428,11 @@ export async function fetchImageToTemp(
   return { path: dest, format, bytes: buf.byteLength };
 }
 
+/** Test seam for `resolveImages`'s `knockout: "subject"` path — mirrors `fetchImageToTemp`'s `deps` shape. */
+export interface ResolveImagesDeps {
+  knockoutSubjectImpl?: (inputPath: string, outputPath: string) => Promise<void>;
+}
+
 /**
  * Decode, validate, size, and (unless dryRun) write each region's images into the
  * page's `media/ai/` folder, mutating each `ImageInput` in place with its resolved
@@ -318,6 +442,7 @@ async function resolveImages(
   pageAbs: string,
   regions: RegionInput[],
   dryRun: boolean,
+  deps: ResolveImagesDeps = {},
 ): Promise<{ warnings: string[]; warningDetails: WarningDetail[] }> {
   const warnings: string[] = [];
   const warningDetails: WarningDetail[] = [];
@@ -348,26 +473,21 @@ async function resolveImages(
       if (buf.length === 0) {
         throw new Error(`image in region "${region.region}" has empty or invalid image data.`);
       }
-      if (buf.length > MAX_IMAGE_BYTES) {
-        throw new Error(
-          `image in region "${region.region}" is ${buf.length} bytes — over the ` +
-            `${MAX_IMAGE_BYTES}-byte cap. Downscale it (≤1536px JPEG) before sending.`,
-        );
+      checkImageSize(buf, region.region, warnings, warningDetails);
+
+      // Knockout runs on the source bytes, before format/dims/hash are resolved —
+      // the digest and dims must reflect the post-knockout bytes, and a knocked-out
+      // image is always re-encoded as PNG (chroma needs alpha; the rembg path
+      // already returns PNG), regardless of any `format` the caller declared.
+      let knockedOut = false;
+      if (img.knockout && img.knockout !== "none") {
+        buf = await applyKnockout(buf, img, region.region, deps);
+        knockedOut = true;
+        checkImageSize(buf, region.region, warnings, warningDetails);
       }
-      if (buf.length > WARN_IMAGE_BYTES) {
-        const message =
-          `region "${region.region}": image is ${Math.round(buf.length / 1024)}KB — large for ` +
-            `iCloud sync; consider downscaling.`;
-        warnings.push(message);
-        warningDetails.push({
-          code: "image_large_for_sync",
-          severity: "info",
-          region: region.region,
-          message,
-        });
-      }
+
       // Format: declared, or sniffed from the file's magic bytes when reading a path.
-      const format = img.format ?? sniffFormat(buf);
+      const format = knockedOut ? "png" : (img.format ?? sniffFormat(buf));
       if (!format) {
         throw new Error(
           `image in region "${region.region}": could not determine format — pass \`format\` ` +
@@ -442,11 +562,20 @@ function pageSize(manifest: Manifest, templateSvg: string | null): [number, numb
   return fromVb ?? [1024, 1366];
 }
 
+/**
+ * A parsed region plus whether its printed label slot (if any) is actually filled
+ * in the current `ai.svg` — not just whether the template prints one (see
+ * `Region.labelSlot`). `null` = not applicable (no `labelSlot`); `false` = has a
+ * slot but the current ai.svg doesn't draw a label banner into it (no ai.svg yet,
+ * region never written, or written without `label`); `true` = it does.
+ */
+export type RegionRead = Region & { labelFilled: boolean | null };
+
 export interface PageRead {
   page: string;
   manifest: Manifest;
   size: [number, number];
-  regions: Region[];
+  regions: RegionRead[];
   aiStatus: AiStatus;
   aiSvg: string | null;
   /**
@@ -485,16 +614,31 @@ export async function readPage(
   const size = pageSize(manifest, templateSvg);
   const theme = await readChapterTheme(abs);
   const underlayVoice = await readUnderlayVoice(root);
+  // labelFilled: cross-reference each region's labelSlot geometry (template-only)
+  // against what the current ai.svg actually drew for that region — geometry alone
+  // can't tell you whether the AI filled the slot or the template just prints one.
+  const aiGroups = aiSvg ? extractRegionGroups(aiSvg).byName : new Map<string, string>();
+  const regionsOut: RegionRead[] = regions.map((r) => ({
+    ...r,
+    labelFilled: r.labelSlot === null ? null : /letter-spacing="0\.1em"/.test(aiGroups.get(r.name) ?? ""),
+  }));
   return {
     page: rel,
     manifest,
     size,
-    regions,
+    regions: regionsOut,
     aiStatus: manifest.layers?.ai?.status ?? "empty",
     aiSvg,
     template: templateSvg
       ? inspectTemplate(templateSvg, stickersSvg)
-      : { styled: false, hasLabels: false, hasBanners: false, stickersPresent: false, palette: [] },
+      : {
+          styled: false,
+          hasLabels: false,
+          hasBanners: false,
+          stickersPresent: false,
+          palette: [],
+          paperColor: PAPER_COLOR,
+        },
     theme,
     underlayVoice,
     ...(includeTemplate && templateSvg ? { templateSvg } : {}),
@@ -624,10 +768,34 @@ export async function writeUnderlay(
     /** AI-text voice (clean/handwritten/editorial). Overrides the chapter default. */
     fontPersonality?: ChapterTheme["fontPersonality"];
   },
+  deps: ResolveImagesDeps = {},
 ): Promise<WriteResult> {
   const abs = resolvePageRel(root, rel);
   // Confirm it's a real page before writing.
   const manifest = await readJson<Manifest>(path.join(abs, "manifest.json"));
+
+  // A data: URI <image href> would write fine but never render (the app renderer only
+  // resolves a page-relative file path) — refuse outright, before resolveImages writes
+  // any media, rather than let it become a silent dead end for an unattended caller.
+  if (opts.svg !== undefined && scanRawSvgDataUriImages(opts.svg)) {
+    throw new Error(
+      'raw svg has an <image href="data:..."> — the app renderer resolves <image href> only ' +
+        "as a page-relative file path (never a data: URI), so this image would never render. " +
+        "Use the `images` array (images[].path or images[].data) to place art instead.",
+    );
+  }
+  if (opts.regions) {
+    for (const r of opts.regions) {
+      if (r.svg && scanRawSvgDataUriImages(r.svg)) {
+        throw new Error(
+          `region "${r.region}": raw svg has an <image href="data:..."> — the app renderer ` +
+            "resolves <image href> only as a page-relative file path (never a data: URI), so " +
+            "this image would never render. Use the `images` array (images[].path or " +
+            "images[].data) to place art instead.",
+        );
+      }
+    }
+  }
 
   let svg: string;
   let warnings: string[] = [];
@@ -645,7 +813,7 @@ export async function writeUnderlay(
   } else if (opts.regions) {
     // Resolve images first (writes media/ai/ files, fills each image's href) so the
     // composed ai.svg never references a file that isn't on disk yet.
-    const imageResult = await resolveImages(abs, opts.regions, opts.dryRun ?? false);
+    const imageResult = await resolveImages(abs, opts.regions, opts.dryRun ?? false, deps);
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
     const size = pageSize(manifest, templateSvg);

@@ -1268,6 +1268,56 @@ async function main() {
   check("a small in-region sticker warns nothing about placement",
     !cleanImg.warningDetails.some((w) => w.code.startsWith("image_")), JSON.stringify(cleanImg.warningDetails));
 
+  console.log("\nimage sizing warnings (aspect mismatch, small-for-region, dimension guideline)");
+  // PNG_1x1 is square — forcing 40×400 is a 10× aspect distortion → image_aspect_mismatch.
+  const stretched = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", images: [{ data: PNG_1x1, format: "png", name: "stretch", width: 40, height: 400, corner: "bottom-right" }] }],
+  });
+  check("forcing width+height off the source aspect warns (image_aspect_mismatch)",
+    stretched.warningDetails.some((w) => w.code === "image_aspect_mismatch"), JSON.stringify(stretched.warningDetails));
+  // Omitting height aspect-fills → no mismatch possible.
+  check("the clean corner sticker (height omitted) does not warn about aspect",
+    !cleanImg.warningDetails.some((w) => w.code === "image_aspect_mismatch"), JSON.stringify(cleanImg.warningDetails));
+  // A tiny image floated center in a big box → image_small_for_region (info).
+  const floating = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", images: [{ data: PNG_1x1, format: "png", name: "lost", width: 40, corner: "center" }] }],
+  });
+  check("a tiny center-placed image in a big box warns (image_small_for_region)",
+    floating.warningDetails.some((w) => w.code === "image_small_for_region" && w.severity === "info"), JSON.stringify(floating.warningDetails));
+  check("the same tiny image corner-placed stays quiet (deliberate accent)",
+    !cleanImg.warningDetails.some((w) => w.code === "image_small_for_region"), JSON.stringify(cleanImg.warningDetails));
+  // A source over the 1536px guideline (IHDR-only fake; dims read from the header) → info warning.
+  const fakeBigPng = (() => {
+    const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(2000, 0); // width
+    ihdr.writeUInt32BE(100, 4); // height
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = 6; // colour type: RGBA
+    const chunk = (type: string, data: Buffer) => {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length, 0);
+      return Buffer.concat([len, Buffer.from(type, "ascii"), data, Buffer.alloc(4)]);
+    };
+    return Buffer.concat([sig, chunk("IHDR", ihdr), chunk("IEND", Buffer.alloc(0))]);
+  })();
+  const bigDims = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", images: [{ data: fakeBigPng.toString("base64"), format: "png", name: "big-src", width: 100, corner: "bottom-right" }] }],
+  });
+  check("a source over 1536px warns (image_dimensions_large, info)",
+    bigDims.warningDetails.some((w) => w.code === "image_dimensions_large" && w.severity === "info"), JSON.stringify(bigDims.warningDetails));
+
+  console.log("\nraw svg size guard");
+  const hugeRaw = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1366"><!-- ${"x".repeat(300 * 1024)} --><rect x="1" y="1" width="2" height="2" fill="#9C7C1A"/></svg>`,
+  });
+  check("a >256KB raw svg warns (raw_svg_large)",
+    hugeRaw.warningDetails.some((w) => w.code === "raw_svg_large"), JSON.stringify(hugeRaw.warningDetails.map((w) => w.code)));
+
   console.log("\nset_chapter_theme accent → chapter default the underlay picks up");
   const accentHex = "#7B5EA7"; // lavender
   await writeChapterTheme(root, "Daily", { accent: accentHex });
@@ -1308,6 +1358,18 @@ async function main() {
     badRembg = true;
   }
   check("fetch_image re-validates rembg output format", badRembg);
+  // The failed removeBackground fetch must not litter onionskin-fetch/ — unique stem so
+  // stale files from pre-fix runs can't shadow the assertion.
+  const cleanupStem = `cleanup-check-${process.pid}`;
+  try {
+    await fetchImageToTemp(`https://example.test/${cleanupStem}.png`, cleanupStem, true, {
+      fetchImpl: fakeFetch,
+      removeBackgroundImpl: async () => { throw new Error("rembg unavailable"); },
+    });
+  } catch { /* expected */ }
+  const fetchDir = path.join(os.tmpdir(), "onionskin-fetch");
+  const leftovers = (await fs.readdir(fetchDir).catch(() => [] as string[])).filter((f) => f.startsWith(cleanupStem));
+  check("a failed removeBackground fetch leaves no temp files behind", leftovers.length === 0, JSON.stringify(leftovers));
   let hugeRembg = false;
   try {
     await fetchImageToTemp("https://example.test/source.png", "huge-rembg", true, {

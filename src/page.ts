@@ -197,6 +197,8 @@ async function atomicWrite(absFile: string, content: string | Uint8Array): Promi
 const MEDIA_AI = path.join("media", "ai");
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // hard cap per image (iCloud-sync hygiene)
 const WARN_IMAGE_BYTES = 512 * 1024; // soft warning threshold
+const WARN_IMAGE_DIMENSION = 1536; // px guideline the docs promise — warn, don't block
+const WARN_RAW_SVG_BYTES = 256 * 1024; // a raw `svg` doc this big usually means embedded art
 
 /** Expand a leading `~` to the user's home dir (file paths from a caller may use it). */
 function expandHome(p: string): string {
@@ -418,11 +420,18 @@ export async function fetchImageToTemp(
 
   if (removeBackground) {
     const nobgPath = dest.replace(/\.(png|jpg)$/, "-nobg.png");
-    await (deps.removeBackgroundImpl ?? spawnRembg)(dest, nobgPath);
-    await fs.rm(dest, { force: true });
-    const nobgBuf = await fs.readFile(nobgPath);
-    validateFetchedImageBuffer(nobgBuf, "png");
-    return { path: nobgPath, format: "png", bytes: nobgBuf.byteLength };
+    try {
+      await (deps.removeBackgroundImpl ?? spawnRembg)(dest, nobgPath);
+      const nobgBuf = await fs.readFile(nobgPath);
+      validateFetchedImageBuffer(nobgBuf, "png");
+      return { path: nobgPath, format: "png", bytes: nobgBuf.byteLength };
+    } catch (e) {
+      // Don't litter onionskin-fetch/ with a download the caller never sees a path for.
+      await fs.rm(nobgPath, { force: true }).catch(() => {});
+      throw e;
+    } finally {
+      await fs.rm(dest, { force: true }).catch(() => {});
+    }
   }
 
   return { path: dest, format, bytes: buf.byteLength };
@@ -497,6 +506,26 @@ async function resolveImages(
       const dims = imageDims(buf, format); // also validates the magic bytes
       const width = img.width;
       const height = img.height ?? Math.round((width * dims.height) / dims.width);
+      if (Math.max(dims.width, dims.height) > WARN_IMAGE_DIMENSION) {
+        const message =
+          `region "${region.region}": image is ${dims.width}×${dims.height}px — over the ` +
+          `${WARN_IMAGE_DIMENSION}px guideline; downscale before sending (smaller files sync faster).`;
+        warnings.push(message);
+        warningDetails.push({ code: "image_dimensions_large", severity: "info", region: region.region, message });
+      }
+      if (img.height !== undefined) {
+        // The app renderer scales <image> to the exact box (no preserveAspectRatio),
+        // so a height off the source aspect renders visibly stretched.
+        const aspectTrue = Math.round((width * dims.height) / dims.width);
+        if (aspectTrue > 0 && Math.abs(img.height - aspectTrue) / aspectTrue > 0.05) {
+          const message =
+            `region "${region.region}": image will render STRETCHED — ${width}×${img.height} ` +
+            `requested vs source ${dims.width}×${dims.height}; omit \`height\` to aspect-fill ` +
+            `(aspect-true height here is ~${aspectTrue}).`;
+          warnings.push(message);
+          warningDetails.push({ code: "image_aspect_mismatch", severity: "warning", region: region.region, message });
+        }
+      }
       const ext = format === "jpeg" ? "jpg" : "png";
       const digest = createHash("sha256").update(buf).digest("hex");
       const stem = sanitizeName(img.name ?? digest.slice(0, 16));
@@ -810,6 +839,14 @@ export async function writeUnderlay(
     const rawWarnings = rawSvgWarnings(svg, size);
     warnings = rawWarnings.warnings;
     warningDetails = rawWarnings.warningDetails;
+    const rawBytes = Buffer.byteLength(svg);
+    if (rawBytes > WARN_RAW_SVG_BYTES) {
+      const message =
+        `raw svg is ${Math.round(rawBytes / 1024)}KB — far larger than a composed underlay ` +
+        `(usually embedded art; use the structured \`regions\` input with \`images[].path\` instead).`;
+      warnings.push(message);
+      warningDetails.push({ code: "raw_svg_large", severity: "warning", message });
+    }
   } else if (opts.regions) {
     // Resolve images first (writes media/ai/ files, fills each image's href) so the
     // composed ai.svg never references a file that isn't on disk yet.

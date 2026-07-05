@@ -186,12 +186,15 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
   surfaced as `startHour`/`rowsPerHour` on the region from `read_page`. Pass a per-call
   `startHour`/`rowsPerHour` only to override. Don't hand-compute `row`/`y`, and don't bake the
   time into the text — the grid already shows the hour.
-- **Duration blocks (washi tape)** — give a schedule line both `time` and (`endTime` or
-  `durationMin`) to draw a soft, rounded, tinted block spanning that span on the grid instead of
-  a single baseline — the "washi tape over the hours" look, for a meeting with a real start and
-  end rather than a point-in-time note. Tint defaults to the theme's accent colour; override
-  per-block with `blockFill`/`blockOpacity`. `endTime`/`durationMin` without a `time` start is
-  ignored (mirrors how `marker`/`wrap` are ignored on a heading).
+- **Duration blocks (washi tape) — the DEFAULT for real events.** Give a schedule line both
+  `time` and (`endTime` or `durationMin`) to draw a soft, rounded, tinted block spanning that
+  span on the grid instead of a single baseline — the "washi tape over the hours" look. Any
+  calendar event with a real start and end should be a block: a column of bare one-line labels
+  on a 15-row grid reads sparse and unfinished, while blocks fill the hours the day actually
+  holds. Reserve a bare `time` line for genuine point-in-time notes (a reminder, a deadline, a
+  drop-off). Tint defaults to the theme's accent colour; override per-block with
+  `blockFill`/`blockOpacity`. `endTime`/`durationMin` without a `time` start is ignored
+  (mirrors how `marker`/`wrap` are ignored on a heading).
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
   dependency.
 - **`icon`** — a leading Phosphor glyph (font-rendered) instead of a marker; mutually exclusive
@@ -249,7 +252,12 @@ region's box (`read_page` gives `width`/`height`); and the server now warns
 **`image_overlaps_region`** (the image's absolute box overlaps another region, naming it + its
 `fill`) and **`image_off_page`** (a negative-`y`/oversized image leaves the page — e.g. pushed up
 into the date band). If you see either, the sticker has no legitimate home on that template —
-shrink it, move it into an `ai` region, or drop it, rather than forcing it. `notes` is
+shrink it, move it into an `ai` region, or drop it, rather than forcing it. Sizing warnings to
+heed the same way: **`image_aspect_mismatch`** (you passed a `height` off the source aspect —
+the renderer scales to the exact box, so it *will* stretch; omit `height` to aspect-fill),
+**`image_small_for_region`** (a sticker shrunk deep into a big box — fine for a corner accent,
+useless for something the user interacts with, like a habits tracker they pencil-check), and
+**`image_dimensions_large`** (source over the ~1536px guideline — downscale before sending). `notes` is
 `fill: ink` (handwriting) — at most a *tiny* corner mark there, never a sticker over the writing
 area.
 

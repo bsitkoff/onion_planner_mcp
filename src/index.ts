@@ -257,8 +257,10 @@ const lineSchema = z.object({
       'Clock time "HH:MM" (24-hour) for schedule lines — the server snaps it to the ' +
         "nearest ruled row using the region's `startHour`/`rowsPerHour`, so you needn't " +
         "compute row indices. Ignored if `y` or `row` is set, or if the region has no " +
-        "`startHour`. Pair with `endTime`/`durationMin` to draw a washi-tape duration " +
-        "block instead of a single baseline.",
+        "`startHour`. PREFER pairing with `endTime`/`durationMin` for any event with a " +
+        "real start and end — it draws a washi-tape duration block that fills the hours " +
+        "and keeps the column from looking sparse; reserve a bare `time` line for " +
+        "point-in-time notes (a reminder, a deadline).",
     ),
   endTime: z
     .string()
@@ -397,7 +399,10 @@ const imageSchema = z.object({
     .number()
     .positive()
     .optional()
-    .describe("Display height; omit to preserve the image's aspect ratio."),
+    .describe(
+      "Display height. OMIT to aspect-fill from the source (recommended) — a height off " +
+        "the source aspect renders visibly stretched and trips `image_aspect_mismatch`.",
+    ),
   x: z.number().optional().describe("Region-local x. Overrides `corner`."),
   y: z.number().optional().describe("Region-local y. Overrides `corner`."),
   corner: z

@@ -1191,6 +1191,29 @@ export function composeAiSvg(
           region.name,
         );
       }
+      // The inverse failure: a sticker shrunk so far into a big box it stops working
+      // (a habits tracker the user can't pencil-check, a banner floating lost in its
+      // slot). Only for center/default placement — an explicit corner or x/y reads
+      // as a deliberate small accent and stays quiet.
+      const centered =
+        img.x === undefined && img.y === undefined && (img.corner === undefined || img.corner === "center");
+      if (
+        centered &&
+        region.width !== null &&
+        region.height !== null &&
+        img.width < region.width * 0.35 &&
+        img.height < region.height * 0.35
+      ) {
+        warn(
+          "image_small_for_region",
+          `region "${region.name}": image (${img.width}×${img.height}) floats small in the ` +
+            `middle of the ${region.width}×${region.height} box — size it toward the box, or ` +
+            `corner-place it if it's meant as a small accent. Content the user interacts with ` +
+            `(a habits tracker) needs real size (~245px tall to pencil-check).`,
+          "info",
+          region.name,
+        );
+      }
       // Absolute placement (region origin + local offset) for page/cross-region checks.
       const absX = region.x + x;
       const absY = region.y + y;

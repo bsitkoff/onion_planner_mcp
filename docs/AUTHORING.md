@@ -194,7 +194,8 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
   holds. Reserve a bare `time` line for genuine point-in-time notes (a reminder, a deadline, a
   drop-off). Tint defaults to the theme's accent colour; override per-block with
   `blockFill`/`blockOpacity`. `endTime`/`durationMin` without a `time` start is ignored
-  (mirrors how `marker`/`wrap` are ignored on a heading).
+  (mirrors how `marker`/`wrap` are ignored on a heading). A long event name wraps to fit the
+  block automatically — no need to shorten it or pass `wrap` yourself.
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
   dependency.
 - **`icon`** — a leading Phosphor glyph (font-rendered) instead of a marker; mutually exclusive

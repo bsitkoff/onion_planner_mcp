@@ -716,6 +716,14 @@ const WASHI_DEFAULT_OPACITY = 0.22;
  * [y1, y2) (region-local), with the label text vertically centred inside — the same
  * centring ratio used for the printed label-slot banner text, so a block's label
  * sits consistently with every other "text inside a box" convention in this file.
+ *
+ * A label too long to fit the block's width on one line wraps into multiple lines
+ * (reusing `wrapText`, the same greedy wrapper used for `ainotes`/`todo`), stacked and
+ * vertically centred in the block — using the tape's own height rather than letting
+ * the text run past the right edge. The single-line case renders byte-identical to
+ * before (same baseline formula) so existing pages are unaffected. `overflow` comes
+ * back true when even the wrapped lines don't fit the block's height, so the caller
+ * can warn — today that case is silently drawn with no signal at all.
  */
 function washiBlockFragment(
   x: number,
@@ -729,16 +737,37 @@ function washiBlockFragment(
   textFill: string,
   blockFill: string,
   opacity: number,
-): string {
+): { svg: string; overflow: boolean } {
   const h = y2 - y1;
   const rect =
     `<rect x="${x}" y="${y1}" width="${width}" height="${h}" rx="${WASHI_RX}" ` +
     `fill="${blockFill}" fill-opacity="${opacity}"/>`;
-  const labelY = y1 + h - Math.round(h * 0.28);
-  const label =
-    `<text x="${x + BANNER_PAD_X}" y="${labelY}" font-family="${escapeXml(font)}" ` +
-    `font-size="${size}" font-weight="${weight}" fill="${textFill}">${escapeXml(text)}</text>`;
-  return `${rect}\n    ${label}`;
+  const innerWidth = width - BANNER_PAD_X * 2;
+  const segments = wrapText(text, font, size, innerWidth);
+  const labelX = x + BANNER_PAD_X;
+  let labels: string;
+  let overflow: boolean;
+  if (segments.length <= 1) {
+    // Unchanged from before wrapping was added: single baseline, centred by the same ratio.
+    const labelY = y1 + h - Math.round(h * 0.28);
+    labels =
+      `<text x="${labelX}" y="${labelY}" font-family="${escapeXml(font)}" ` +
+      `font-size="${size}" font-weight="${weight}" fill="${textFill}">${escapeXml(text)}</text>`;
+    overflow = false;
+  } else {
+    const pitch = Math.round(size * 1.3);
+    const blockHeight = segments.length * pitch;
+    overflow = blockHeight > h;
+    const startY = y1 + h / 2 - blockHeight / 2 + pitch * 0.78; // first baseline, block vertically centred
+    labels = segments
+      .map((seg, i) => {
+        const segY = Math.round(startY + i * pitch);
+        return `<text x="${labelX}" y="${segY}" font-family="${escapeXml(font)}" ` +
+          `font-size="${size}" font-weight="${weight}" fill="${textFill}">${escapeXml(seg)}</text>`;
+      })
+      .join("\n    ");
+  }
+  return { svg: `${rect}\n    ${labels}`, overflow };
 }
 
 /** Intrinsic pixel dimensions of an encoded image. */
@@ -1433,22 +1462,33 @@ export function composeAiSvg(
             const y1 = Math.round(region.ruledLines[r1] - region.y);
             const y2 = Math.round(region.ruledLines[r2] - region.y);
             const bx = line.x ?? def.xPad ?? DEFAULT_X_PAD;
-            const bw = region.width - bx - (def.xPad ?? DEFAULT_X_PAD);
-            parts.push(
-              `    ${washiBlockFragment(
-                bx,
-                y1,
-                y2,
-                bw,
-                line.text,
-                font,
-                size,
-                weight,
-                fill,
-                line.blockFill ?? theme.accent,
-                line.blockOpacity ?? WASHI_DEFAULT_OPACITY,
-              )}`,
+            // Right inset is the standard margin, not a second helping of the schedule's
+            // wide LEFT gutter (reserved for the printed hour labels) — re-subtracting it
+            // on the right left the tape ~half its column narrower than it needed to be.
+            const bw = region.width - bx - DEFAULT_X_PAD;
+            const block = washiBlockFragment(
+              bx,
+              y1,
+              y2,
+              bw,
+              line.text,
+              font,
+              size,
+              weight,
+              fill,
+              line.blockFill ?? theme.accent,
+              line.blockOpacity ?? WASHI_DEFAULT_OPACITY,
             );
+            parts.push(`    ${block.svg}`);
+            if (block.overflow) {
+              warn(
+                "washi_block_label_overflow",
+                `region "${region.name}": block "${truncate(line.text)}" (${line.time}–${endTimeStr}) ` +
+                  `label is too long for the block even wrapped — may overrun.`,
+                "warning",
+                region.name,
+              );
+            }
             return;
           }
         }

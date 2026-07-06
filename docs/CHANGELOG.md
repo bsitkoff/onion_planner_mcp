@@ -7,6 +7,23 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Washi-tape blocks widened + long labels wrap — 2026-07-06
+
+The schedule's washi-tape duration block was subtracting its wide *left* gutter (reserved for
+the printed hour labels) from the *right* edge too, leaving ~52px of dead space unused on every
+block and making long event names run off the tape. Fixed:
+
+- The block's right inset is now the standard margin (`DEFAULT_X_PAD`), not a second helping of
+  the schedule's own `xPad` — widens the live schedule tape from 185px to 213px.
+- A label still too long for the widened block now wraps into multiple lines (reusing the same
+  wrap heuristic as `ainotes`/`todo`) instead of overflowing past the right edge; if the wrapped
+  lines still can't fit the block's height, warns `washi_block_label_overflow` — previously this
+  case was silently drawn overflowing with no warning at all.
+
+Smoke +2 checks, all passing · tsc clean.
+
+---
+
 ## Image-sizing + raw-svg guardrails — 2026-07-05
 
 The 2026-07-05 morning CoWork run failed in ways a human had to catch by eye; this pass turns

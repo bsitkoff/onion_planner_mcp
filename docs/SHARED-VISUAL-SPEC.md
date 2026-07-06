@@ -136,8 +136,13 @@ element in this file to use `fill-opacity` rather than `opacity`. Tint defaults 
 `theme.accent` (the same per-line-override pattern as a label's `labelFill` over
 `theme.banners[...]`), overridable per-block via `blockFill`. The label text sits vertically
 centred inside the block at `y1 + height − round(height × 0.28)` — the same centring ratio as
-§5's label-slot text. Left inset = the region's `xPad`; right edge = `region.width − xPad`
-(mirroring the underline-heading rule's right-edge convention). A span partly outside the
+§5's label-slot text. Left inset = the region's `xPad` (the schedule's gutter for its printed
+hour labels); right edge = `region.width − DEFAULT_X_PAD`, the *standard* margin — not the
+region's (often wider) `xPad` again, which would double-charge the left gutter on a side that
+has no hour labels to clear. A label too long to fit the block's width on one line wraps
+(reusing the same wrap heuristic as `ainotes`/`todo`), stacking centred within the block's
+height; if the wrapped lines still don't fit the block's height it warns
+`washi_block_label_overflow` rather than silently overrunning. A span partly outside the
 region's ruled grid is pinned to fit and still drawn (warns `washi_block_clamped`); a
 zero/negative-duration span isn't drawn at all (warns `washi_block_zero_duration`).
 
@@ -159,4 +164,6 @@ zero/negative-duration span isn't drawn at all (warns `washi_block_zero_duration
    stay independent axes. Underlay gold stays the single `#9C7C1A` (no fill/text split). (§0, §6)
 8. **Washi-tape schedule blocks:** MCP-only, drawn via `time`+`endTime`/`durationMin`; tint
    defaults to `theme.accent`, `fill-opacity` default 0.22, `rx 6` reusing §5's corner radius;
-   overflow clamps and warns rather than distorting the grid. (§7)
+   right inset is the standard margin (not the schedule's own wider left gutter); an overlong
+   label wraps into the block before anything warns; span overflow clamps and warns rather than
+   distorting the grid. (§7)

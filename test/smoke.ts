@@ -346,6 +346,40 @@ async function main() {
   check("block height spans start->end row (10:00 -> row 3)", yAttr + hAttr === Math.round(rl[3]), `y+h=${yAttr + hAttr} expected=${Math.round(rl[3])}`);
   check("block reuses the rx=6 corner-radius convention", rectMatch![0].includes('rx="6"'), rectMatch?.[0]);
   check("block draws the label text inside it", washiGroup.includes(">Team sync</text>"), washiGroup.slice(0, 300));
+  // The tape's right inset should be the standard margin (24px), not a re-subtraction of the
+  // schedule's wide LEFT gutter (52px, reserved for the printed hour labels) — that double-charge
+  // left ~52px of dead space on the right of every block. bx is whatever xPad the schedule
+  // region resolved to (52 by default); the tape should reach to region.width - 24, not - bx.
+  const xAttr = Number(rectMatch?.[0].match(/ x="(-?[\d.]+)"/)?.[1]);
+  const wAttr = Number(rectMatch?.[0].match(/width="([\d.]+)"/)?.[1]);
+  const expectedWidth = Math.round(schedule!.width! - xAttr - 24);
+  check(
+    "block width uses a standard right margin, not the left gutter twice",
+    wAttr === expectedWidth,
+    `x=${xAttr} width=${wAttr} region.width=${schedule!.width} expected width=${expectedWidth}`,
+  );
+
+  // A label too long for even the widened tape should wrap into the block's spare height
+  // instead of silently overflowing past the right edge.
+  const longLabel = "Robotics team meeting with the whole club plus parents";
+  const washiLong = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: longLabel, time: "09:00", endTime: "11:00" }] }],
+  });
+  const washiLongGroup = regionGroup(washiLong.aiSvg, "schedule") ?? "";
+  const longTexts = [...washiLongGroup.matchAll(/<text\b[^>]*>([^<]*)<\/text>/g)]
+    .map((m) => m[1])
+    .filter((t) => longLabel.startsWith(t.split(" ").slice(0, 2).join(" ")) || longLabel.includes(t));
+  check(
+    "an overlong washi label wraps into multiple lines instead of one overflowing run",
+    longTexts.length > 1,
+    JSON.stringify(longTexts),
+  );
+  check(
+    "wrapped washi segments reassemble into the original label",
+    longTexts.join(" ").replace(/\s+/g, " ").trim() === longLabel,
+    longTexts.join(" | "),
+  );
 
   const zeroDur = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,

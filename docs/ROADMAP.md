@@ -24,6 +24,15 @@ below links its issue — detail, sketches, and open decisions live there, not h
    user's layer). "Sticker" is the user's mental model, not a literal write.
 2. **Incremental updates are region-level merges** — `write_underlay` patches named regions
    and preserves the rest, so "slide a meeting in" doesn't clobber the day's other content.
+3. **The underlay is not a privacy surface** (app design decisions 2026-07-09) — writing
+   `ai.svg` needs no permission gating; the only gated operation is **`read_ink`**, governed
+   by the app's per-chapter ink-read toggle
+   ([onionskin#144](https://github.com/bsitkoff/onionskin/issues/144)) once it ships. The
+   app-side Shared/ visibility gate retires with it (see [#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)).
+4. **No gold** (app design decisions 2026-07-09) — the default decoration palette derives
+   from the chapter's palette character / `theme.harmony`, not a canonical gold token; this
+   supersedes `SHARED-VISUAL-SPEC.md` §0's gold value when
+   [#20](https://github.com/bsitkoff/onion_planner_mcp/issues/20) lands.
 
 ### Invariants every item must respect
 
@@ -34,13 +43,35 @@ below links its issue — detail, sketches, and open decisions live there, not h
 - All writes through `resolvePageRel` (Shared/ containment) + `atomicWrite`.
 - No app/network API for planner state. Re-read `manifest.size` per page; geometry comes from
   each page's template.
-- Closed font set (`Mulish, Newsreader, IBM Plex Mono, Caveat, Fredoka, Phosphor`).
+- Closed font set (`Mulish, Newsreader, IBM Plex Mono, Caveat, Fredoka, Phosphor`) — carries
+  no gold requirement.
+- Underlay palette rules, shared with the on-device author: every underlay text colour meets
+  the contrast floor (≥ 4.5:1 on paper) and comes from a **pre-lightened palette** (always
+  lighter than user ink, clamped at the floor). Spec: the app's `design/UNDERLAY-VISUAL.md`
+  (forthcoming — [onionskin#23](https://github.com/bsitkoff/onionskin/issues/23)).
 
 ---
 
-## Planned — near-term (friction from the 2026-07-05 morning-run audit)
+## Planned — near-term
 
-Ordered by leverage for the unattended nightly/morning runs:
+From the app's 2026-07-09 design decisions
+(`onionskin/design/handoff-decisions-2026-07-09/decisions-source.md`):
+
+1. **Text boxes: one box per logical block, never one per line** — hard authoring rule
+   (`docs/AUTHORING.md`); today's one-box-per-line output can't reflow when a word is added.
+   **Blocks daily use — top of the list.**
+   [#18](https://github.com/bsitkoff/onion_planner_mcp/issues/18)
+2. **Washi/duration blocks: dimensions derive from template geometry** — min block height =
+   one schedule-line interval *read from the template*, never a hardcoded min-height. Gated
+   on the app's `design/UNDERLAY-VISUAL.md` (onionskin#23).
+   [#19](https://github.com/bsitkoff/onion_planner_mcp/issues/19)
+3. **Underlay default palette is chapter-derived, not gold** — gold is retired app-wide;
+   derive from palette character / `harmony`, enforce the shared contrast-floor +
+   pre-lightened-ceiling rules; revise `SHARED-VISUAL-SPEC.md` §0 in coordination.
+   [#20](https://github.com/bsitkoff/onion_planner_mcp/issues/20)
+
+Friction from the 2026-07-05 morning-run audit, ordered by leverage for the unattended
+nightly/morning runs:
 
 1. **Page preview render** — rasterize the composed page to a PNG temp path so an unattended
    run can *see* what it wrote (every recent failure a human caught by eye would have been
@@ -60,13 +91,17 @@ Ordered by leverage for the unattended nightly/morning runs:
 
 - **Phosphor weather/decoration glyphs** (`umbrella`, `sun`, `cloud`, `check`, `star`) —
   plumbing shipped; waiting on the app's `Phosphor.swift` to publish the codepoints.
+  Coordinate with the app's Phosphor→SF Symbols migration (onionskin#113): confirm the
+  shared glyph names survive it.
   [#11](https://github.com/bsitkoff/onion_planner_mcp/issues/11)
 - **Full-text / handwriting search** (`textContains` on `list_pages`) — needs the app-side
   OCR data source; the where-does-recognized-text-live decision is recorded in the issue.
   [#12](https://github.com/bsitkoff/onion_planner_mcp/issues/12)
-- **`resolvePageRel` change when the app retires the Shared/ gate (app C7/E2)** — standing
-  cross-repo coupling, same-release change, nothing to do until the app's E2 lock ships.
-  [#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)
+- **`resolvePageRel` change when the app retires the Shared/ gate** — standing cross-repo
+  coupling, same-release change. The driver is now the per-chapter **ink-read toggle**
+  decision (onionskin#144, 2026-07-09), paired with the app's E2 at-rest lock
+  (onionskin#18); nothing to do until those ship. `read_ink` must respect the toggle once
+  the app exposes it. [#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)
 
 ## Parked
 

@@ -212,6 +212,49 @@ export function encodePng(img: DecodedPng): Buffer {
 }
 
 /**
+ * Downscale so neither dimension exceeds `maxDimension`, aspect preserved — a
+ * box-filter (area-average) resample, chosen over nearest-neighbor for less
+ * aliasing on AI-generated art with no extra dependency. Returns `img` unchanged
+ * if it's already within `maxDimension` (never upscales). Alpha is averaged
+ * alongside colour channels — an approximation (ignores premultiplication) that's
+ * fine for the mostly-opaque-or-fully-transparent art this serves (see
+ * `page.ts`'s `images[].maxDimension`).
+ */
+export function resampleToMaxDimension(img: DecodedPng, maxDimension: number): DecodedPng {
+  const scale = maxDimension / Math.max(img.width, img.height);
+  if (scale >= 1) return img;
+  const { width: srcW, height: srcH, pixels: src } = img;
+  const dstW = Math.max(1, Math.round(srcW * scale));
+  const dstH = Math.max(1, Math.round(srcH * scale));
+  const dst = new Uint8Array(dstW * dstH * 4);
+  for (let dy = 0; dy < dstH; dy++) {
+    const sy0 = Math.floor((dy * srcH) / dstH);
+    const sy1 = Math.max(sy0 + 1, Math.floor(((dy + 1) * srcH) / dstH));
+    for (let dx = 0; dx < dstW; dx++) {
+      const sx0 = Math.floor((dx * srcW) / dstW);
+      const sx1 = Math.max(sx0 + 1, Math.floor(((dx + 1) * srcW) / dstW));
+      let r = 0, g = 0, b = 0, a = 0, count = 0;
+      for (let sy = sy0; sy < sy1; sy++) {
+        for (let sx = sx0; sx < sx1; sx++) {
+          const i = (sy * srcW + sx) * 4;
+          r += src[i];
+          g += src[i + 1];
+          b += src[i + 2];
+          a += src[i + 3];
+          count++;
+        }
+      }
+      const o = (dy * dstW + dx) * 4;
+      dst[o] = Math.round(r / count);
+      dst[o + 1] = Math.round(g / count);
+      dst[o + 2] = Math.round(b / count);
+      dst[o + 3] = Math.round(a / count);
+    }
+  }
+  return { width: dstW, height: dstH, pixels: dst };
+}
+
+/**
  * Key a solid background colour to transparent, in place. Per-pixel: if every
  * channel is within `tolerance` of `target`, set alpha to 0. A hard cutoff — no
  * edge feathering (a real anti-aliasing decision, left as a documented v1

@@ -20,6 +20,9 @@ import {
   fetchImageToTemp,
 } from "./page.js";
 import { PHOSPHOR_CODEPOINTS } from "./svg.js";
+import { PALETTE_CHARACTERS } from "./color.js";
+
+const PALETTE_CHARACTER_IDS = Object.keys(PALETTE_CHARACTERS) as [string, ...string[]];
 
 const server = new McpServer(
   {
@@ -29,7 +32,7 @@ const server = new McpServer(
   {
     instructions:
       "Onionskin is a planner whose pages are folders of SVG layers in an iCloud " +
-      "folder. You write the gold 'ai.svg' underlay (schedule, to-dos, focus, and the " +
+      "folder. You write the 'ai.svg' AI underlay (schedule, to-dos, focus, and the " +
       "ainotes AI-voice block) into pages under Shared/, then mark it ready — the app " +
       "composites it on next foreground. Always call get_library first, then read_page " +
       "to learn a page's regions before write_underlay (region names vary by template). " +
@@ -143,7 +146,10 @@ server.tool(
     "a weekday header, hour-line numbers), in document order, empty if the template prints " +
     "nothing here; check it before writing a line so you don't double-write content the " +
     "template already shows (e.g. the date under a template that already prints \"TODAY\"), " +
-    "and `labelFilled` — whether a region's " +
+    "`imageFloor` — the {width,height} a centered image below trips `image_small_for_region` " +
+    "in this region (245×245 when `intent` marks it interactive, e.g. a habit tracker the " +
+    "user pencil-checks; else 35% of the box), so you can size an image right the first time " +
+    "instead of iterating on the warning — and `labelFilled` — whether a region's " +
     "printed label slot, if it has one, actually has a label banner drawn into it yet " +
     "(null if the region has no slot; false means the template prints a slot but nothing's " +
     "there — don't assume a slot means content exists, pass `label` to fill it)), current ai.svg, " +
@@ -161,9 +167,13 @@ server.tool(
     "`paperColor` (the page's paper/background colour — generate soft-edged art on this to " +
     "place it opaque with no knockout/halo; see docs/AUTHORING.md): if styled, fill quietly " +
     "in those colours; if bare, go full (theme + banners + art). Also returns " +
-    "the chapter's `theme` (harmony/varietyDial/fontPersonality + an explicit `accent` + " +
-    "chromeAccent), which write_underlay applies as the default palette/fonts unless you " +
-    "override it per call. Set it with set_chapter_theme.",
+    "the chapter's `theme` (paletteCharacter/customInk1/customInk2/harmony/varietyDial/" +
+    "fontPersonality + an explicit `accent` + chromeAccent + displayName), which " +
+    "write_underlay applies as the default palette/fonts unless you override it per call " +
+    "(set it with set_chapter_theme), and `underlay` — the RESOLVED palette a default " +
+    "write will use (lifted + contrast-floored hexes: text/serif/accent/banners/" +
+    "headingStyle + the chromeAccent-derived washiTint). Pick per-line `fill`s from " +
+    "`underlay` so your colours stay in the chapter's family.",
   {
     page: z
       .string()
@@ -245,7 +255,7 @@ const FONT_ENUM = z.enum([
 const PHOSPHOR_ICON_NAMES = Object.keys(PHOSPHOR_CODEPOINTS) as [string, ...string[]];
 
 const lineSchema = z.object({
-  text: z.string().describe("The text to draw (gold)."),
+  text: z.string().describe("The text to draw."),
   row: z
     .number()
     .int()
@@ -286,7 +296,9 @@ const lineSchema = z.object({
         "if `time` is not also set.",
     ),
   blockFill: HEX_COLOR.optional().describe(
-    "Override the washi block's tint (hex). Defaults to the theme's accent colour.",
+    "Override the washi block's tint (hex). Defaults to the chapter's chromeAccent " +
+      "(the chapter accent tints duration blocks), else the theme's accent colour. " +
+      "A no-text fill — used raw, never auto-darkened.",
   ),
   blockOpacity: z
     .number()
@@ -308,7 +320,11 @@ const lineSchema = z.object({
     .int()
     .optional()
     .describe("SVG font-weight (100–900). Defaults per region (600; 500 for the serif ainotes)."),
-  fill: HEX_COLOR.optional().describe("Override colour (hex). Defaults to the gold default."),
+  fill: HEX_COLOR.optional().describe(
+    "Override colour (hex). Defaults to the resolved theme colour (gold is retired). " +
+      "Auto-darkened to the ≥4.5:1 contrast floor when drawn as text — pick from " +
+      "read_page's `underlay` palette to stay in the chapter's colours.",
+  ),
   marker: z
     .enum(["checkbox", "bullet"])
     .optional()
@@ -370,7 +386,10 @@ const calendarSchema = z.object({
     .describe("Optional per-day event labels / styling."),
   numberSize: z.number().optional().describe("Day-number font size (default 18)."),
   numberWeight: z.number().int().optional().describe("Day-number weight (default 600)."),
-  fill: HEX_COLOR.optional().describe("Override gold for the day numbers (hex)."),
+  fill: HEX_COLOR.optional().describe(
+    "Override the resolved theme colour for the day numbers (hex). Auto-darkened to " +
+      "the ≥4.5:1 contrast floor (day numbers are text).",
+  ),
 }).strict();
 
 // An AI-owned image placed in a region — the caller supplies the bytes (base64);
@@ -399,14 +418,22 @@ const imageSchema = z.object({
     .string()
     .optional()
     .describe("Stable filename stem — re-writing the same name replaces the image. Defaults to a content hash."),
-  width: z.number().positive().describe("Display width in region-local units."),
+  width: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      "Display width in region-local units. Required unless `fit: \"region\"` computes it " +
+        "from the region's own box.",
+    ),
   height: z
     .number()
     .positive()
     .optional()
     .describe(
       "Display height. OMIT to aspect-fill from the source (recommended) — a height off " +
-        "the source aspect renders visibly stretched and trips `image_aspect_mismatch`.",
+        "the source aspect renders visibly stretched and trips `image_aspect_mismatch`. Not " +
+        "allowed with `fit: \"region\"` (it computes both dimensions).",
     ),
   x: z.number().optional().describe("Region-local x. Overrides `corner`."),
   y: z.number().optional().describe("Region-local y. Overrides `corner`."),
@@ -414,7 +441,30 @@ const imageSchema = z.object({
     .enum(["top-left", "top-right", "bottom-left", "bottom-right", "center"])
     .optional()
     .describe("Placement within the region box (default center). Ignored if x/y are set."),
-  margin: z.number().optional().describe("Inset from the region edge for corner placement (default 8)."),
+  margin: z
+    .number()
+    .optional()
+    .describe(
+      "Inset from the region edge for corner placement (default 8). Also the box inset " +
+        "`fit: \"region\"` sizes inside.",
+    ),
+  fit: z
+    .literal("region")
+    .optional()
+    .describe(
+      "Size the display box to fit inside the region's own box (aspect-preserving contain, " +
+        "inset by `margin`) instead of computing `width`/`height` yourself from read_page " +
+        "geometry. Mutually exclusive with `width`/`height` — omit both when set.",
+    ),
+  maxDimension: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      "Downscale the source so neither dimension exceeds this, before sizing/hashing/writing " +
+        "— use instead of resizing a source image by hand to clear the 1536px guideline or " +
+        "2MB cap. PNG sources only today (re-encodes pixels); a JPEG over the limit still throws.",
+    ),
   opacity: z.number().min(0).max(1).optional().describe("Image opacity, 0–1."),
   knockout: z
     .enum(["subject", "chroma", "none"])
@@ -448,11 +498,15 @@ const imageSchema = z.object({
   message: '`chromaColor` is required when knockout is "chroma".',
 }).refine((i) => i.knockout === "chroma" || (i.chromaColor === undefined && i.tolerance === undefined), {
   message: '`chromaColor`/`tolerance` only apply when knockout is "chroma".',
+}).refine((i) => i.fit !== "region" || (i.width === undefined && i.height === undefined), {
+  message: '`fit: "region"` computes width/height itself — omit both.',
+}).refine((i) => i.fit === "region" || i.width !== undefined, {
+  message: "`width` is required unless `fit` is \"region\".",
 });
 
 server.tool(
   "write_underlay",
-  "Write a shared page's gold ai.svg (atomically) and set its status. Provide EITHER " +
+  "Write a shared page's ai.svg (atomically) and set its status. Provide EITHER " +
     "`regions` (structured — the server positions each line from the page's geometry; " +
     "preferred) OR `svg` (a full <svg> document you composed yourself). A region may also " +
     "carry `images` (base64/path art the server writes to the page's media/ai/ folder and " +
@@ -568,9 +622,12 @@ server.tool(
         "Named palette PRESET — colours the section banners, body text, and accents. PICK " +
           "IT TO FIT THE DAY: 'bright' (lively, saturated — a fun/light day), 'cozy' (warm, " +
           "hand-painted — a calm or rainy day), 'editorial' (restrained, few accents — a " +
-          "heads-down work day), 'gold' (the quiet monochrome default). For an adaptive " +
-          "palette that harmonises to the template instead, use `harmony`/`varietyDial`. " +
-          "Ignored with raw `svg`.",
+          "heads-down work day), 'gold' (kept for back-compat; gold is RETIRED as a colour — " +
+          "this now resolves to the chapter's own palette character, a calm blue-family " +
+          "default if none is set). For an adaptive palette that harmonises to the template " +
+          "instead, use `harmony`/`varietyDial`; for the chapter's own ink-palette identity, " +
+          "set `paletteCharacter` via `set_chapter_theme` and leave `theme` unset. Ignored " +
+          "with raw `svg`.",
       ),
     harmony: z
       .enum(["match", "complement", "warm", "cool", "seasonal"])
@@ -746,9 +803,12 @@ server.tool(
     "chapter inherits one mood — write_underlay applies it as the default (overridable per " +
     "call) and read_page surfaces it. Use `accent` to give the chapter an explicit colour " +
     "the named presets don't cover (e.g. lavender to-dos): it tints body text, markers, and " +
-    "banners, floored dark to stay legible on cream. `harmony`/`varietyDial`/`fontPersonality` " +
-    "set the adaptive mood. Only the fields you pass are changed; the rest of the theme (and " +
-    "the chapter's page order) is preserved. The chapter must already exist.",
+    "banners, floored dark to stay legible on cream. `paletteCharacter` sets the chapter's " +
+    "ink-tray identity (the app's per-chapter handwriting colours, design/INK-PALETTE.md) — " +
+    "when no `harmony`/`accent`/preset `theme` is given, the underlay derives its default " +
+    "palette from this instead of a fixed colour (gold is retired). `harmony`/`varietyDial`/" +
+    "`fontPersonality` set the adaptive mood. Only the fields you pass are changed; the rest " +
+    "of the theme (and the chapter's page order) is preserved. The chapter must already exist.",
   {
     chapter: z
       .string()
@@ -764,6 +824,37 @@ server.tool(
         "Explicit underlay accent (hex) the whole chapter inherits — tints body text / " +
           "markers / banners. The way to make e.g. to-dos lavender by default; per-day exact " +
           "colour is still available via a line's `fill`.",
+      ),
+    paletteCharacter: z
+      .enum(PALETTE_CHARACTER_IDS)
+      .optional()
+      .describe(
+        "The chapter's ink-tray identity — one of the app's named palette characters " +
+          "(design/INK-PALETTE.md; a design proposal, names may change). When set and no " +
+          "`accent`/`harmony`/preset `theme` overrides it, the underlay's default palette " +
+          "derives from this chapter's own ink colours (lifted lighter, still legible) " +
+          "instead of a fixed seed. Additive alongside the app's `chromeAccent`/`harmony`/" +
+          "`varietyDial`/`fontPersonality` keys — never overwrites them.",
+      ),
+    customInk1: z
+      .string()
+      .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "customInk1 must be a hex colour like #7B5EA7")
+      .optional()
+      .describe(
+        "Extra user ink slot (hex), appended to the palette character's 5-ink pool — the " +
+          "app's tray is 7 (5 derived + 2 custom). Widens the underlay's banner/fill choices.",
+      ),
+    customInk2: z
+      .string()
+      .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "customInk2 must be a hex colour like #7B5EA7")
+      .optional()
+      .describe("Second extra user ink slot (hex) — see customInk1."),
+    displayName: z
+      .string()
+      .optional()
+      .describe(
+        'Friendly chapter identity (e.g. "lavender to-dos") — advisory only; surfaced by ' +
+          "read_page, never used to derive colours.",
       ),
     harmony: z
       .enum(["match", "complement", "warm", "cool", "seasonal"])
@@ -781,11 +872,25 @@ server.tool(
       .describe("AI-text voice: clean / handwritten / editorial."),
   },
   { idempotentHint: true },
-  async ({ chapter, accent, harmony, varietyDial, fontPersonality }) => {
+  async ({
+    chapter,
+    accent,
+    paletteCharacter,
+    customInk1,
+    customInk2,
+    displayName,
+    harmony,
+    varietyDial,
+    fontPersonality,
+  }) => {
     try {
       const root = await requireLibrary();
       const res = await writeChapterTheme(root, chapter, {
         accent,
+        paletteCharacter,
+        customInk1,
+        customInk2,
+        displayName,
         harmony,
         varietyDial,
         fontPersonality,

@@ -31,10 +31,15 @@ import {
   writeChapterTheme,
   fetchImageToTemp,
 } from "../src/page.js";
-import { GOLD, resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages } from "../src/svg.js";
-import { hexToHsl } from "../src/color.js";
+import { resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages } from "../src/svg.js";
+import { hexToHsl, contrastRatioHex } from "../src/color.js";
 import { inspectTemplate, parseRegions, PAPER_COLOR } from "../src/template.js";
 import { decodePng, encodePng, chromaKeyPixels } from "../src/png.js";
+
+// Gold is retired — the default (no theme override) resolves to the chapter's own ink
+// palette instead of a fixed seed colour. Tests below assert against THIS, not a literal
+// hex, since the exact default may change as the palette-character proposal is refined.
+const DEFAULT_INK = resolveTheme({}).theme.text;
 
 let pass = 0;
 let fail = 0;
@@ -141,6 +146,21 @@ async function main() {
   check("schedule region parsed with ruled lines", (schedule?.ruledLines.length ?? 0) >= 8, String(schedule?.ruledLines.length));
   check("ainotes region parsed (no-ruled box)", !!ainotes && ainotes.ruledLines.length === 0, String(ainotes?.ruledLines.length));
   check("todo region parsed", !!todo);
+  // imageFloor: ainotes' own intent mentions "a habit sticker" — the interactive floor
+  // (245×245) applies regardless of the box size; todo's intent doesn't, so it gets the
+  // default 35%-of-box heuristic instead.
+  check(
+    "ainotes' intent marks it interactive -> a 245×245 imageFloor",
+    ainotes?.imageFloor?.interactive === true && ainotes.imageFloor.width === 245 && ainotes.imageFloor.height === 245,
+    JSON.stringify(ainotes?.imageFloor),
+  );
+  check(
+    "todo's intent (task checkbox rows, not an image) -> the default 35%-of-box floor",
+    todo?.imageFloor?.interactive === false &&
+      todo?.width !== null && todo.imageFloor?.width === todo.width * 0.35 &&
+      todo?.height !== null && todo.imageFloor?.height === todo.height * 0.35,
+    JSON.stringify({ imageFloor: todo?.imageFloor, box: [todo?.width, todo?.height] }),
+  );
   // The template prints a dashed label slot nested in schedule's own <g> — parseRegions
   // must surface it (Region.labelSlot) without confusing it for the region's own box.
   check("schedule region exposes its printed label slot", !!schedule?.labelSlot, JSON.stringify(schedule?.labelSlot));
@@ -245,15 +265,15 @@ async function main() {
   const aiPath = path.join(root, daily, "ai.svg");
   const ai = await fs.readFile(aiPath, "utf8");
   check("ai.svg contains schedule text", ai.includes("9:00 standup"));
-  check("ai.svg uses gold fill", ai.includes(GOLD));
+  check("ai.svg uses the default ink-palette fill (gold is retired)", ai.includes(DEFAULT_INK));
   check("ai.svg sets a heavier font-weight", ai.includes('font-weight="600"'));
   check("ai.svg groups by region", ai.includes('data-region="schedule"') && ai.includes('data-region="todo"'));
   check("ainotes uses Newsreader (region default still applies)", regionGroup(ai, "ainotes")?.includes("Newsreader") ?? false);
   check("write reported warnings array", Array.isArray(wr.warnings));
   check("write was not a dry run", wr.dryRun === false);
-  // checkbox marker: a gold stroked <rect> inside the todo group, before its text.
+  // checkbox marker: a themed stroked <rect> inside the todo group, before its text.
   const todoGroup = regionGroup(ai, "todo") ?? "";
-  check("to-do lines draw a gold checkbox", new RegExp(`<rect[^>]*stroke="${GOLD}"`).test(todoGroup), todoGroup.slice(0, 120));
+  check("to-do lines draw a themed checkbox", new RegExp(`<rect[^>]*stroke="${DEFAULT_INK}"`).test(todoGroup), todoGroup.slice(0, 120));
 
   console.log("\nPhosphor icon glyphs (font-rendered leading mark; dry-run)");
   const iconWrite = await writeUnderlay(root, daily, {
@@ -356,7 +376,9 @@ async function main() {
   // 09:00 -> row 2, 10:00 -> row 3, given the schedule's own startHour 7 / rowsPerHour 1.
   check("block y matches the start row (09:00 -> row 2)", yAttr === Math.round(rl[2]), `y=${yAttr} expected=${Math.round(rl[2])}`);
   check("block height spans start->end row (10:00 -> row 3)", yAttr + hAttr === Math.round(rl[3]), `y+h=${yAttr + hAttr} expected=${Math.round(rl[3])}`);
-  check("block reuses the rx=6 corner-radius convention", rectMatch![0].includes('rx="6"'), rectMatch?.[0]);
+  // rx=8 / 0.16 tint per the 2026-07-09 washi spec (design/UNDERLAY-VISUAL.md, forthcoming).
+  check("block uses the washi rx=8 corner radius", rectMatch![0].includes('rx="8"'), rectMatch?.[0]);
+  check("block uses the 0.16 default tint opacity", rectMatch![0].includes('fill-opacity="0.16"'), rectMatch?.[0]);
   check("block draws the label text inside it", washiGroup.includes(">Team sync</text>"), washiGroup.slice(0, 300));
   // The tape's right inset should be the standard margin (24px), not a re-subtraction of the
   // schedule's wide LEFT gutter (52px, reserved for the printed hour labels) — that double-charge
@@ -393,27 +415,58 @@ async function main() {
     longTexts.join(" | "),
   );
 
+  // Min block height is one schedule-line interval read from the template's ruled
+  // lines (2026-07-09 washi spec) — a too-short/backwards range still draws a visible
+  // one-interval tape, superseding the old plain-time-line fallback (#17).
   const zeroDur = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
     regions: [{ region: "schedule", lines: [{ text: "Oops", time: "10:00", endTime: "09:00" }] }],
   });
+  const zeroGroup = regionGroup(zeroDur.aiSvg, "schedule") ?? "";
+  const zeroRect = zeroGroup.match(/<rect[^>]*fill-opacity="[\d.]+"[^>]*\/>/);
   check(
-    "zero/negative duration warns (info) and falls back to a plain time line — the event still appears",
-    zeroDur.warningDetails.some((w) => w.code === "washi_block_zero_duration" && w.severity === "info") &&
-      (zeroDur.aiSvg ?? "").includes(">Oops</text>") &&
-      !(regionGroup(zeroDur.aiSvg, "schedule") ?? "").includes('rx="6"'),
+    "zero/negative duration draws a one-interval minimum block and warns (info)",
+    zeroDur.warningDetails.some((w) => w.code === "washi_block_min_height" && w.severity === "info") &&
+      !!zeroRect &&
+      zeroGroup.includes(">Oops</text>"),
     JSON.stringify(zeroDur.warningDetails),
   );
-  // The real-world case that motivated the fallback: a 20-minute meeting on a
-  // 1-row-per-hour grid snaps both ends to the same row — it must not vanish.
+  // 10:00 -> row 3 on this grid; the minimum block spans exactly one ruled interval.
+  const zeroH = Number(zeroRect?.[0].match(/height="(\d+)"/)?.[1]);
+  const oneInterval = Math.round(rl[4]) - Math.round(rl[3]);
+  check(
+    "minimum block height equals one ruled-line interval from the template",
+    zeroH === oneInterval,
+    `height=${zeroH} interval=${oneInterval}`,
+  );
+  // The real-world case that motivated #17's old fallback: a 20-minute meeting on a
+  // 1-row-per-hour grid snaps both ends to the same row — it must not vanish. It now
+  // draws the one-interval minimum tape instead of degrading to a bare time line.
   const shortMeeting = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
     regions: [{ region: "schedule", lines: [{ text: "Morning Meeting", time: "08:00", endTime: "08:20" }] }],
   });
+  const shortGroup = regionGroup(shortMeeting.aiSvg, "schedule") ?? "";
   check(
-    "a sub-row meeting (08:00-08:20) keeps its text as a time line",
-    (shortMeeting.aiSvg ?? "").includes(">Morning Meeting</text>"),
-    (regionGroup(shortMeeting.aiSvg, "schedule") ?? "").slice(0, 300),
+    "a sub-row meeting (08:00-08:20) draws a minimum-height block, label inside",
+    shortGroup.includes(">Morning Meeting</text>") &&
+      /<rect[^>]*fill-opacity="[\d.]+"/.test(shortGroup) &&
+      shortMeeting.warningDetails.some((w) => w.code === "washi_block_min_height"),
+    shortGroup.slice(0, 300),
+  );
+  // The one geometry no block can fit: an event starting on the grid's LAST ruled
+  // line has no next line to span to — only there does the plain-time-line fallback
+  // survive.
+  const lastLineHour = 7 + (rl.length - 1); // schedule startHour 7, rowsPerHour 1
+  const lastLine = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "Nightcap", time: `${String(lastLineHour).padStart(2, "0")}:00`, durationMin: 30 }] }],
+  });
+  check(
+    "an event on the grid's last ruled line falls back to a plain time line",
+    lastLine.warningDetails.some((w) => w.code === "washi_block_zero_duration" && w.severity === "info") &&
+      (lastLine.aiSvg ?? "").includes(">Nightcap</text>"),
+    JSON.stringify(lastLine.warningDetails),
   );
 
   const overrun = await writeUnderlay(root, daily, {
@@ -443,15 +496,17 @@ async function main() {
   // endTime + durationMin together are rejected at the MCP schema (index.ts .refine,
   // mirroring marker/icon) — not reachable through this direct compose path. At the
   // compose layer itself, confirm `endTime` takes precedence (a 15-min durationMin
-  // from 09:00 would round to the SAME row and warn zero-duration; endTime "10:00"
-  // must win instead, drawing a real block with no such warning).
+  // from 09:00 would round to the SAME row and clamp to the one-interval minimum;
+  // endTime "10:00" must win instead, drawing a real block with no clamp warning).
   const bothSet = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
     regions: [{ region: "schedule", lines: [{ text: "x", time: "09:00", endTime: "10:00", durationMin: 15 } as any] }],
   });
   check(
     "endTime takes precedence over durationMin if both are set on one line",
-    !bothSet.warningDetails.some((w) => w.code === "washi_block_zero_duration"),
+    !bothSet.warningDetails.some(
+      (w) => w.code === "washi_block_zero_duration" || w.code === "washi_block_min_height",
+    ),
     JSON.stringify(bothSet.warningDetails),
   );
 
@@ -498,7 +553,7 @@ async function main() {
   });
   const notesGroup = regionGroup(sectioned.aiSvg, "todo") ?? "";
   check("heading text is letter-spaced", notesGroup.includes('letter-spacing="0.08em"'), notesGroup.slice(0, 160));
-  const headingRules = [...notesGroup.matchAll(new RegExp(`<line[^>]*stroke="${GOLD}"[^>]*opacity="0.4"`, "g"))].length;
+  const headingRules = [...notesGroup.matchAll(new RegExp(`<line[^>]*stroke="${DEFAULT_INK}"[^>]*opacity="0.4"`, "g"))].length;
   check("each of the 3 headings draws a hairline rule", headingRules === 3, `rules=${headingRules}`);
   // Flow order: headings and their items stack top-down in the order given.
   const yImp = yOf(sectioned.aiSvg, ">Important</text>");
@@ -522,31 +577,43 @@ async function main() {
   const tg = regionGroup(themed.aiSvg, "todo") ?? "";
   check("banner heading draws a filled colored rect", /<rect[^>]*fill="#3FB6A8"/.test(tg) || /<rect[^>]*fill="#F2884B"/.test(tg), tg.slice(0, 200));
   check("two banners use two different cycled colors", new Set([...tg.matchAll(/<rect[^>]*rx="6" fill="(#[0-9A-Fa-f]{6})"/g)].map((m) => m[1])).size === 2, tg);
-  check("banner label is white, not gold", tg.includes('fill="#FFFFFF"') && !tg.includes(GOLD), tg.slice(0, 240));
+  check("banner label is white, not the default ink colour", tg.includes('fill="#FFFFFF"') && !tg.includes(DEFAULT_INK), tg.slice(0, 240));
   // (case-insensitive: the AA floor round-trips the hex through HSL → lowercase)
-  check("themed body text uses theme ink, not gold", /fill="#3a3a3a"/i.test(tg), tg);
-  // The gold default is unchanged (back-compat): headings stay underline+rule.
-  const goldHead = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "todo") ?? "";
-  check("default (no theme) keeps the gold underline heading", goldHead.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(goldHead), goldHead);
+  check("themed body text uses theme ink, not the default palette", /fill="#3a3a3a"/i.test(tg), tg);
+  // The default (no theme override) is unchanged in SHAPE (back-compat): headings stay
+  // underline+rule — gold is retired, so the COLOUR is now the chapter's own ink palette.
+  const defaultHead = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "todo") ?? "";
+  check("default (no theme) keeps the underline heading", defaultHead.includes(`stroke="${DEFAULT_INK}"`) && !/<rect[^>]*rx="6"/.test(defaultHead), defaultHead);
 
   console.log("\nadaptive theme contract (harmony / variety / fontPersonality)");
-  // No knobs → the gold default (back-compat for the resolver itself).
-  check("resolveTheme({}) is the gold default", resolveTheme({}).theme.text === GOLD);
+  // No knobs → the default ink-palette theme (back-compat for the resolver itself; gold retired).
+  check("resolveTheme({}) is the default ink-palette theme", resolveTheme({}).theme.text === DEFAULT_INK);
+  check("the default ink colour clears the ≥4.5:1 contrast floor on paper (Rule 1)", contrastRatioHex(DEFAULT_INK, PAPER_COLOR) >= 4.5);
   // harmony=match derives banners FROM the template palette, not a fixed preset.
   const pal = ["#E2825E", "#8FA98A", "#88B0D4"];
   const matched = resolveTheme({ harmony: "match", varietyDial: 0.9, templatePalette: pal });
   check("harmony=match derives multiple banners from the template palette", matched.theme.banners.length >= 2 && matched.theme.banners.every((h) => /^#[0-9a-f]{6}$/.test(h)), JSON.stringify(matched.theme.banners));
   check("high variety → banner-pill headings", matched.theme.headingStyle === "banner");
   check("low variety → quiet underline headings", resolveTheme({ harmony: "match", varietyDial: 0.1, templatePalette: pal }).theme.headingStyle === "underline");
-  // Legibility floor: derived BODY text is dark enough to read on cream (solved at
-  // derivation, not warned at runtime — even from a pale template swatch).
+  // Rule 1 (real WCAG contrast, not a flat lightness cap): derived BODY text clears
+  // ≥4.5:1 on cream (solved at derivation, not warned at runtime) — even from a pale
+  // template swatch. A hue-aware contrast floor can leave some hues lighter than the
+  // old flat lightness cap while still reading fine — contrast, not raw L, is the rule.
   const pale = resolveTheme({ harmony: "match", templatePalette: ["#F2B8CC"] });
-  check("derived body text is floored dark (legible on cream)", hexToHsl(pale.theme.text).l <= 0.36, `${pale.theme.text} (L=${hexToHsl(pale.theme.text).l.toFixed(2)})`);
+  check("derived body text clears the contrast floor (legible on cream)",
+    contrastRatioHex(pale.theme.text, PAPER_COLOR) >= 4.5,
+    `${pale.theme.text} (contrast=${contrastRatioHex(pale.theme.text, PAPER_COLOR).toFixed(2)})`);
   // Empty palette while harmonising → sticker-palette fallback + a note.
   check("adaptive with no template palette warns about the fallback", resolveTheme({ harmony: "complement", templatePalette: [] }).warnings.some((w) => w.includes("sticker palette")));
-  // fontPersonality is an orthogonal axis: it swaps fonts but NOT the gold palette.
+  // fontPersonality is an orthogonal axis: it swaps fonts but NOT the palette.
   const hand = resolveTheme({ fontPersonality: "handwritten" });
-  check("fontPersonality=handwritten sets Caveat body / keeps gold palette", hand.theme.fonts?.body === "Caveat" && hand.theme.text === GOLD, JSON.stringify(hand.theme.fonts));
+  check("fontPersonality=handwritten sets Caveat body / keeps the default palette", hand.theme.fonts?.body === "Caveat" && hand.theme.text === DEFAULT_INK, JSON.stringify(hand.theme.fonts));
+  // A chapter's paletteCharacter is a lower-precedence default source than harmony/accent/preset.
+  const sunbaked = resolveTheme({ paletteCharacter: "sunbaked" });
+  const tidewater = resolveTheme({ paletteCharacter: "tidewater" });
+  check("a different paletteCharacter resolves a different default ink colour", sunbaked.theme.text !== tidewater.theme.text, `${sunbaked.theme.text} vs ${tidewater.theme.text}`);
+  check("paletteCharacter's resolved ink still clears the contrast floor", contrastRatioHex(sunbaked.theme.text, PAPER_COLOR) >= 4.5);
+  check("an explicit accent still wins over paletteCharacter", resolveTheme({ paletteCharacter: "sunbaked", accent: "#7B5EA7" }).theme.text !== sunbaked.theme.text);
   // End-to-end: fontPersonality flows into the composed text.
   const written = await writeUnderlay(root, daily, { status: "ready", dryRun: true, fontPersonality: "handwritten", regions: [{ region: "todo", lines: [{ text: "buy milk" }] }] });
   check("fontPersonality reaches the composed ai.svg (Caveat body text)", (regionGroup(written.aiSvg, "todo") ?? "").includes('font-family="Caveat"'), regionGroup(written.aiSvg, "todo") ?? "");
@@ -580,7 +647,7 @@ async function main() {
   check("chapter high-variety gives banner-pill headings", /<rect[^>]*rx="6"/.test(fcg), fcg.slice(0, 200));
   // Per-call preset overrides the chapter's adaptive default.
   const overridden = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, theme: "gold", regions: [{ region: "todo", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "todo") ?? "";
-  check("per-call theme:gold overrides the chapter's adaptive theme", overridden.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(overridden), overridden.slice(0, 200));
+  check("per-call theme:gold overrides the chapter's adaptive theme", overridden.includes(`stroke="${DEFAULT_INK}"`) && !/<rect[^>]*rx="6"/.test(overridden), overridden.slice(0, 200));
   // Restore the folder so later assertions see no theme.
   delete folderJson.theme;
   await fs.writeFile(dailyFolder, JSON.stringify(folderJson, null, 2) + "\n");
@@ -790,7 +857,7 @@ async function main() {
   console.log("\nmerge over a prior raw-svg document warns instead of silently dropping it");
   await writeUnderlay(root, daily, {
     status: "ready",
-    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#9C7C1A">raw only</text></svg>',
+    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#4A6FA5">raw only</text></svg>',
   });
   const mergeOverRaw = await writeUnderlay(root, daily, {
     status: "ready", merge: true,
@@ -830,20 +897,28 @@ async function main() {
   const weekdaysRegion = monthlyRegions.find((r) => r.name === "weekdays");
   check("weekdays region derives as shared, not ai", !weekdaysRegion || weekdaysRegion.fill !== "ai", weekdaysRegion?.fill);
 
-  console.log("\npreset themes respect the cream-legibility floor (AA text)");
+  console.log("\npreset themes respect Rule 1's real WCAG contrast floor (AA text)");
   // The bright preset's accent (#E86A92, ~2.9:1 on cream) is calendar day-number TEXT —
-  // presets must pass through the same lightness floor the adaptive path uses.
+  // presets must clear the same ≥4.5:1 floor the adaptive path uses.
   for (const name of ["bright", "cozy", "editorial"]) {
     const t = resolveTheme(name).theme;
-    check(`${name}: text/serif floored dark`, hexToHsl(t.text).l <= 0.36 && hexToHsl(t.serif).l <= 0.36, `text ${t.text} serif ${t.serif}`);
-    check(`${name}: accent floored for cream`, hexToHsl(t.accent).l <= 0.48, `${t.accent} (L=${hexToHsl(t.accent).l.toFixed(2)})`);
+    check(`${name}: text/serif clear the contrast floor`,
+      contrastRatioHex(t.text, PAPER_COLOR) >= 4.5 && contrastRatioHex(t.serif, PAPER_COLOR) >= 4.5,
+      `text ${t.text} serif ${t.serif}`);
+    check(`${name}: accent clears the contrast floor`,
+      contrastRatioHex(t.accent, PAPER_COLOR) >= 4.5,
+      `${t.accent} (contrast=${contrastRatioHex(t.accent, PAPER_COLOR).toFixed(2)})`);
   }
-  check("gold preset is untouched (the canonical value)", resolveTheme("gold").theme.text === GOLD && resolveTheme("gold").theme.accent === GOLD);
+  // "gold" is kept only as a back-compat preset name — it no longer emits a fixed
+  // colour (gold is retired); it resolves to the same default ink-palette theme as no
+  // theme at all.
+  check("gold preset resolves to the default ink-palette theme, not a fixed hex",
+    resolveTheme("gold").theme.text === DEFAULT_INK && resolveTheme("gold").theme.accent === resolveTheme({}).theme.accent);
 
   console.log("\nwrite_underlay (raw svg) + reject merge+svg");
   const rawOk = await writeUnderlay(root, daily, {
     status: "ready",
-    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#9C7C1A">raw</text></svg>',
+    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#4A6FA5">raw</text></svg>',
   });
   check("raw svg written verbatim", (await fs.readFile(aiPath, "utf8")).includes(">raw</text>"));
   check("supported raw svg produces no raw warnings", rawOk.warningDetails.length === 0, JSON.stringify(rawOk.warningDetails));
@@ -1117,7 +1192,7 @@ async function main() {
   console.log("\nraw fragments accept the app renderer's full element set");
   const shapes = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    regions: [{ region: "ainotes", svg: '<ellipse cx="40" cy="40" rx="20" ry="10" fill="none" stroke="#9C7C1A"/><polyline points="0,0 10,10 20,0" fill="none" stroke="#9C7C1A"/><polygon points="0,0 10,10 0,10" fill="#9C7C1A"/>' }],
+    regions: [{ region: "ainotes", svg: '<ellipse cx="40" cy="40" rx="20" ry="10" fill="none" stroke="#4A6FA5"/><polyline points="0,0 10,10 20,0" fill="none" stroke="#4A6FA5"/><polygon points="0,0 10,10 0,10" fill="#4A6FA5"/>' }],
   });
   check("ellipse/polyline/polygon produce no unsupported-element warning", !shapes.warningDetails.some((w) => w.code === "raw_svg_unsupported_element"), JSON.stringify(shapes.warningDetails));
 
@@ -1347,6 +1422,30 @@ async function main() {
     floating.warningDetails.some((w) => w.code === "image_small_for_region" && w.severity === "info"), JSON.stringify(floating.warningDetails));
   check("the same tiny image corner-placed stays quiet (deliberate accent)",
     !cleanImg.warningDetails.some((w) => w.code === "image_small_for_region"), JSON.stringify(cleanImg.warningDetails));
+  // ainotes' box is 289×422 — the old 35%-of-box heuristic (~101×148) would NOT have
+  // flagged a 150×150 centered image, but its intent ("a habit sticker") now carries the
+  // declared 245×245 interactive floor, which does.
+  const habitSized = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", images: [{ data: PNG_1x1, format: "png", name: "habit", width: 150, height: 150, corner: "center" }] }],
+  });
+  check(
+    "a habit-tracker-sized image below the 245px interactive floor still warns, even though it clears the old 35%-of-box heuristic",
+    habitSized.warningDetails.some((w) => w.code === "image_small_for_region" && /floor is 245×245/.test(w.message)),
+    JSON.stringify(habitSized.warningDetails),
+  );
+  // The same 150×150 in todo (no "habit" intent) stays under the default 35% heuristic —
+  // todo's box (289×902) puts the width floor at ~101px, which 150 clears (the warning
+  // needs BOTH dimensions below floor), so it stays quiet.
+  const nonHabitSized = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "not-habit", width: 150, height: 150, corner: "center" }] }],
+  });
+  check(
+    "the same size in a non-interactive region uses the default heuristic, not the 245px floor",
+    !nonHabitSized.warningDetails.some((w) => w.code === "image_small_for_region"),
+    JSON.stringify(nonHabitSized.warningDetails),
+  );
   // A source over the 1536px guideline (IHDR-only fake; dims read from the header) → info warning.
   const fakeBigPng = (() => {
     const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -1369,10 +1468,82 @@ async function main() {
   check("a source over 1536px warns (image_dimensions_large, info)",
     bigDims.warningDetails.some((w) => w.code === "image_dimensions_large" && w.severity === "info"), JSON.stringify(bigDims.warningDetails));
 
+  console.log("\nimages[].fit:\"region\" + maxDimension (server-computed sizing / downscale)");
+  // fit:"region" sizes the display box from the region's own geometry (aspect-preserving
+  // contain, inset by margin) — derive the expected size from parsed geometry, not a
+  // hard-coded box, so the fixtures' template dims can keep changing.
+  const imgPageRead = await readPage(root, imgPage);
+  const todoGeo = imgPageRead.regions.find((r) => r.name === "todo")!;
+  const fitMargin = 8;
+  const fitBoxW = todoGeo.width! - fitMargin * 2;
+  const fitBoxH = todoGeo.height! - fitMargin * 2;
+  const fitScale = Math.min(fitBoxW / 40, fitBoxH / 20);
+  const expectedFitW = Math.round(40 * fitScale);
+  const expectedFitH = Math.round(20 * fitScale);
+  const fitSrc = encodePng({ width: 40, height: 20, pixels: new Uint8Array(40 * 20 * 4).fill(180) });
+  const fitResult = await writeUnderlay(root, imgPage, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "todo", images: [{ data: fitSrc.toString("base64"), format: "png", name: "fit-test", fit: "region" }] }],
+  });
+  const fitImgTag = fitResult.aiSvg?.match(/<image href="media\/ai\/fit-test\.png"[^/]*\/>/)?.[0] ?? "";
+  check(
+    "fit:\"region\" computes width/height from the region's own box (aspect-preserving contain)",
+    new RegExp(`width="${expectedFitW}" height="${expectedFitH}"`).test(fitImgTag),
+    fitImgTag,
+  );
+  let fitWidthConflict = false;
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: fitSrc.toString("base64"), format: "png", name: "fit-conflict", fit: "region", width: 100 }] }],
+    });
+  } catch { fitWidthConflict = true; }
+  check("fit:\"region\" + an explicit width errors clearly (mutually exclusive)", fitWidthConflict);
+
+  // maxDimension re-encodes the source at the smaller size (not just a display-box resize) —
+  // a real 100×10 PNG downscaled to fit 20px.
+  const bigSrc = encodePng({ width: 100, height: 10, pixels: new Uint8Array(100 * 10 * 4).fill(90) });
+  await writeUnderlay(root, imgPage, {
+    status: "ready",
+    regions: [{ region: "todo", images: [{ data: bigSrc.toString("base64"), format: "png", name: "downscaled", width: 100, maxDimension: 20 }] }],
+  });
+  const downscaledFile = path.join(root, imgPage, "media", "ai", "downscaled.png");
+  const downscaledDecoded = decodePng(await fs.readFile(downscaledFile));
+  check(
+    "maxDimension re-encodes the source file itself at the smaller size (100×10 → 20×2)",
+    downscaledDecoded.width === 20 && downscaledDecoded.height === 2,
+    `${downscaledDecoded.width}x${downscaledDecoded.height}`,
+  );
+  const downscaledWrite = await writeUnderlay(root, imgPage, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "todo", images: [{ data: bigSrc.toString("base64"), format: "png", name: "downscaled", width: 100, maxDimension: 20 }] }],
+  });
+  check(
+    "maxDimension downscale surfaces an info warning",
+    downscaledWrite.warningDetails.some((w) => w.code === "image_downscaled" && w.severity === "info"),
+    JSON.stringify(downscaledWrite.warningDetails),
+  );
+
+  // A JPEG source over maxDimension can't be resampled (no JPEG decoder in png.ts) — a clear
+  // error, not a silent no-op. Minimal real SOF0 header: 100×100.
+  const jpegSOF = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x64, 0x00, 0x64, 0x01, 0x01, 0x11, 0x00]);
+  let jpegMaxDimErr = "";
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: jpegSOF.toString("base64"), format: "jpeg", name: "jpeg-big", width: 40, maxDimension: 50 }] }],
+    });
+  } catch (e: any) { jpegMaxDimErr = e.message; }
+  check(
+    "a JPEG over maxDimension errors clearly instead of silently skipping the downscale",
+    /maxDimension downscale only supports PNG/.test(jpegMaxDimErr),
+    jpegMaxDimErr,
+  );
+
   console.log("\nraw svg size guard");
   const hugeRaw = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1366"><!-- ${"x".repeat(300 * 1024)} --><rect x="1" y="1" width="2" height="2" fill="#9C7C1A"/></svg>`,
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1366"><!-- ${"x".repeat(300 * 1024)} --><rect x="1" y="1" width="2" height="2" fill="#4A6FA5"/></svg>`,
   });
   check("a >256KB raw svg warns (raw_svg_large)",
     hugeRaw.warningDetails.some((w) => w.code === "raw_svg_large"), JSON.stringify(hugeRaw.warningDetails.map((w) => w.code)));
@@ -1392,6 +1563,96 @@ async function main() {
   check("accented page drops the gold default", !/#9C7C1A/i.test(accentTodoGroup), accentTodoGroup.slice(0, 400));
   check("accented page tints body text (non-gold fill present)", /<text[^>]*fill="#[0-9a-fA-F]{6}"/.test(accentTodoGroup), accentTodoGroup.slice(0, 400));
   // Clean up so later assertions see a pristine folder (writeChapterTheme only merges).
+  {
+    const f = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
+    delete f.theme;
+    await fs.writeFile(path.join(root, "Shared", "Daily", ".folder.json"), JSON.stringify(f, null, 2) + "\n");
+  }
+
+  console.log("\nchapter paletteCharacter + chromeAccent → the chapter's own colours");
+  const chapterAccent = "#7A3F73"; // orchard's plum, as the chapter chrome accent
+  await writeChapterTheme(root, "Daily", {
+    paletteCharacter: "orchard",
+    chromeAccent: chapterAccent,
+    customInk1: "#2F6E57",
+    displayName: "orchard days",
+  });
+  const charFolder = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
+  check(
+    "set_chapter_theme writes paletteCharacter/customInk1/displayName additively",
+    charFolder.theme?.paletteCharacter === "orchard" &&
+      charFolder.theme?.customInk1 === "#2F6E57" &&
+      charFolder.theme?.displayName === "orchard days",
+    JSON.stringify(charFolder.theme),
+  );
+  const charRead = await readPage(root, daily);
+  // read_page's `underlay` block is the SAME resolution write_underlay uses — the
+  // advertised palette and the composed one can never drift.
+  const charOracle = resolveTheme({
+    paletteCharacter: "orchard",
+    customInk1: "#2F6E57",
+    chromeAccent: chapterAccent,
+  }).theme;
+  check(
+    "read_page.underlay advertises the resolved chapter palette",
+    charRead.underlay.text === charOracle.text &&
+      charRead.underlay.accent === charOracle.accent &&
+      charRead.underlay.washiTint === chapterAccent,
+    JSON.stringify(charRead.underlay),
+  );
+  check(
+    "read_page.theme surfaces the new additive keys",
+    charRead.theme?.paletteCharacter === "orchard" && charRead.theme?.displayName === "orchard days",
+    JSON.stringify(charRead.theme),
+  );
+  check(
+    "the resolved chapter text colour clears the contrast floor on this page's paper",
+    contrastRatioHex(charRead.underlay.text, charRead.template.paperColor) >= 4.5,
+    charRead.underlay.text,
+  );
+  const charWrite = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [
+      { region: "todo", lines: [{ text: "Water the beds", marker: "checkbox" }] },
+      { region: "schedule", lines: [{ text: "Studio", time: "09:00", endTime: "10:00" }] },
+    ],
+  });
+  const charTodo = regionGroup(charWrite.aiSvg, "todo") ?? "";
+  const charSched = regionGroup(charWrite.aiSvg, "schedule") ?? "";
+  check(
+    "a default write composes body text in the advertised underlay colour",
+    charTodo.includes(`fill="${charRead.underlay.text}"`),
+    charTodo.slice(0, 300),
+  );
+  check(
+    "washi duration blocks tint with the chapter's chromeAccent (raw, no darkening)",
+    new RegExp(`<rect[^>]*fill="${chapterAccent}" fill-opacity="0.16"`).test(charSched),
+    charSched.slice(0, 300),
+  );
+
+  console.log("\nRule 1 on per-line overrides: text fills floored, no-text fills raw");
+  const paleHex = "#F2B8CC"; // fails 4.5:1 on paper by a wide margin
+  const paleWrite = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [
+      { region: "todo", lines: [{ text: "pale text", fill: paleHex }] },
+      { region: "schedule", lines: [{ text: "pale tape", time: "09:00", endTime: "11:00", blockFill: paleHex }] },
+    ],
+  });
+  const paleTodo = regionGroup(paleWrite.aiSvg, "todo") ?? "";
+  const paleFill = paleTodo.match(/<text[^>]*fill="(#[0-9a-fA-F]{6})"/)?.[1];
+  check(
+    "a too-pale per-line text fill is auto-darkened to the contrast floor",
+    !!paleFill && paleFill.toLowerCase() !== paleHex.toLowerCase() &&
+      contrastRatioHex(paleFill!, PAPER_COLOR) >= 4.5,
+    `emitted=${paleFill}`,
+  );
+  check(
+    "the same pale hex passes through VERBATIM as a washi blockFill (no text on it)",
+    (regionGroup(paleWrite.aiSvg, "schedule") ?? "").includes(`fill="${paleHex}"`),
+    (regionGroup(paleWrite.aiSvg, "schedule") ?? "").slice(0, 300),
+  );
+  // Clean up the chapter theme again for downstream assertions.
   {
     const f = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
     delete f.theme;

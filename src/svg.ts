@@ -815,6 +815,34 @@ export function imageDims(buf: Uint8Array, format: "png" | "jpeg"): ImageDims {
   throw new Error("could not read JPEG dimensions.");
 }
 
+/**
+ * A region an image floats small in stops working when the user physically interacts
+ * with it — pencil-checking a habit tracker needs real size no matter how big the box
+ * is, unlike a decorative accent that can legitimately stay tiny. Detected from the
+ * region's own `intent` rather than a hard-coded region name (a template's `intent` is
+ * free text, but "habit" is the one recurring case the shipped catalogue documents).
+ */
+const INTERACTIVE_IMAGE_FLOOR = 245; // px — pencil-checkable habit-tracker guideline
+const INTERACTIVE_INTENT_RE = /\bhabit\b/i;
+
+/**
+ * The size `image_small_for_region` warns below for a centered image in this region —
+ * a declared floor (245px, both dimensions) for a region whose `intent` marks it
+ * interactive, else the default 35%-of-box heuristic. Exported so `read_page` can
+ * advertise the same floor a write will warn against (page.ts), computed by this one
+ * function so the advertised and enforced floors can't drift. `null` when the region
+ * has no box to scale against.
+ */
+export function imageSizeFloor(
+  region: Region,
+): { width: number; height: number; interactive: boolean } | null {
+  if (region.width === null || region.height === null) return null;
+  if (region.intent && INTERACTIVE_INTENT_RE.test(region.intent)) {
+    return { width: INTERACTIVE_IMAGE_FLOOR, height: INTERACTIVE_IMAGE_FLOOR, interactive: true };
+  }
+  return { width: region.width * 0.35, height: region.height * 0.35, interactive: false };
+}
+
 /** An axis-aligned rectangle, for overlap tests. */
 interface Bbox {
   x: number;
@@ -1226,19 +1254,16 @@ export function composeAiSvg(
       // as a deliberate small accent and stays quiet.
       const centered =
         img.x === undefined && img.y === undefined && (img.corner === undefined || img.corner === "center");
-      if (
-        centered &&
-        region.width !== null &&
-        region.height !== null &&
-        img.width < region.width * 0.35 &&
-        img.height < region.height * 0.35
-      ) {
+      const floor = imageSizeFloor(region);
+      if (centered && floor && img.width < floor.width && img.height < floor.height) {
+        const guidance = floor.interactive
+          ? `content the user interacts with (a habit tracker) needs real size (~${INTERACTIVE_IMAGE_FLOOR}px tall to pencil-check)`
+          : "size it toward the box, or corner-place it if it's meant as a small accent";
         warn(
           "image_small_for_region",
           `region "${region.name}": image (${img.width}×${img.height}) floats small in the ` +
-            `middle of the ${region.width}×${region.height} box — size it toward the box, or ` +
-            `corner-place it if it's meant as a small accent. Content the user interacts with ` +
-            `(a habits tracker) needs real size (~245px tall to pencil-check).`,
+            `middle of the ${region.width}×${region.height} box — floor is ` +
+            `${Math.round(floor.width)}×${Math.round(floor.height)}; ${guidance}.`,
           "info",
           region.name,
         );

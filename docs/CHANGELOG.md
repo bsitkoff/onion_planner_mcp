@@ -7,6 +7,29 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Region recommended-image-size signal (`imageFloor`) — 2026-07-09
+
+Closes [#10](https://github.com/bsitkoff/onion_planner_mcp/issues/10). The `image_small_for_region`
+warning used a generic 35%-of-box heuristic because the server had no notion of what an image
+*in this region* actually needs — the habits-tracker case (~245px tall so the checkboxes stay
+pencil-checkable) lived only in skill prose. Implemented the server-side per-intent heuristic
+(no app/template-contract coupling, unlike the declared `data-*` alternative also sketched in
+the issue):
+
+- `svg.ts`'s new `imageSizeFloor(region)` returns a declared 245×245 floor when a region's own
+  `intent` marks it interactive (matches `/\bhabit\b/i` — the one recurring case the shipped
+  catalogue documents, e.g. ainotes' "a habit sticker or small image"), else the previous
+  35%-of-box heuristic. One function backs both the warning and the new signal, so they can't
+  drift.
+- `read_page`'s regions gain `imageFloor: {width, height, interactive} | null` — the same floor
+  a write will warn against, so a caller can size an image right the first time instead of
+  iterating on `image_small_for_region`.
+- `docs/AUTHORING.md` points at `imageFloor` instead of the hand-maintained "~245px" note.
+- `test/smoke.ts`: `imageFloor` on an interactive region (ainotes) vs a non-interactive one
+  (todo) parsed from geometry; a 150×150 image that clears the old 35%-of-box heuristic in
+  ainotes' box but still trips the declared 245px floor, and the same size staying quiet in a
+  non-interactive region. 268/268 passing · tsc clean.
+
 ## Server-side image downscale + fit-to-region sizing — 2026-07-09
 
 Closes [#8](https://github.com/bsitkoff/onion_planner_mcp/issues/8). The 2026-07-05

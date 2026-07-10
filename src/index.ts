@@ -141,7 +141,11 @@ server.tool(
   "read_page",
   "Read one shared page: its manifest, parsed regions (name, x, y, width, height, rows, " +
     "cols, startHour/rowsPerHour for timed grids, a `list` bucket, absolute ruled-line " +
-    "positions, a `fill`, a free-text `intent`, and `labelFilled` — whether a region's " +
+    "positions, a `fill`, a free-text `intent`, `imageFloor` — the {width,height} a centered " +
+    "image below trips `image_small_for_region` in this region (245×245 when `intent` marks " +
+    "it interactive, e.g. a habit tracker the user pencil-checks; else 35% of the box), so " +
+    "you can size an image right the first time instead of iterating on the warning — and " +
+    "`labelFilled` — whether a region's " +
     "printed label slot, if it has one, actually has a label banner drawn into it yet " +
     "(null if the region has no slot; false means the template prints a slot but nothing's " +
     "there — don't assume a slot means content exists, pass `label` to fill it)), current ai.svg, " +

@@ -19,6 +19,7 @@ import {
   resolveTheme,
   emptySvg,
   imageDims,
+  imageSizeFloor,
   scanRawSvgElements,
   scanRawSvgDataUriImages,
   extractRegionGroups,
@@ -693,7 +694,16 @@ function pageSize(manifest: Manifest, templateSvg: string | null): [number, numb
  * slot but the current ai.svg doesn't draw a label banner into it (no ai.svg yet,
  * region never written, or written without `label`); `true` = it does.
  */
-export type RegionRead = Region & { labelFilled: boolean | null };
+export type RegionRead = Region & {
+  labelFilled: boolean | null;
+  /**
+   * The size `image_small_for_region` warns a centered image below in this region —
+   * computed by the exact `imageSizeFloor` a write later checks against, so the
+   * advertised and enforced floors can't drift (same pattern as `PageRead.theme`'s
+   * `underlay` palette). `null` when the region has no box to scale against.
+   */
+  imageFloor: { width: number; height: number; interactive: boolean } | null;
+};
 
 export interface PageRead {
   page: string;
@@ -770,6 +780,7 @@ export async function readPage(
   const regionsOut: RegionRead[] = regions.map((r) => ({
     ...r,
     labelFilled: r.labelSlot === null ? null : /letter-spacing="0\.1em"/.test(aiGroups.get(r.name) ?? ""),
+    imageFloor: imageSizeFloor(r),
   }));
   return {
     page: rel,

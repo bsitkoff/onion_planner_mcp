@@ -146,6 +146,21 @@ async function main() {
   check("schedule region parsed with ruled lines", (schedule?.ruledLines.length ?? 0) >= 8, String(schedule?.ruledLines.length));
   check("ainotes region parsed (no-ruled box)", !!ainotes && ainotes.ruledLines.length === 0, String(ainotes?.ruledLines.length));
   check("todo region parsed", !!todo);
+  // imageFloor: ainotes' own intent mentions "a habit sticker" — the interactive floor
+  // (245×245) applies regardless of the box size; todo's intent doesn't, so it gets the
+  // default 35%-of-box heuristic instead.
+  check(
+    "ainotes' intent marks it interactive -> a 245×245 imageFloor",
+    ainotes?.imageFloor?.interactive === true && ainotes.imageFloor.width === 245 && ainotes.imageFloor.height === 245,
+    JSON.stringify(ainotes?.imageFloor),
+  );
+  check(
+    "todo's intent (task checkbox rows, not an image) -> the default 35%-of-box floor",
+    todo?.imageFloor?.interactive === false &&
+      todo?.width !== null && todo.imageFloor?.width === todo.width * 0.35 &&
+      todo?.height !== null && todo.imageFloor?.height === todo.height * 0.35,
+    JSON.stringify({ imageFloor: todo?.imageFloor, box: [todo?.width, todo?.height] }),
+  );
   // The template prints a dashed label slot nested in schedule's own <g> — parseRegions
   // must surface it (Region.labelSlot) without confusing it for the region's own box.
   check("schedule region exposes its printed label slot", !!schedule?.labelSlot, JSON.stringify(schedule?.labelSlot));
@@ -1395,6 +1410,30 @@ async function main() {
     floating.warningDetails.some((w) => w.code === "image_small_for_region" && w.severity === "info"), JSON.stringify(floating.warningDetails));
   check("the same tiny image corner-placed stays quiet (deliberate accent)",
     !cleanImg.warningDetails.some((w) => w.code === "image_small_for_region"), JSON.stringify(cleanImg.warningDetails));
+  // ainotes' box is 289×422 — the old 35%-of-box heuristic (~101×148) would NOT have
+  // flagged a 150×150 centered image, but its intent ("a habit sticker") now carries the
+  // declared 245×245 interactive floor, which does.
+  const habitSized = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", images: [{ data: PNG_1x1, format: "png", name: "habit", width: 150, height: 150, corner: "center" }] }],
+  });
+  check(
+    "a habit-tracker-sized image below the 245px interactive floor still warns, even though it clears the old 35%-of-box heuristic",
+    habitSized.warningDetails.some((w) => w.code === "image_small_for_region" && /floor is 245×245/.test(w.message)),
+    JSON.stringify(habitSized.warningDetails),
+  );
+  // The same 150×150 in todo (no "habit" intent) stays under the default 35% heuristic —
+  // todo's box (289×902) puts the width floor at ~101px, which 150 clears (the warning
+  // needs BOTH dimensions below floor), so it stays quiet.
+  const nonHabitSized = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "not-habit", width: 150, height: 150, corner: "center" }] }],
+  });
+  check(
+    "the same size in a non-interactive region uses the default heuristic, not the 245px floor",
+    !nonHabitSized.warningDetails.some((w) => w.code === "image_small_for_region"),
+    JSON.stringify(nonHabitSized.warningDetails),
+  );
   // A source over the 1536px guideline (IHDR-only fake; dims read from the header) → info warning.
   const fakeBigPng = (() => {
     const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

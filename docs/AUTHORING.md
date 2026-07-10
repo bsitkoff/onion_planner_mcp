@@ -278,8 +278,10 @@ shrink it, move it into an `ai` region, or drop it, rather than forcing it. Sizi
 heed the same way: **`image_aspect_mismatch`** (you passed a `height` off the source aspect —
 the renderer scales to the exact box, so it *will* stretch; omit `height` to aspect-fill),
 **`image_small_for_region`** (a sticker shrunk deep into a big box — fine for a corner accent,
-useless for something the user interacts with, like a habits tracker they pencil-check), and
-**`image_dimensions_large`** (source over the ~1536px guideline — downscale before sending). `notes` is
+useless for something the user interacts with, like a habit tracker they pencil-check — check a
+region's `imageFloor` from `read_page` *before* choosing a size, instead of iterating on the
+warning), and **`image_dimensions_large`** (source over the ~1536px guideline — downscale before
+sending, or set `images[].maxDimension`). `notes` is
 `fill: ink` (handwriting) — at most a *tiny* corner mark there, never a sticker over the writing
 area.
 

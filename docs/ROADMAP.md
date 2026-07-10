@@ -73,9 +73,11 @@ nightly/morning runs:
 2. **Expose the template's printed text via `read_page`** — so an orchestrator can see that
    the template already prints the date/labels instead of memorizing "don't double-write the
    date" in skill prose. [#9](https://github.com/bsitkoff/onion_planner_mcp/issues/9)
-3. **Region recommended-image-size signal** — replace the 35%-of-box heuristic behind
-   `image_small_for_region` with a declared floor (template `data-*` key or per-intent
-   default). [#10](https://github.com/bsitkoff/onion_planner_mcp/issues/10)
+
+**Shipped 2026-07-09:** region recommended-image-size signal — `read_page`'s `imageFloor`
+replaces the 35%-of-box heuristic behind `image_small_for_region` with a declared per-intent
+floor (245×245 for an interactive region like a habit tracker) —
+[#10](https://github.com/bsitkoff/onion_planner_mcp/issues/10); see `CHANGELOG.md`.
 
 **Shipped 2026-07-09:** server-side image downscale / fit-to-region sizing —
 `images[].fit:"region"` ends hand-computed widths, `images[].maxDimension` downscales an

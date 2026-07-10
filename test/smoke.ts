@@ -349,7 +349,9 @@ async function main() {
   // 09:00 -> row 2, 10:00 -> row 3, given the schedule's own startHour 7 / rowsPerHour 1.
   check("block y matches the start row (09:00 -> row 2)", yAttr === Math.round(rl[2]), `y=${yAttr} expected=${Math.round(rl[2])}`);
   check("block height spans start->end row (10:00 -> row 3)", yAttr + hAttr === Math.round(rl[3]), `y+h=${yAttr + hAttr} expected=${Math.round(rl[3])}`);
-  check("block reuses the rx=6 corner-radius convention", rectMatch![0].includes('rx="6"'), rectMatch?.[0]);
+  // rx=8 / 0.16 tint per the 2026-07-09 washi spec (design/UNDERLAY-VISUAL.md, forthcoming).
+  check("block uses the washi rx=8 corner radius", rectMatch![0].includes('rx="8"'), rectMatch?.[0]);
+  check("block uses the 0.16 default tint opacity", rectMatch![0].includes('fill-opacity="0.16"'), rectMatch?.[0]);
   check("block draws the label text inside it", washiGroup.includes(">Team sync</text>"), washiGroup.slice(0, 300));
   // The tape's right inset should be the standard margin (24px), not a re-subtraction of the
   // schedule's wide LEFT gutter (52px, reserved for the printed hour labels) — that double-charge
@@ -386,27 +388,58 @@ async function main() {
     longTexts.join(" | "),
   );
 
+  // Min block height is one schedule-line interval read from the template's ruled
+  // lines (2026-07-09 washi spec) — a too-short/backwards range still draws a visible
+  // one-interval tape, superseding the old plain-time-line fallback (#17).
   const zeroDur = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
     regions: [{ region: "schedule", lines: [{ text: "Oops", time: "10:00", endTime: "09:00" }] }],
   });
+  const zeroGroup = regionGroup(zeroDur.aiSvg, "schedule") ?? "";
+  const zeroRect = zeroGroup.match(/<rect[^>]*fill-opacity="[\d.]+"[^>]*\/>/);
   check(
-    "zero/negative duration warns (info) and falls back to a plain time line — the event still appears",
-    zeroDur.warningDetails.some((w) => w.code === "washi_block_zero_duration" && w.severity === "info") &&
-      (zeroDur.aiSvg ?? "").includes(">Oops</text>") &&
-      !(regionGroup(zeroDur.aiSvg, "schedule") ?? "").includes('rx="6"'),
+    "zero/negative duration draws a one-interval minimum block and warns (info)",
+    zeroDur.warningDetails.some((w) => w.code === "washi_block_min_height" && w.severity === "info") &&
+      !!zeroRect &&
+      zeroGroup.includes(">Oops</text>"),
     JSON.stringify(zeroDur.warningDetails),
   );
-  // The real-world case that motivated the fallback: a 20-minute meeting on a
-  // 1-row-per-hour grid snaps both ends to the same row — it must not vanish.
+  // 10:00 -> row 3 on this grid; the minimum block spans exactly one ruled interval.
+  const zeroH = Number(zeroRect?.[0].match(/height="(\d+)"/)?.[1]);
+  const oneInterval = Math.round(rl[4]) - Math.round(rl[3]);
+  check(
+    "minimum block height equals one ruled-line interval from the template",
+    zeroH === oneInterval,
+    `height=${zeroH} interval=${oneInterval}`,
+  );
+  // The real-world case that motivated #17's old fallback: a 20-minute meeting on a
+  // 1-row-per-hour grid snaps both ends to the same row — it must not vanish. It now
+  // draws the one-interval minimum tape instead of degrading to a bare time line.
   const shortMeeting = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
     regions: [{ region: "schedule", lines: [{ text: "Morning Meeting", time: "08:00", endTime: "08:20" }] }],
   });
+  const shortGroup = regionGroup(shortMeeting.aiSvg, "schedule") ?? "";
   check(
-    "a sub-row meeting (08:00-08:20) keeps its text as a time line",
-    (shortMeeting.aiSvg ?? "").includes(">Morning Meeting</text>"),
-    (regionGroup(shortMeeting.aiSvg, "schedule") ?? "").slice(0, 300),
+    "a sub-row meeting (08:00-08:20) draws a minimum-height block, label inside",
+    shortGroup.includes(">Morning Meeting</text>") &&
+      /<rect[^>]*fill-opacity="[\d.]+"/.test(shortGroup) &&
+      shortMeeting.warningDetails.some((w) => w.code === "washi_block_min_height"),
+    shortGroup.slice(0, 300),
+  );
+  // The one geometry no block can fit: an event starting on the grid's LAST ruled
+  // line has no next line to span to — only there does the plain-time-line fallback
+  // survive.
+  const lastLineHour = 7 + (rl.length - 1); // schedule startHour 7, rowsPerHour 1
+  const lastLine = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "Nightcap", time: `${String(lastLineHour).padStart(2, "0")}:00`, durationMin: 30 }] }],
+  });
+  check(
+    "an event on the grid's last ruled line falls back to a plain time line",
+    lastLine.warningDetails.some((w) => w.code === "washi_block_zero_duration" && w.severity === "info") &&
+      (lastLine.aiSvg ?? "").includes(">Nightcap</text>"),
+    JSON.stringify(lastLine.warningDetails),
   );
 
   const overrun = await writeUnderlay(root, daily, {
@@ -436,15 +469,17 @@ async function main() {
   // endTime + durationMin together are rejected at the MCP schema (index.ts .refine,
   // mirroring marker/icon) — not reachable through this direct compose path. At the
   // compose layer itself, confirm `endTime` takes precedence (a 15-min durationMin
-  // from 09:00 would round to the SAME row and warn zero-duration; endTime "10:00"
-  // must win instead, drawing a real block with no such warning).
+  // from 09:00 would round to the SAME row and clamp to the one-interval minimum;
+  // endTime "10:00" must win instead, drawing a real block with no clamp warning).
   const bothSet = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
     regions: [{ region: "schedule", lines: [{ text: "x", time: "09:00", endTime: "10:00", durationMin: 15 } as any] }],
   });
   check(
     "endTime takes precedence over durationMin if both are set on one line",
-    !bothSet.warningDetails.some((w) => w.code === "washi_block_zero_duration"),
+    !bothSet.warningDetails.some(
+      (w) => w.code === "washi_block_zero_duration" || w.code === "washi_block_min_height",
+    ),
     JSON.stringify(bothSet.warningDetails),
   );
 
@@ -795,7 +830,7 @@ async function main() {
   console.log("\nmerge over a prior raw-svg document warns instead of silently dropping it");
   await writeUnderlay(root, daily, {
     status: "ready",
-    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#9C7C1A">raw only</text></svg>',
+    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#4A6FA5">raw only</text></svg>',
   });
   const mergeOverRaw = await writeUnderlay(root, daily, {
     status: "ready", merge: true,
@@ -856,7 +891,7 @@ async function main() {
   console.log("\nwrite_underlay (raw svg) + reject merge+svg");
   const rawOk = await writeUnderlay(root, daily, {
     status: "ready",
-    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#9C7C1A">raw</text></svg>',
+    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="80" y="80" fill="#4A6FA5">raw</text></svg>',
   });
   check("raw svg written verbatim", (await fs.readFile(aiPath, "utf8")).includes(">raw</text>"));
   check("supported raw svg produces no raw warnings", rawOk.warningDetails.length === 0, JSON.stringify(rawOk.warningDetails));
@@ -1130,7 +1165,7 @@ async function main() {
   console.log("\nraw fragments accept the app renderer's full element set");
   const shapes = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    regions: [{ region: "ainotes", svg: '<ellipse cx="40" cy="40" rx="20" ry="10" fill="none" stroke="#9C7C1A"/><polyline points="0,0 10,10 20,0" fill="none" stroke="#9C7C1A"/><polygon points="0,0 10,10 0,10" fill="#9C7C1A"/>' }],
+    regions: [{ region: "ainotes", svg: '<ellipse cx="40" cy="40" rx="20" ry="10" fill="none" stroke="#4A6FA5"/><polyline points="0,0 10,10 20,0" fill="none" stroke="#4A6FA5"/><polygon points="0,0 10,10 0,10" fill="#4A6FA5"/>' }],
   });
   check("ellipse/polyline/polygon produce no unsupported-element warning", !shapes.warningDetails.some((w) => w.code === "raw_svg_unsupported_element"), JSON.stringify(shapes.warningDetails));
 
@@ -1385,7 +1420,7 @@ async function main() {
   console.log("\nraw svg size guard");
   const hugeRaw = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1366"><!-- ${"x".repeat(300 * 1024)} --><rect x="1" y="1" width="2" height="2" fill="#9C7C1A"/></svg>`,
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1366"><!-- ${"x".repeat(300 * 1024)} --><rect x="1" y="1" width="2" height="2" fill="#4A6FA5"/></svg>`,
   });
   check("a >256KB raw svg warns (raw_svg_large)",
     hugeRaw.warningDetails.some((w) => w.code === "raw_svg_large"), JSON.stringify(hugeRaw.warningDetails.map((w) => w.code)));
@@ -1405,6 +1440,96 @@ async function main() {
   check("accented page drops the gold default", !/#9C7C1A/i.test(accentTodoGroup), accentTodoGroup.slice(0, 400));
   check("accented page tints body text (non-gold fill present)", /<text[^>]*fill="#[0-9a-fA-F]{6}"/.test(accentTodoGroup), accentTodoGroup.slice(0, 400));
   // Clean up so later assertions see a pristine folder (writeChapterTheme only merges).
+  {
+    const f = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
+    delete f.theme;
+    await fs.writeFile(path.join(root, "Shared", "Daily", ".folder.json"), JSON.stringify(f, null, 2) + "\n");
+  }
+
+  console.log("\nchapter paletteCharacter + chromeAccent → the chapter's own colours");
+  const chapterAccent = "#7A3F73"; // orchard's plum, as the chapter chrome accent
+  await writeChapterTheme(root, "Daily", {
+    paletteCharacter: "orchard",
+    chromeAccent: chapterAccent,
+    customInk1: "#2F6E57",
+    displayName: "orchard days",
+  });
+  const charFolder = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
+  check(
+    "set_chapter_theme writes paletteCharacter/customInk1/displayName additively",
+    charFolder.theme?.paletteCharacter === "orchard" &&
+      charFolder.theme?.customInk1 === "#2F6E57" &&
+      charFolder.theme?.displayName === "orchard days",
+    JSON.stringify(charFolder.theme),
+  );
+  const charRead = await readPage(root, daily);
+  // read_page's `underlay` block is the SAME resolution write_underlay uses — the
+  // advertised palette and the composed one can never drift.
+  const charOracle = resolveTheme({
+    paletteCharacter: "orchard",
+    customInk1: "#2F6E57",
+    chromeAccent: chapterAccent,
+  }).theme;
+  check(
+    "read_page.underlay advertises the resolved chapter palette",
+    charRead.underlay.text === charOracle.text &&
+      charRead.underlay.accent === charOracle.accent &&
+      charRead.underlay.washiTint === chapterAccent,
+    JSON.stringify(charRead.underlay),
+  );
+  check(
+    "read_page.theme surfaces the new additive keys",
+    charRead.theme?.paletteCharacter === "orchard" && charRead.theme?.displayName === "orchard days",
+    JSON.stringify(charRead.theme),
+  );
+  check(
+    "the resolved chapter text colour clears the contrast floor on this page's paper",
+    contrastRatioHex(charRead.underlay.text, charRead.template.paperColor) >= 4.5,
+    charRead.underlay.text,
+  );
+  const charWrite = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [
+      { region: "todo", lines: [{ text: "Water the beds", marker: "checkbox" }] },
+      { region: "schedule", lines: [{ text: "Studio", time: "09:00", endTime: "10:00" }] },
+    ],
+  });
+  const charTodo = regionGroup(charWrite.aiSvg, "todo") ?? "";
+  const charSched = regionGroup(charWrite.aiSvg, "schedule") ?? "";
+  check(
+    "a default write composes body text in the advertised underlay colour",
+    charTodo.includes(`fill="${charRead.underlay.text}"`),
+    charTodo.slice(0, 300),
+  );
+  check(
+    "washi duration blocks tint with the chapter's chromeAccent (raw, no darkening)",
+    new RegExp(`<rect[^>]*fill="${chapterAccent}" fill-opacity="0.16"`).test(charSched),
+    charSched.slice(0, 300),
+  );
+
+  console.log("\nRule 1 on per-line overrides: text fills floored, no-text fills raw");
+  const paleHex = "#F2B8CC"; // fails 4.5:1 on paper by a wide margin
+  const paleWrite = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [
+      { region: "todo", lines: [{ text: "pale text", fill: paleHex }] },
+      { region: "schedule", lines: [{ text: "pale tape", time: "09:00", endTime: "11:00", blockFill: paleHex }] },
+    ],
+  });
+  const paleTodo = regionGroup(paleWrite.aiSvg, "todo") ?? "";
+  const paleFill = paleTodo.match(/<text[^>]*fill="(#[0-9a-fA-F]{6})"/)?.[1];
+  check(
+    "a too-pale per-line text fill is auto-darkened to the contrast floor",
+    !!paleFill && paleFill.toLowerCase() !== paleHex.toLowerCase() &&
+      contrastRatioHex(paleFill!, PAPER_COLOR) >= 4.5,
+    `emitted=${paleFill}`,
+  );
+  check(
+    "the same pale hex passes through VERBATIM as a washi blockFill (no text on it)",
+    (regionGroup(paleWrite.aiSvg, "schedule") ?? "").includes(`fill="${paleHex}"`),
+    (regionGroup(paleWrite.aiSvg, "schedule") ?? "").slice(0, 300),
+  );
+  // Clean up the chapter theme again for downstream assertions.
   {
     const f = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
     delete f.theme;

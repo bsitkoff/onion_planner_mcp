@@ -140,21 +140,26 @@ to the on-device composer.
 > underlay-authored, matching the app renderer's confirmed support for `rx` + `fill-opacity`.
 
 A schedule line with `time` + (`endTime` or `durationMin`) draws a block instead of a single
-baseline: rounded `<rect rx="6">` (reusing §5's one corner-radius convention) with
-`fill-opacity` (default **0.22**, a translucent "tape" tint) instead of a solid fill — the only
-element in this file to use `fill-opacity` rather than `opacity`. Tint defaults to the chapter's
-`theme.accent` (the same per-line-override pattern as a label's `labelFill` over
-`theme.banners[...]`), overridable per-block via `blockFill`. The label text sits vertically
-centred inside the block at `y1 + height − round(height × 0.28)` — the same centring ratio as
-§5's label-slot text. Left inset = the region's `xPad` (the schedule's gutter for its printed
-hour labels); right edge = `region.width − DEFAULT_X_PAD`, the *standard* margin — not the
-region's (often wider) `xPad` again, which would double-charge the left gutter on a side that
-has no hour labels to clear. A label too long to fit the block's width on one line wraps
+baseline: rounded `<rect rx="8">` with `fill-opacity` (default **0.16**, a translucent "tape"
+tint) instead of a solid fill — the only element in this file to use `fill-opacity` rather than
+`opacity`. Radius + opacity follow the 2026-07-09 washi spec (owner: the app repo's
+`design/UNDERLAY-VISUAL.md`, forthcoming — onionskin#23). Tint defaults to the chapter's
+**`chromeAccent`** (the chapter's accent colour — a no-text fill, so it rides through raw),
+falling back to `theme.accent`, overridable per-block via `blockFill`. The label text sits
+vertically centred inside the block at `y1 + height − round(height × 0.28)` — the same centring
+ratio as §5's label-slot text. Left inset = the region's `xPad` (the schedule's gutter for its
+printed hour labels); right edge = `region.width − DEFAULT_X_PAD`, the *standard* margin — not
+the region's (often wider) `xPad` again, which would double-charge the left gutter on a side
+that has no hour labels to clear. A label too long to fit the block's width on one line wraps
 (reusing the same wrap heuristic as `ainotes`/`todo`), stacking centred within the block's
 height; if the wrapped lines still don't fit the block's height it warns
 `washi_block_label_overflow` rather than silently overrunning. A span partly outside the
-region's ruled grid is pinned to fit and still drawn (warns `washi_block_clamped`); a
-zero/negative-duration span isn't drawn at all (warns `washi_block_zero_duration`).
+region's ruled grid is pinned to fit and still drawn (warns `washi_block_clamped`).
+**Minimum block height is one schedule-line interval, read from the template's ruled lines** —
+a span too short to cross a ruled row (a 20-min meeting on a 1-row-per-hour grid, or a
+backwards range) is drawn at the one-interval minimum (info `washi_block_min_height`) rather
+than degrading to a bare time line; only an event starting on the grid's *last* ruled line,
+where no block can fit, falls back to a plain time line (info `washi_block_zero_duration`).
 
 ## Resolved decisions (consolidated)
 
@@ -177,7 +182,8 @@ zero/negative-duration span isn't drawn at all (warns `washi_block_zero_duration
    stay independent axes. Underlay colour is the chapter's own ink palette, lifted lighter — never
    a fixed seed (gold retired). (§0, §6)
 8. **Washi-tape schedule blocks:** MCP-only, drawn via `time`+`endTime`/`durationMin`; tint
-   defaults to `theme.accent`, `fill-opacity` default 0.22, `rx 6` reusing §5's corner radius;
-   right inset is the standard margin (not the schedule's own wider left gutter); an overlong
-   label wraps into the block before anything warns; span overflow clamps and warns rather than
-   distorting the grid. (§7)
+   defaults to the chapter's `chromeAccent` (else `theme.accent`), `fill-opacity` default 0.16,
+   `rx 8` (2026-07-09 washi spec); right inset is the standard margin (not the schedule's own
+   wider left gutter); an overlong label wraps into the block before anything warns; span
+   overflow clamps and warns rather than distorting the grid; min block height = one
+   schedule-line interval read from the template (never a hardcoded minimum). (§7)

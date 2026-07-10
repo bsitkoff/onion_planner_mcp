@@ -15,10 +15,15 @@ Planned work: [`docs/ROADMAP.md`](docs/ROADMAP.md) · shipped history:
 
 Every Onionskin page is a folder compositing four SVG layers
 (`template → ai → stickers → ink`). The **ai layer is yours**; the user's ink/stickers
-are not. Permission is location: only pages under `Shared/` are touchable; `Private/` is
-invisible. This server lets Claude fill a page's schedule, to-dos, focus, and the
-`ainotes` AI-voice block, then flip `manifest.json → layers.ai.status` to `ready` so the
-app composites it on next foreground.
+are not. Writing the underlay needs no permission (it isn't a privacy surface — 2026-07-09
+app decisions); the gated operation is reading the user's *ink*, per-chapter, once the app
+ships its ink-read toggle. Today the server still enforces `Shared/`-only containment
+(`Private/` is invisible) until the app retires that gate — a same-release change
+([#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)). This server lets Claude
+fill a page's schedule, to-dos, focus, and the `ainotes` AI-voice block, then flip
+`manifest.json → layers.ai.status` to `ready` so the app composites it on next foreground.
+The underlay renders in **the chapter's own colours** (its `paletteCharacter`/theme, lifted
+lighter than the user's ink and contrast-floored) — gold is retired.
 
 ## Tools
 

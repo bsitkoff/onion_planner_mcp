@@ -7,6 +7,35 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Server-side image downscale + fit-to-region sizing — 2026-07-09
+
+Closes [#8](https://github.com/bsitkoff/onion_planner_mcp/issues/8). The 2026-07-05
+morning-run transcript burned several rounds resizing PNGs with Python because the server's
+only response to an oversized image was to throw; separately, callers hand-computed a
+`width` from `read_page` geometry to fit an image into a region.
+
+- `images[].fit: "region"` — sizes the display box to fit inside the region's own box
+  (aspect-preserving contain, inset by `margin`), resolved once the region's geometry and the
+  image's intrinsic dimensions are both known (`page.ts:resolveImages`, now given the
+  template's parsed regions). Mutually exclusive with `width`/`height` — omit both.
+  `write_underlay` now parses template geometry *before* resolving images (previously after)
+  so this lookup is available.
+- `images[].maxDimension` — downscales an over-large source instead of throwing/warning,
+  re-encoding the actual bytes (not just resizing on disk beforehand). PNG only: a new
+  `resampleToMaxDimension` (`png.ts`) is a box-filter (area-average) downsample, chosen over
+  nearest-neighbor for less aliasing, sitting next to the existing hand-rolled codec
+  (`decodePng`/`encodePng`/`chromaKeyPixels`). A JPEG source over the limit still throws a
+  clear error — no JPEG decoder in this codebase's minimal PNG-only codec.
+- New `image_downscaled` info warning reports the before/after dimensions when
+  `maxDimension` triggers a resample.
+- `docs/AUTHORING.md` documents both knobs in the image-sourcing recipe.
+- `test/smoke.ts`: covers `fit: "region"`'s computed size (derived from parsed geometry, not
+  hard-coded), the `fit`+explicit-`width` mutual-exclusion error, a real PNG resampled and
+  re-written smaller on disk, the `image_downscaled` warning, and the JPEG+`maxDimension`
+  error. 269/269 passing · tsc clean.
+
+---
+
 ## Washi-tape blocks widened + long labels wrap — 2026-07-06
 
 The schedule's washi-tape duration block was subtracting its wide *left* gutter (reserved for

@@ -285,6 +285,13 @@ area.
 `convert_to_webp`/`get_generated_webp_images` — onionskin rejects webp (that path is for
 WordPress). More detail in the project memory (`onionskin-image-gen-pipeline`).
 
+Two more knobs cut hand-computed sizing out of the loop: `images[].fit:"region"` sizes the
+display box to fit inside the region's own box (aspect-preserving contain, inset by `margin`)
+instead of you computing a `width` from `read_page` geometry — omit `width`/`height` entirely
+when you set it. `images[].maxDimension` downscales an over-large PNG source (re-encoded, not
+just resized on disk) so it clears the 1536px guideline / 2MB cap instead of you resizing it
+by hand first — PNG only; a JPEG over the limit still needs downscaling before sending.
+
 ### Getting *clean* art into the underlay (no checkerboard, no halo)
 
 Getting a **clean cutout** into the underlay is the fragile part of the pipeline — it depends

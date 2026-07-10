@@ -446,9 +446,12 @@ export interface ImageInput {
   format?: "png" | "jpeg";
   /** Stable filename stem; defaults to a content hash. Sanitized in page.ts. */
   name?: string;
-  /** Display width in region-local units (required). */
+  /**
+   * Display width in region-local units. Required unless `fit: "region"` computes
+   * it from the region's own box.
+   */
   width?: number;
-  /** Display height; omitted = preserve aspect from the decoded image. */
+  /** Display height; omitted = preserve aspect from the decoded image. Ignored with `fit: "region"`. */
   height?: number;
   /** Region-local x (overrides `corner`). */
   x?: number;
@@ -456,8 +459,23 @@ export interface ImageInput {
   y?: number;
   /** Placement within the region box (default `center`). Ignored if x/y set. */
   corner?: ImageCorner;
-  /** Inset from the region edge for corner placement (default 8). */
+  /** Inset from the region edge for corner placement (default 8). Also `fit: "region"`'s box inset. */
   margin?: number;
+  /**
+   * Size the display box to fit inside the region's own box (aspect-preserving
+   * contain, inset by `margin`) instead of a caller-computed `width`/`height` —
+   * resolved in `page.ts:resolveImages` once the region's geometry and the
+   * image's intrinsic dimensions are both known. Mutually exclusive with
+   * `width`/`height`.
+   */
+  fit?: "region";
+  /**
+   * Downscale the source (PNG only) so neither dimension exceeds this, before
+   * sizing/hashing/writing — resolved in `page.ts:resolveImages`. Use instead of
+   * resizing a source image by hand before sending. A JPEG source over the limit
+   * still throws (only the PNG path decodes/re-encodes pixels).
+   */
+  maxDimension?: number;
   /** Image opacity, 0–1. */
   opacity?: number;
   /**

@@ -394,14 +394,22 @@ const imageSchema = z.object({
     .string()
     .optional()
     .describe("Stable filename stem — re-writing the same name replaces the image. Defaults to a content hash."),
-  width: z.number().positive().describe("Display width in region-local units."),
+  width: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      "Display width in region-local units. Required unless `fit: \"region\"` computes it " +
+        "from the region's own box.",
+    ),
   height: z
     .number()
     .positive()
     .optional()
     .describe(
       "Display height. OMIT to aspect-fill from the source (recommended) — a height off " +
-        "the source aspect renders visibly stretched and trips `image_aspect_mismatch`.",
+        "the source aspect renders visibly stretched and trips `image_aspect_mismatch`. Not " +
+        "allowed with `fit: \"region\"` (it computes both dimensions).",
     ),
   x: z.number().optional().describe("Region-local x. Overrides `corner`."),
   y: z.number().optional().describe("Region-local y. Overrides `corner`."),
@@ -409,7 +417,30 @@ const imageSchema = z.object({
     .enum(["top-left", "top-right", "bottom-left", "bottom-right", "center"])
     .optional()
     .describe("Placement within the region box (default center). Ignored if x/y are set."),
-  margin: z.number().optional().describe("Inset from the region edge for corner placement (default 8)."),
+  margin: z
+    .number()
+    .optional()
+    .describe(
+      "Inset from the region edge for corner placement (default 8). Also the box inset " +
+        "`fit: \"region\"` sizes inside.",
+    ),
+  fit: z
+    .literal("region")
+    .optional()
+    .describe(
+      "Size the display box to fit inside the region's own box (aspect-preserving contain, " +
+        "inset by `margin`) instead of computing `width`/`height` yourself from read_page " +
+        "geometry. Mutually exclusive with `width`/`height` — omit both when set.",
+    ),
+  maxDimension: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      "Downscale the source so neither dimension exceeds this, before sizing/hashing/writing " +
+        "— use instead of resizing a source image by hand to clear the 1536px guideline or " +
+        "2MB cap. PNG sources only today (re-encodes pixels); a JPEG over the limit still throws.",
+    ),
   opacity: z.number().min(0).max(1).optional().describe("Image opacity, 0–1."),
   knockout: z
     .enum(["subject", "chroma", "none"])
@@ -443,6 +474,10 @@ const imageSchema = z.object({
   message: '`chromaColor` is required when knockout is "chroma".',
 }).refine((i) => i.knockout === "chroma" || (i.chromaColor === undefined && i.tolerance === undefined), {
   message: '`chromaColor`/`tolerance` only apply when knockout is "chroma".',
+}).refine((i) => i.fit !== "region" || (i.width === undefined && i.height === undefined), {
+  message: '`fit: "region"` computes width/height itself — omit both.',
+}).refine((i) => i.fit === "region" || i.width !== undefined, {
+  message: "`width` is required unless `fit` is \"region\".",
 });
 
 server.tool(

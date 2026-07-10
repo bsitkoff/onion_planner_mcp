@@ -440,7 +440,7 @@ export interface LineInput {
   durationMin?: number;
   /** Override the washi block's tint (hex). Defaults to `theme.accent`. */
   blockFill?: string;
-  /** Washi block fill opacity, 0–1 (default 0.22). */
+  /** Washi block fill opacity, 0–1 (default 0.16, `WASHI_DEFAULT_OPACITY`). */
   blockOpacity?: number;
   /** Explicit baseline y, local to the region's top-left. Overrides `row`. */
   y?: number;

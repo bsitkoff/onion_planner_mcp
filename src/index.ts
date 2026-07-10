@@ -307,7 +307,7 @@ const lineSchema = z.object({
     .min(0.05)
     .max(1)
     .optional()
-    .describe("Washi block fill opacity, 0–1 (default 0.22 — a translucent 'tape' tint)."),
+    .describe("Washi block fill opacity, 0–1 (default 0.16 — a translucent 'tape' tint)."),
   y: z
     .number()
     .optional()

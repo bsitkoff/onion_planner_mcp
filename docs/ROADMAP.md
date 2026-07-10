@@ -29,8 +29,8 @@ below links its issue — detail, sketches, and open decisions live there, not h
    by the chapter's per-chapter ink-read toggle. **Shipped** (2026-07-10): `read_ink` reads
    `permissions.inkReadable` from the chapter `.folder.json` and refuses when it resolves false
    (explicit value wins; else monthly → readable, reflection → private, everything else →
-   readable — the last a NEEDS-CONFIRM fallback, since the MCP can't see the app's global
-   new-chapter default). The app-side Shared/ visibility gate retires with the toggle in the
+   readable — the last **confirmed by Bridget 2026-07-10**; an explicit
+   `permissions.inkReadable: false` is the opt-out). The app-side Shared/ visibility gate retires with the toggle in the
    **same release** — until then `resolvePageRel` keeps enforcing Shared/ containment (see
    [#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)).
 4. **No gold** (app design decisions 2026-07-09) — the default decoration palette derives

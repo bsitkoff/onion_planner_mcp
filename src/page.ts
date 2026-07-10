@@ -108,10 +108,10 @@ async function readChapterConfig(pageAbs: string): Promise<ChapterConfig> {
  * explicit `permissions.inkReadable` on the chapter always wins; absent, it resolves
  * from the chapter *type*: a monthly (calendar) chapter → readable; a reflection
  * chapter (its own or the chapter's default template names "reflection") → private;
- * everything else → the user's global new-chapter default, which the MCP can't see, so
- * it assumes **readable** (the daily-underlay workflow depends on reading ink to place
- * AI content around handwriting). Writing the underlay is never gated — the AI layer
- * isn't a privacy surface. NEEDS-CONFIRM: the everything-else fallback.
+ * everything else → **readable** (confirmed by Bridget, 2026-07-10: the daily-underlay
+ * workflow depends on reading ink to place AI content around handwriting; an explicit
+ * `permissions.inkReadable: false` is the opt-out). Writing the underlay is never gated —
+ * the AI layer isn't a privacy surface.
  */
 function resolveInkReadable(config: ChapterConfig, manifest: Manifest): boolean {
   if (config.inkReadable !== undefined) return config.inkReadable;

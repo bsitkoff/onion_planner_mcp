@@ -7,6 +7,27 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## `read_page` exposes each region's printed text — 2026-07-09
+
+Closes [#9](https://github.com/bsitkoff/onion_planner_mcp/issues/9). An orchestrator had no
+way to see that a template already prints chrome (e.g. daily-minimal's header prints "TODAY")
+short of memorizing per-template facts — the 2026-07-05 morning run wrote "Sunday, July 5" as
+a text line under a date banner the template already drew.
+
+- `template.ts`: `Region` gains `printedText: string[]` — every `<text>` node's content
+  (trimmed, in document order) parsed directly out of that region's own `<g>` in
+  `template.svg`. Empty when the template prints nothing there.
+- `read_page`'s tool description documents it: check `printedText` before writing a line so
+  you don't double-write content the template already shows.
+- `docs/AUTHORING.md`: a short note pointing at `printedText` instead of memorized
+  per-template chrome facts.
+- `test/smoke.ts`: covers a template that prints chrome-only text (daily-minimal's "TODAY"),
+  a region with no `<text>` (empty array), and a styled template's section label + numeric
+  hour-line text (numbers, since fast-xml-parser parses numeric text content as `number` not
+  `string` — `textNodeContent` stringifies both). 267/267 passing · tsc clean.
+
+---
+
 ## Washi-tape blocks widened + long labels wrap — 2026-07-06
 
 The schedule's washi-tape duration block was subtracting its wide *left* gutter (reserved for

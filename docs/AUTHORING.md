@@ -29,6 +29,13 @@ its level; don't fight it.**
 
 When in doubt, under-decorate — the user chose that template on purpose.
 
+Per-region, check `printedText` (from `read_page`'s `regions`) before writing a line — it's
+the template's own `<text>` content already drawn inside that region's box (a section label,
+chrome like "TODAY"/"DATE", a weekday header, hour-line numbers). If a region already prints
+the date, don't also write a line spelling it out; if it already labels itself ("Schedule"),
+skip a redundant `label`. Read it instead of memorizing which templates print what — templates
+change.
+
 ## Who fills a region — `fill` and `intent`
 
 Ownership in Onionskin is by *layer* — you write `ai.svg`, the user owns `ink.svg`

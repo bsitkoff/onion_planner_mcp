@@ -152,6 +152,18 @@ async function main() {
   // header's dashed art-banner rect has no data-region, so it's NOT a label slot.
   const header = read.regions.find((r) => r.name === "header");
   check("header's decorative dashed rect (no data-region) is not read as a label slot", header?.labelSlot === null, JSON.stringify(header?.labelSlot));
+  // printedText: the template's own <text> content per region — lets an orchestrator
+  // see that daily-minimal's header already prints "TODAY" chrome instead of relying
+  // on memorized per-template knowledge (the #9 double-date-write bug).
+  check("header region surfaces the template's printed \"TODAY\" chrome", !!header?.printedText.includes("TODAY"), JSON.stringify(header?.printedText));
+  check("schedule region (minimal, no <text>) reports an empty printedText", schedule?.printedText.length === 0, JSON.stringify(schedule?.printedText));
+  const cozyScheduleTemplateSvg = await fs.readFile(path.join(root, "Templates", "daily-cozy", "template.svg"), "utf8");
+  const cozyScheduleRegion = parseRegions(cozyScheduleTemplateSvg, "daily-cozy").find((r) => r.name === "schedule");
+  check(
+    "cozy's schedule region surfaces its section label + hour-line numbers in document order",
+    cozyScheduleRegion?.printedText[0] === "Schedule" && cozyScheduleRegion?.printedText.slice(1).includes("7"),
+    JSON.stringify(cozyScheduleRegion?.printedText),
+  );
   // Template inspection: minimal prints a faint "TODAY" microcap (hasLabels) but no
   // banners/art/palette — labels alone must NOT mark it styled, or the "bare → go
   // full" guidance would be unreachable on every shipped template. Cozy is fully

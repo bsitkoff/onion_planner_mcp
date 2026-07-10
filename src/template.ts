@@ -60,6 +60,15 @@ export interface Region {
    * placement for the region-title banner.
    */
   labelSlot: { x: number; y: number; width: number; height: number } | null;
+  /**
+   * Text the template itself already prints inside this region's `<g>` (a section
+   * label like "Schedule", chrome like "TODAY"/"DATE", a weekday header, hour-line
+   * numbers) — in document order. Empty when the template prints nothing here. Lets
+   * a caller check `printedText` before writing a line so it doesn't double-write
+   * content the template already draws (e.g. the date under a template that already
+   * prints "TODAY"), instead of relying on memorized per-template knowledge.
+   */
+  printedText: string[];
 }
 
 const parser = new XMLParser({
@@ -292,6 +301,19 @@ function readIntent(v: unknown): string | null {
 }
 
 /**
+ * A parsed `<text>` node's content — fast-xml-parser yields a bare value (string, or
+ * number when the content is numeric, e.g. an hour-line "7") for an attribute-free
+ * element, else an object keyed by `#text` holding that same bare value.
+ */
+function textNodeContent(node: unknown): string | null {
+  const raw =
+    typeof node === "object" && node !== null ? (node as any)["#text"] : node;
+  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  const trimmed = String(raw).trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+/**
  * Parse a template.svg into its addressable regions. Reads every
  * <g id="region-*"> and reports its transform, box, row/col hints, the absolute
  * positions of its ruled lines, who fills it (`fill`), and the designer's free-text
@@ -359,6 +381,11 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
     const intent = readIntent(g["@_data-intent"]);
     const list = readIntent(g["@_data-list"]); // same trim-or-null treatment
 
+    const textNodes: any[] = Array.isArray(g.text) ? g.text : g.text ? [g.text] : [];
+    const printedText = textNodes
+      .map(textNodeContent)
+      .filter((t): t is string => t !== null);
+
     regions.push({
       id,
       name,
@@ -376,6 +403,7 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
       ruledLines,
       colLines,
       labelSlot,
+      printedText,
     });
   }
   return regions;

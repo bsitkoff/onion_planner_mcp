@@ -20,6 +20,9 @@ import {
   fetchImageToTemp,
 } from "./page.js";
 import { PHOSPHOR_CODEPOINTS } from "./svg.js";
+import { PALETTE_CHARACTERS } from "./color.js";
+
+const PALETTE_CHARACTER_IDS = Object.keys(PALETTE_CHARACTERS) as [string, ...string[]];
 
 const server = new McpServer(
   {
@@ -563,9 +566,12 @@ server.tool(
         "Named palette PRESET — colours the section banners, body text, and accents. PICK " +
           "IT TO FIT THE DAY: 'bright' (lively, saturated — a fun/light day), 'cozy' (warm, " +
           "hand-painted — a calm or rainy day), 'editorial' (restrained, few accents — a " +
-          "heads-down work day), 'gold' (the quiet monochrome default). For an adaptive " +
-          "palette that harmonises to the template instead, use `harmony`/`varietyDial`. " +
-          "Ignored with raw `svg`.",
+          "heads-down work day), 'gold' (kept for back-compat; gold is RETIRED as a colour — " +
+          "this now resolves to the chapter's own palette character, a calm blue-family " +
+          "default if none is set). For an adaptive palette that harmonises to the template " +
+          "instead, use `harmony`/`varietyDial`; for the chapter's own ink-palette identity, " +
+          "set `paletteCharacter` via `set_chapter_theme` and leave `theme` unset. Ignored " +
+          "with raw `svg`.",
       ),
     harmony: z
       .enum(["match", "complement", "warm", "cool", "seasonal"])
@@ -741,9 +747,12 @@ server.tool(
     "chapter inherits one mood — write_underlay applies it as the default (overridable per " +
     "call) and read_page surfaces it. Use `accent` to give the chapter an explicit colour " +
     "the named presets don't cover (e.g. lavender to-dos): it tints body text, markers, and " +
-    "banners, floored dark to stay legible on cream. `harmony`/`varietyDial`/`fontPersonality` " +
-    "set the adaptive mood. Only the fields you pass are changed; the rest of the theme (and " +
-    "the chapter's page order) is preserved. The chapter must already exist.",
+    "banners, floored dark to stay legible on cream. `paletteCharacter` sets the chapter's " +
+    "ink-tray identity (the app's per-chapter handwriting colours, design/INK-PALETTE.md) — " +
+    "when no `harmony`/`accent`/preset `theme` is given, the underlay derives its default " +
+    "palette from this instead of a fixed colour (gold is retired). `harmony`/`varietyDial`/" +
+    "`fontPersonality` set the adaptive mood. Only the fields you pass are changed; the rest " +
+    "of the theme (and the chapter's page order) is preserved. The chapter must already exist.",
   {
     chapter: z
       .string()
@@ -759,6 +768,17 @@ server.tool(
         "Explicit underlay accent (hex) the whole chapter inherits — tints body text / " +
           "markers / banners. The way to make e.g. to-dos lavender by default; per-day exact " +
           "colour is still available via a line's `fill`.",
+      ),
+    paletteCharacter: z
+      .enum(PALETTE_CHARACTER_IDS)
+      .optional()
+      .describe(
+        "The chapter's ink-tray identity — one of the app's named palette characters " +
+          "(design/INK-PALETTE.md; a design proposal, names may change). When set and no " +
+          "`accent`/`harmony`/preset `theme` overrides it, the underlay's default palette " +
+          "derives from this chapter's own ink colours (lifted lighter, still legible) " +
+          "instead of a fixed seed. Additive alongside the app's `chromeAccent`/`harmony`/" +
+          "`varietyDial`/`fontPersonality` keys — never overwrites them.",
       ),
     harmony: z
       .enum(["match", "complement", "warm", "cool", "seasonal"])
@@ -776,11 +796,12 @@ server.tool(
       .describe("AI-text voice: clean / handwritten / editorial."),
   },
   { idempotentHint: true },
-  async ({ chapter, accent, harmony, varietyDial, fontPersonality }) => {
+  async ({ chapter, accent, paletteCharacter, harmony, varietyDial, fontPersonality }) => {
     try {
       const root = await requireLibrary();
       const res = await writeChapterTheme(root, chapter, {
         accent,
+        paletteCharacter,
         harmony,
         varietyDial,
         fontPersonality,

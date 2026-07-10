@@ -24,7 +24,7 @@ its level; don't fight it.**
   Tomorrow) uses a line with `heading`.
 - **`styled: true`** (it prints its own colour-filled banners, or ships a `stickers.svg`): it did the
   decorating. *Fill quietly into the existing slots* — no competing banners, little or no
-  added art. And don't fall back to drab gold: **use `template.palette`** (the template's own
+  added art. And don't fall back to a flat default: **use `template.palette`** (the template's own
   accent colors) for your text/markers so the fill harmonizes with the design.
 
 When in doubt, under-decorate — the user chose that template on purpose.
@@ -109,13 +109,13 @@ from a wide-open summer beach day.
 | `bright` | lively, saturated banners | a fun, light, or celebratory day |
 | `cozy` | warm, hand-painted | a calm, rainy, or homebound day |
 | `editorial` | restrained, quiet labels | a heads-down, focused work day |
-| `gold` | quiet monochrome (default) | when you want the underlay to recede |
+| `gold` | back-compat name for the default (the chapter's own ink palette) | when you want the underlay to recede |
 
 > **Two axes — theme vs template style.** Your `theme` is the underlay's *mood* (the day's
 > content). It is independent of the *template's* **style** — `minimal / cozy / colorful`, how
 > rich the printed page already is (visible in the template's id/name, and surfaced as the
 > `styled` flag + `palette` in the page summary). They pair naturally — **minimal ↔
-> `gold`/`editorial`, cozy ↔ `cozy`, colorful ↔ `bright`** — so a sensible default is to echo a
+> the default/`editorial`, cozy ↔ `cozy`, colorful ↔ `bright`** — so a sensible default is to echo a
 > styled template with the matching theme (or its own `palette`), then deviate when the day calls
 > for it. A loud theme on an already-colorful template competes; a quiet theme lets it breathe.
 
@@ -158,7 +158,7 @@ solids.
 
 The template stays **minimal on purpose** (a neutral scaffold; see the
 [minimal-template principle](MCP-INTEGRATION.md)). *You* add the structure a given day
-needs, in the gold layer, so pages differ day to day. Inside a neutral box region (e.g.
+needs, in the AI layer, so pages differ day to day. Inside a neutral box region (e.g.
 `notes`), use `heading: true` to draw a section label (bold, letter-spaced, with a hairline
 rule); the lines after it flow below as its items. Only emit a section on the days it has
 content — no "Habits" header on a day you're not tracking habits.

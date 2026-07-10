@@ -31,8 +31,9 @@ import { decodePng, encodePng, chromaKeyPixels } from "./png.js";
 /**
  * The underlay-relevant slice of a chapter's `.folder.json → theme` (the app's
  * `FORMAT.md §4` contract). `chromeAccent` is the app's concern (chrome only); the
- * other three are the underlay-theme axis this server honours. All optional — an
- * absent block (or key) just means "fall back to the default" (gold / region fonts).
+ * rest are the underlay-theme axis this server honours. All optional — an absent
+ * block (or key) just means "fall back to the default" (the chapter's own resolved
+ * ink palette, lifted for the underlay — gold is retired, there's no fixed seed).
  */
 export interface ChapterTheme {
   chromeAccent?: string;
@@ -43,9 +44,17 @@ export interface ChapterTheme {
    * An explicit underlay accent (hex) the whole chapter inherits — tints body text /
    * markers / banners so a chapter can carry a colour the named presets don't (e.g.
    * lavender). Additive to the app's `FORMAT.md §4` theme keys; the server reads it
-   * defensively (absent ⇒ the gold/preset default). Written by `set_chapter_theme`.
+   * defensively (absent ⇒ the palette-character/preset default). Written by
+   * `set_chapter_theme`. Takes precedence over `paletteCharacter` when both are set.
    */
   accent?: string;
+  /**
+   * The chapter's ink-tray identity (design/INK-PALETTE.md) — one of
+   * `PALETTE_CHARACTERS`' keys, additive alongside the app's own theme keys. When no
+   * `accent`/`harmony`/preset `theme` overrides it, this is the default underlay
+   * palette source (lifted lighter, still legible) instead of a fixed seed colour.
+   */
+  paletteCharacter?: string;
 }
 
 /**
@@ -124,6 +133,7 @@ async function resolveThemeInput(
       name: opts.theme,
       fontPersonality: chapter?.fontPersonality,
       accent: chapter?.accent,
+      paletteCharacter: chapter?.paletteCharacter,
       templatePalette,
     };
   }
@@ -133,6 +143,7 @@ async function resolveThemeInput(
     varietyDial: opts.varietyDial ?? chapter?.varietyDial,
     fontPersonality: opts.fontPersonality ?? chapter?.fontPersonality,
     accent: chapter?.accent,
+    paletteCharacter: chapter?.paletteCharacter,
     chromeAccent: chapter?.chromeAccent,
     templatePalette,
   };

@@ -1,6 +1,6 @@
 # onion-planner-mcp
 
-A local MCP server that writes the **gold AI underlay** (`ai.svg`) into
+A local MCP server that writes the **AI underlay** (`ai.svg`) into
 [Onionskin](https://onionskin.sitkoff.net) planner pages. Onionskin's whole integration surface is a
 folder of plain files in an iCloud container — no app API, no hosted service — so the core
 planner integration is **filesystem-only**: it reads `template.svg` for region geometry and

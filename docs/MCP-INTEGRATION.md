@@ -14,7 +14,7 @@ are, what to write, and the rules.
 ## 1. The one-paragraph model
 
 Every page is a **folder**. A page composites four SVG layers in z-order:
-`template.svg` (graphite grid + addressable regions) → **`ai.svg` (gold — yours to
+`template.svg` (graphite grid + addressable regions) → **`ai.svg` (yours to
 write)** → `stickers.svg` (pink — the user's) → `ink.svg` (blue — the user's
 handwriting). **Permission is location:** a page under `Shared/` may be read and written
 by the user's AI; everything else is private. Your entire job is: **write `ai.svg` in a
@@ -122,9 +122,10 @@ label + rule, with its items flowing below). Don't ask for a richer template; co
 richness into `ai.svg`.
 
 ### c. Write `ai.svg`
-Emit one self-contained SVG on the page's `viewBox`. Gold is `#9C7C1A` — the single canonical
-Onionskin gold (shared by the app chrome, this server, and the on-device composer; deepened for
-legibility on white paper). This is what the reference server emits by default. Group your
+Emit one self-contained SVG on the page's `viewBox`. Gold is retired — the default palette
+derives from the chapter's own `paletteCharacter` (or a calm blue-family default), lifted lighter
+than the user's ink and floored to a real ≥4.5:1 contrast on paper. This is what the reference
+server emits by default. Group your
 output by region so it's legible:
 
 ```xml

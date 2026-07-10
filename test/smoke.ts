@@ -31,10 +31,15 @@ import {
   writeChapterTheme,
   fetchImageToTemp,
 } from "../src/page.js";
-import { GOLD, resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages } from "../src/svg.js";
-import { hexToHsl } from "../src/color.js";
+import { resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages } from "../src/svg.js";
+import { hexToHsl, contrastRatioHex } from "../src/color.js";
 import { inspectTemplate, parseRegions, PAPER_COLOR } from "../src/template.js";
 import { decodePng, encodePng, chromaKeyPixels } from "../src/png.js";
+
+// Gold is retired — the default (no theme override) resolves to the chapter's own ink
+// palette instead of a fixed seed colour. Tests below assert against THIS, not a literal
+// hex, since the exact default may change as the palette-character proposal is refined.
+const DEFAULT_INK = resolveTheme({}).theme.text;
 
 let pass = 0;
 let fail = 0;
@@ -233,15 +238,15 @@ async function main() {
   const aiPath = path.join(root, daily, "ai.svg");
   const ai = await fs.readFile(aiPath, "utf8");
   check("ai.svg contains schedule text", ai.includes("9:00 standup"));
-  check("ai.svg uses gold fill", ai.includes(GOLD));
+  check("ai.svg uses the default ink-palette fill (gold is retired)", ai.includes(DEFAULT_INK));
   check("ai.svg sets a heavier font-weight", ai.includes('font-weight="600"'));
   check("ai.svg groups by region", ai.includes('data-region="schedule"') && ai.includes('data-region="todo"'));
   check("ainotes uses Newsreader (region default still applies)", regionGroup(ai, "ainotes")?.includes("Newsreader") ?? false);
   check("write reported warnings array", Array.isArray(wr.warnings));
   check("write was not a dry run", wr.dryRun === false);
-  // checkbox marker: a gold stroked <rect> inside the todo group, before its text.
+  // checkbox marker: a themed stroked <rect> inside the todo group, before its text.
   const todoGroup = regionGroup(ai, "todo") ?? "";
-  check("to-do lines draw a gold checkbox", new RegExp(`<rect[^>]*stroke="${GOLD}"`).test(todoGroup), todoGroup.slice(0, 120));
+  check("to-do lines draw a themed checkbox", new RegExp(`<rect[^>]*stroke="${DEFAULT_INK}"`).test(todoGroup), todoGroup.slice(0, 120));
 
   console.log("\nPhosphor icon glyphs (font-rendered leading mark; dry-run)");
   const iconWrite = await writeUnderlay(root, daily, {
@@ -486,7 +491,7 @@ async function main() {
   });
   const notesGroup = regionGroup(sectioned.aiSvg, "todo") ?? "";
   check("heading text is letter-spaced", notesGroup.includes('letter-spacing="0.08em"'), notesGroup.slice(0, 160));
-  const headingRules = [...notesGroup.matchAll(new RegExp(`<line[^>]*stroke="${GOLD}"[^>]*opacity="0.4"`, "g"))].length;
+  const headingRules = [...notesGroup.matchAll(new RegExp(`<line[^>]*stroke="${DEFAULT_INK}"[^>]*opacity="0.4"`, "g"))].length;
   check("each of the 3 headings draws a hairline rule", headingRules === 3, `rules=${headingRules}`);
   // Flow order: headings and their items stack top-down in the order given.
   const yImp = yOf(sectioned.aiSvg, ">Important</text>");
@@ -510,31 +515,43 @@ async function main() {
   const tg = regionGroup(themed.aiSvg, "todo") ?? "";
   check("banner heading draws a filled colored rect", /<rect[^>]*fill="#3FB6A8"/.test(tg) || /<rect[^>]*fill="#F2884B"/.test(tg), tg.slice(0, 200));
   check("two banners use two different cycled colors", new Set([...tg.matchAll(/<rect[^>]*rx="6" fill="(#[0-9A-Fa-f]{6})"/g)].map((m) => m[1])).size === 2, tg);
-  check("banner label is white, not gold", tg.includes('fill="#FFFFFF"') && !tg.includes(GOLD), tg.slice(0, 240));
+  check("banner label is white, not the default ink colour", tg.includes('fill="#FFFFFF"') && !tg.includes(DEFAULT_INK), tg.slice(0, 240));
   // (case-insensitive: the AA floor round-trips the hex through HSL → lowercase)
-  check("themed body text uses theme ink, not gold", /fill="#3a3a3a"/i.test(tg), tg);
-  // The gold default is unchanged (back-compat): headings stay underline+rule.
-  const goldHead = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "todo") ?? "";
-  check("default (no theme) keeps the gold underline heading", goldHead.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(goldHead), goldHead);
+  check("themed body text uses theme ink, not the default palette", /fill="#3a3a3a"/i.test(tg), tg);
+  // The default (no theme override) is unchanged in SHAPE (back-compat): headings stay
+  // underline+rule — gold is retired, so the COLOUR is now the chapter's own ink palette.
+  const defaultHead = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "todo") ?? "";
+  check("default (no theme) keeps the underline heading", defaultHead.includes(`stroke="${DEFAULT_INK}"`) && !/<rect[^>]*rx="6"/.test(defaultHead), defaultHead);
 
   console.log("\nadaptive theme contract (harmony / variety / fontPersonality)");
-  // No knobs → the gold default (back-compat for the resolver itself).
-  check("resolveTheme({}) is the gold default", resolveTheme({}).theme.text === GOLD);
+  // No knobs → the default ink-palette theme (back-compat for the resolver itself; gold retired).
+  check("resolveTheme({}) is the default ink-palette theme", resolveTheme({}).theme.text === DEFAULT_INK);
+  check("the default ink colour clears the ≥4.5:1 contrast floor on paper (Rule 1)", contrastRatioHex(DEFAULT_INK, PAPER_COLOR) >= 4.5);
   // harmony=match derives banners FROM the template palette, not a fixed preset.
   const pal = ["#E2825E", "#8FA98A", "#88B0D4"];
   const matched = resolveTheme({ harmony: "match", varietyDial: 0.9, templatePalette: pal });
   check("harmony=match derives multiple banners from the template palette", matched.theme.banners.length >= 2 && matched.theme.banners.every((h) => /^#[0-9a-f]{6}$/.test(h)), JSON.stringify(matched.theme.banners));
   check("high variety → banner-pill headings", matched.theme.headingStyle === "banner");
   check("low variety → quiet underline headings", resolveTheme({ harmony: "match", varietyDial: 0.1, templatePalette: pal }).theme.headingStyle === "underline");
-  // Legibility floor: derived BODY text is dark enough to read on cream (solved at
-  // derivation, not warned at runtime — even from a pale template swatch).
+  // Rule 1 (real WCAG contrast, not a flat lightness cap): derived BODY text clears
+  // ≥4.5:1 on cream (solved at derivation, not warned at runtime) — even from a pale
+  // template swatch. A hue-aware contrast floor can leave some hues lighter than the
+  // old flat lightness cap while still reading fine — contrast, not raw L, is the rule.
   const pale = resolveTheme({ harmony: "match", templatePalette: ["#F2B8CC"] });
-  check("derived body text is floored dark (legible on cream)", hexToHsl(pale.theme.text).l <= 0.36, `${pale.theme.text} (L=${hexToHsl(pale.theme.text).l.toFixed(2)})`);
+  check("derived body text clears the contrast floor (legible on cream)",
+    contrastRatioHex(pale.theme.text, PAPER_COLOR) >= 4.5,
+    `${pale.theme.text} (contrast=${contrastRatioHex(pale.theme.text, PAPER_COLOR).toFixed(2)})`);
   // Empty palette while harmonising → sticker-palette fallback + a note.
   check("adaptive with no template palette warns about the fallback", resolveTheme({ harmony: "complement", templatePalette: [] }).warnings.some((w) => w.includes("sticker palette")));
-  // fontPersonality is an orthogonal axis: it swaps fonts but NOT the gold palette.
+  // fontPersonality is an orthogonal axis: it swaps fonts but NOT the palette.
   const hand = resolveTheme({ fontPersonality: "handwritten" });
-  check("fontPersonality=handwritten sets Caveat body / keeps gold palette", hand.theme.fonts?.body === "Caveat" && hand.theme.text === GOLD, JSON.stringify(hand.theme.fonts));
+  check("fontPersonality=handwritten sets Caveat body / keeps the default palette", hand.theme.fonts?.body === "Caveat" && hand.theme.text === DEFAULT_INK, JSON.stringify(hand.theme.fonts));
+  // A chapter's paletteCharacter is a lower-precedence default source than harmony/accent/preset.
+  const sunbaked = resolveTheme({ paletteCharacter: "sunbaked" });
+  const tidewater = resolveTheme({ paletteCharacter: "tidewater" });
+  check("a different paletteCharacter resolves a different default ink colour", sunbaked.theme.text !== tidewater.theme.text, `${sunbaked.theme.text} vs ${tidewater.theme.text}`);
+  check("paletteCharacter's resolved ink still clears the contrast floor", contrastRatioHex(sunbaked.theme.text, PAPER_COLOR) >= 4.5);
+  check("an explicit accent still wins over paletteCharacter", resolveTheme({ paletteCharacter: "sunbaked", accent: "#7B5EA7" }).theme.text !== sunbaked.theme.text);
   // End-to-end: fontPersonality flows into the composed text.
   const written = await writeUnderlay(root, daily, { status: "ready", dryRun: true, fontPersonality: "handwritten", regions: [{ region: "todo", lines: [{ text: "buy milk" }] }] });
   check("fontPersonality reaches the composed ai.svg (Caveat body text)", (regionGroup(written.aiSvg, "todo") ?? "").includes('font-family="Caveat"'), regionGroup(written.aiSvg, "todo") ?? "");
@@ -568,7 +585,7 @@ async function main() {
   check("chapter high-variety gives banner-pill headings", /<rect[^>]*rx="6"/.test(fcg), fcg.slice(0, 200));
   // Per-call preset overrides the chapter's adaptive default.
   const overridden = regionGroup((await writeUnderlay(root, daily, { status: "ready", dryRun: true, theme: "gold", regions: [{ region: "todo", lines: [{ text: "Plain", heading: true }] }] })).aiSvg, "todo") ?? "";
-  check("per-call theme:gold overrides the chapter's adaptive theme", overridden.includes(`stroke="${GOLD}"`) && !/<rect[^>]*rx="6"/.test(overridden), overridden.slice(0, 200));
+  check("per-call theme:gold overrides the chapter's adaptive theme", overridden.includes(`stroke="${DEFAULT_INK}"`) && !/<rect[^>]*rx="6"/.test(overridden), overridden.slice(0, 200));
   // Restore the folder so later assertions see no theme.
   delete folderJson.theme;
   await fs.writeFile(dailyFolder, JSON.stringify(folderJson, null, 2) + "\n");
@@ -818,15 +835,23 @@ async function main() {
   const weekdaysRegion = monthlyRegions.find((r) => r.name === "weekdays");
   check("weekdays region derives as shared, not ai", !weekdaysRegion || weekdaysRegion.fill !== "ai", weekdaysRegion?.fill);
 
-  console.log("\npreset themes respect the cream-legibility floor (AA text)");
+  console.log("\npreset themes respect Rule 1's real WCAG contrast floor (AA text)");
   // The bright preset's accent (#E86A92, ~2.9:1 on cream) is calendar day-number TEXT —
-  // presets must pass through the same lightness floor the adaptive path uses.
+  // presets must clear the same ≥4.5:1 floor the adaptive path uses.
   for (const name of ["bright", "cozy", "editorial"]) {
     const t = resolveTheme(name).theme;
-    check(`${name}: text/serif floored dark`, hexToHsl(t.text).l <= 0.36 && hexToHsl(t.serif).l <= 0.36, `text ${t.text} serif ${t.serif}`);
-    check(`${name}: accent floored for cream`, hexToHsl(t.accent).l <= 0.48, `${t.accent} (L=${hexToHsl(t.accent).l.toFixed(2)})`);
+    check(`${name}: text/serif clear the contrast floor`,
+      contrastRatioHex(t.text, PAPER_COLOR) >= 4.5 && contrastRatioHex(t.serif, PAPER_COLOR) >= 4.5,
+      `text ${t.text} serif ${t.serif}`);
+    check(`${name}: accent clears the contrast floor`,
+      contrastRatioHex(t.accent, PAPER_COLOR) >= 4.5,
+      `${t.accent} (contrast=${contrastRatioHex(t.accent, PAPER_COLOR).toFixed(2)})`);
   }
-  check("gold preset is untouched (the canonical value)", resolveTheme("gold").theme.text === GOLD && resolveTheme("gold").theme.accent === GOLD);
+  // "gold" is kept only as a back-compat preset name — it no longer emits a fixed
+  // colour (gold is retired); it resolves to the same default ink-palette theme as no
+  // theme at all.
+  check("gold preset resolves to the default ink-palette theme, not a fixed hex",
+    resolveTheme("gold").theme.text === DEFAULT_INK && resolveTheme("gold").theme.accent === resolveTheme({}).theme.accent);
 
   console.log("\nwrite_underlay (raw svg) + reject merge+svg");
   const rawOk = await writeUnderlay(root, daily, {

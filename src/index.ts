@@ -205,7 +205,9 @@ server.tool(
     "notes and annotations. By default the bulky per-stroke `data-stroke` centerline " +
     "streams are stripped (the visible outline geometry remains); set `includeStrokeData` " +
     "for the verbatim file. Returns null if no ink file exists. Read-only; never modifies " +
-    "any layer. Refuses any page outside Shared/.",
+    "any layer. Refuses any page outside Shared/. Also refuses when the chapter marks its " +
+    "ink private (`permissions.inkReadable: false` in its .folder.json; reflection chapters " +
+    "default private) — the underlay can still be written, just not composed from handwriting.",
   {
     page: z
       .string()
@@ -830,7 +832,7 @@ server.tool(
       .optional()
       .describe(
         "The chapter's ink-tray identity — one of the app's named palette characters " +
-          "(design/INK-PALETTE.md; a design proposal, names may change). When set and no " +
+          "(design/INK-PALETTE.md; confirmed shipping tokens). When set and no " +
           "`accent`/`harmony`/preset `theme` overrides it, the underlay's default palette " +
           "derives from this chapter's own ink colours (lifted lighter, still legible) " +
           "instead of a fixed seed. Additive alongside the app's `chromeAccent`/`harmony`/" +

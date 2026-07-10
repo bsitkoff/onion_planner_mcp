@@ -4,6 +4,7 @@ import {
   deriveAccentPalette,
   derivePaletteFromInks,
   resolvePaletteCharacterInks,
+  monthlyInks,
   PALETTE_CHARACTERS,
   floorTextHex,
   floorAccentHex,
@@ -195,6 +196,15 @@ export interface ThemeInput {
    * page derives from the chapter's own ink colours (lifted lighter) instead.
    */
   paletteCharacter?: string;
+  /**
+   * A monthly (calendar) chapter's month (1–12), from its `.folder.json → month`. When
+   * set, the default underlay palette derives from `monthlyInks[month]` and **skips the
+   * palette-character picker entirely** (confirmed 2026-07-10) — a monthly chapter's
+   * colour identity is its month, not a character. Custom ink slots + the underlay lift
+   * still apply. Ignored on the harmony/accent/preset paths (those are explicit
+   * overrides). `paletteCharacter` is disregarded when this is present.
+   */
+  monthlyMonth?: number;
   /** Extra user ink slots (hex) appended to the character's 5-ink pool (app tray = 7). */
   customInk1?: string;
   customInk2?: string;
@@ -226,8 +236,9 @@ export interface ResolvedTheme {
 /**
  * Resolve a theme. Precedence: an **adaptive** param block (`harmony` and/or
  * `varietyDial` — see `isAdaptive`) derives a palette from the template's colours;
- * otherwise a named **preset**; otherwise a chapter `accent`; otherwise the chapter's
- * own `paletteCharacter`; otherwise the default palette character (gold is retired —
+ * otherwise a named **preset**; otherwise a chapter `accent`; otherwise, on the default
+ * path, a monthly chapter's `monthlyMonth` inks (skipping the character picker) else the
+ * chapter's own `paletteCharacter` else the default palette character (gold is retired —
  * there is no fixed seed colour at the end of this chain any more).
  * `fontPersonality` always layers its fonts on top of whichever palette path is taken
  * (it never selects one). A string is a bare preset name (back-compat).
@@ -277,16 +288,21 @@ export function resolveTheme(input?: ThemeInput | string): ResolvedTheme {
       theme = defaultTheme();
     }
   } else {
-    // No override at all — the chapter's own ink-tray identity (or the default
-    // palette character if unset), lifted for the underlay. Custom ink slots append
-    // to the pool (the app's tray = 5 derived + 2 custom), they never replace slots.
-    if (t.paletteCharacter && !PALETTE_CHARACTERS[t.paletteCharacter]) {
+    // No override at all — the chapter's own ink-tray identity, lifted for the
+    // underlay. A monthly (calendar) chapter derives its 5 inks from the month and
+    // skips the character picker; every other chapter uses its palette character (or
+    // the default if unset). Custom ink slots append to whichever pool (the app's tray
+    // = 5 derived + 2 custom), they never replace slots.
+    if (t.monthlyMonth === undefined && t.paletteCharacter && !PALETTE_CHARACTERS[t.paletteCharacter]) {
       warnings.push(
         `theme: unknown paletteCharacter "${t.paletteCharacter}" — used the default ` +
           `character (known: ${Object.keys(PALETTE_CHARACTERS).join(", ")}).`,
       );
     }
-    const inks = [...resolvePaletteCharacterInks(t.paletteCharacter)];
+    const inks =
+      t.monthlyMonth !== undefined
+        ? [...monthlyInks(t.monthlyMonth)]
+        : [...resolvePaletteCharacterInks(t.paletteCharacter)];
     for (const custom of [t.customInk1, t.customInk2]) {
       if (custom === undefined) continue;
       if (isHexColour(custom)) inks.push(custom);

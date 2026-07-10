@@ -26,15 +26,22 @@ below links its issue — detail, sketches, and open decisions live there, not h
    and preserves the rest, so "slide a meeting in" doesn't clobber the day's other content.
 3. **The underlay is not a privacy surface** (app design decisions 2026-07-09) — writing
    `ai.svg` needs no permission gating; the only gated operation is **`read_ink`**, governed
-   by the app's per-chapter ink-read toggle
-   ([onionskin#144](https://github.com/bsitkoff/onionskin/issues/144)) once it ships. The
-   app-side Shared/ visibility gate retires with it (see [#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)).
+   by the chapter's per-chapter ink-read toggle. **Shipped** (2026-07-10): `read_ink` reads
+   `permissions.inkReadable` from the chapter `.folder.json` and refuses when it resolves false
+   (explicit value wins; else monthly → readable, reflection → private, everything else →
+   readable — the last a NEEDS-CONFIRM fallback, since the MCP can't see the app's global
+   new-chapter default). The app-side Shared/ visibility gate retires with the toggle in the
+   **same release** — until then `resolvePageRel` keeps enforcing Shared/ containment (see
+   [#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)).
 4. **No gold** (app design decisions 2026-07-09) — the default decoration palette derives
    from the chapter's palette character / `theme.harmony`, not a canonical gold token.
    **Shipped** ([#20](https://github.com/bsitkoff/onion_planner_mcp/issues/20), 2026-07-09);
-   `SHARED-VISUAL-SPEC.md` §0 now records the three underlay-palette rules instead. The
-   palette-character names/hexes and the pre-lighten offset (0.14) remain a **design
-   proposal pending Bridget's confirmation** (see CHANGELOG).
+   `SHARED-VISUAL-SPEC.md` §0 now records the three underlay-palette rules instead. The colour
+   system was **confirmed 2026-07-10**: the pre-lighten offset is `liftForUnderlay = 0.14` in
+   **OKLCH lightness** (perceptual, not HSL); the six palette characters + 30 ink hexes are
+   shipping tokens (Sunbaked's 5th ink is mahogany `#6E3320`, dedupes with Field notes); and
+   `monthlyInks` is **wired** as 12 distinct per-month palettes that a calendar chapter uses in
+   place of the character picker.
 
 ### Invariants every item must respect
 

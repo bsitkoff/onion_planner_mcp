@@ -32,7 +32,14 @@ import {
   fetchImageToTemp,
 } from "../src/page.js";
 import { resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages } from "../src/svg.js";
-import { hexToHsl, contrastRatioHex } from "../src/color.js";
+import {
+  hexToHsl,
+  contrastRatioHex,
+  hexToOklab,
+  liftForUnderlay,
+  monthlyInks,
+  PALETTE_CHARACTERS,
+} from "../src/color.js";
 import { inspectTemplate, parseRegions, PAPER_COLOR } from "../src/template.js";
 import { decodePng, encodePng, chromaKeyPixels } from "../src/png.js";
 
@@ -614,6 +621,35 @@ async function main() {
   check("a different paletteCharacter resolves a different default ink colour", sunbaked.theme.text !== tidewater.theme.text, `${sunbaked.theme.text} vs ${tidewater.theme.text}`);
   check("paletteCharacter's resolved ink still clears the contrast floor", contrastRatioHex(sunbaked.theme.text, PAPER_COLOR) >= 4.5);
   check("an explicit accent still wins over paletteCharacter", resolveTheme({ paletteCharacter: "sunbaked", accent: "#7B5EA7" }).theme.text !== sunbaked.theme.text);
+
+  console.log("\ncolour system — 2026-07-10 confirmed decisions");
+  // Item 2: Sunbaked's 5th ink is mahogany (dedupes with Field notes' umber #6F4A33).
+  check("Sunbaked 5th ink is mahogany #6E3320", PALETTE_CHARACTERS.sunbaked[4] === "#6E3320", PALETTE_CHARACTERS.sunbaked[4]);
+  check("Sunbaked no longer collides with Field notes on the umber slot", PALETTE_CHARACTERS.sunbaked[4] !== PALETTE_CHARACTERS.fieldNotes[4]);
+  // Item 1: the underlay lift runs in OKLCH L (perceptual), not HSL, by 0.14 — and the
+  // ladder holds (lifted underlay is lighter than the ink yet still clears the floor).
+  // A dark, high-contrast ink has headroom for the full 0.14 lift.
+  const darkInk = "#1C2E52"; // deep navy — contrast ~13:1, room for the full lift
+  const lifted = liftForUnderlay(darkInk);
+  check("lift raises OKLCH lightness (perceptual, not HSL)", hexToOklab(lifted).L > hexToOklab(darkInk).L, `${hexToOklab(darkInk).L.toFixed(3)} → ${hexToOklab(lifted).L.toFixed(3)}`);
+  check("a high-headroom ink gets the full 0.14 OKLCH-L lift", Math.abs(hexToOklab(lifted).L - hexToOklab(darkInk).L - 0.14) < 0.01, `Δ=${(hexToOklab(lifted).L - hexToOklab(darkInk).L).toFixed(3)}`);
+  check("lifted underlay text still clears the contrast floor", contrastRatioHex(lifted, PAPER_COLOR) >= 4.5, `${lifted} (contrast=${contrastRatioHex(lifted, PAPER_COLOR).toFixed(2)})`);
+  // An ink close to the floor lifts less — the clamp wins over the full offset, but the
+  // result never drops below the floor (accepted collapse-onto-floor edge case).
+  const nearFloor = liftForUnderlay("#4A6FA5"); // pen-blue, ~5:1 — little headroom
+  check("a near-floor ink lifts less than the full offset (clamp wins)", hexToOklab(nearFloor).L - hexToOklab("#4A6FA5").L < 0.14);
+  check("clamped lift still clears the contrast floor", contrastRatioHex(nearFloor, PAPER_COLOR) >= 4.5 && contrastRatioHex(liftForUnderlay("#8B6D14"), PAPER_COLOR) >= 4.5);
+  // Item 3: 12 distinct monthly palettes (not 4 seasonal sets shared by lookup).
+  const allMonthInks = Array.from({ length: 12 }, (_, i) => monthlyInks(i + 1));
+  check("every month yields 5 inks", allMonthInks.every((inks) => inks.length === 5));
+  check("all 12 monthly palettes are distinct", new Set(allMonthInks.map((inks) => inks.join(","))).size === 12);
+  check("every monthly ink clears the contrast floor on paper", allMonthInks.flat().every((hex) => contrastRatioHex(hex, PAPER_COLOR) >= 4.5), allMonthInks.flat().find((hex) => contrastRatioHex(hex, PAPER_COLOR) < 4.5) ?? "");
+  check("monthlyInks wraps an out-of-range month", monthlyInks(13).join(",") === monthlyInks(1).join(","));
+  // Item 3 wiring: a monthly chapter derives from its month and skips the character picker.
+  const febTheme = resolveTheme({ monthlyMonth: 2, paletteCharacter: "sunbaked" });
+  check("monthlyMonth overrides paletteCharacter (skips the picker)", febTheme.theme.text !== resolveTheme({ paletteCharacter: "sunbaked" }).theme.text);
+  check("monthly default text = the lifted first month ink", febTheme.theme.text === liftForUnderlay(monthlyInks(2)[0]), `${febTheme.theme.text} vs ${liftForUnderlay(monthlyInks(2)[0])}`);
+  check("an unknown paletteCharacter is not warned when a month drives the palette", !resolveTheme({ monthlyMonth: 2, paletteCharacter: "bogus" }).warnings.some((w) => w.includes("paletteCharacter")));
   // End-to-end: fontPersonality flows into the composed text.
   const written = await writeUnderlay(root, daily, { status: "ready", dryRun: true, fontPersonality: "handwritten", regions: [{ region: "todo", lines: [{ text: "buy milk" }] }] });
   check("fontPersonality reaches the composed ai.svg (Caveat body text)", (regionGroup(written.aiSvg, "todo") ?? "").includes('font-family="Caveat"'), regionGroup(written.aiSvg, "todo") ?? "");
@@ -1188,6 +1224,37 @@ async function main() {
   check("default read_ink keeps the visible geometry", (strippedInk.inkSvg ?? "").includes('d="M10 10 L20 20"'));
   const rawInk = await readInk(root, daily, true);
   check("includeStrokeData returns the verbatim file", rawInk.inkSvg === inkSvgDoc);
+
+  console.log("\nread_ink honours the chapter's inkReadable permission (2026-07-10)");
+  const dailyFolderFile = path.join(root, "Shared", "Daily", ".folder.json");
+  const dailyFolderOrig = await fs.readFile(dailyFolderFile, "utf8").catch(() => "{}");
+  const setFolder = async (patch: Record<string, unknown>) => {
+    const base = JSON.parse(await fs.readFile(dailyFolderFile, "utf8").catch(() => "{}"));
+    for (const [k, v] of Object.entries(patch)) v === undefined ? delete base[k] : (base[k] = v);
+    await fs.writeFile(dailyFolderFile, JSON.stringify(base, null, 2) + "\n");
+  };
+  const readInkThrows = async () => readInk(root, daily).then(() => false).catch(() => true);
+  await setFolder({ permissions: { inkReadable: false } });
+  check("explicit inkReadable:false refuses read_ink", await readInkThrows());
+  await setFolder({ permissions: { inkReadable: true }, defaultTemplate: "reflection-minimal" });
+  check("explicit inkReadable:true wins even for a reflection chapter", !(await readInkThrows()));
+  await setFolder({ permissions: undefined, defaultTemplate: "reflection-minimal" });
+  check("a reflection chapter defaults to private (refuses)", await readInkThrows());
+  await setFolder({ permissions: undefined, defaultTemplate: undefined, month: 6 });
+  check("a monthly chapter defaults to readable", !(await readInkThrows()));
+  await setFolder({ month: undefined });
+  check("a plain chapter (no permission, no type) defaults to readable", !(await readInkThrows()));
+  await fs.writeFile(dailyFolderFile, dailyFolderOrig); // restore — later tests write into Daily
+
+  console.log("\nmonthly chapter underlay derives from its .folder.json month");
+  const monthFolderFile = path.join(root, "Shared", "Monthly", ".folder.json");
+  const monthFolderOrig = await fs.readFile(monthFolderFile, "utf8").catch(() => "{}");
+  const monthFolder = JSON.parse(monthFolderOrig || "{}");
+  monthFolder.month = 2;
+  await fs.writeFile(monthFolderFile, JSON.stringify(monthFolder, null, 2) + "\n");
+  const febPage = await readPage(root, monthly);
+  check("read_page's underlay reflects the month's first ink (lifted)", febPage.underlay.text === liftForUnderlay(monthlyInks(2)[0]), `${febPage.underlay.text} vs ${liftForUnderlay(monthlyInks(2)[0])}`);
+  await fs.writeFile(monthFolderFile, monthFolderOrig); // restore
 
   console.log("\nraw fragments accept the app renderer's full element set");
   const shapes = await writeUnderlay(root, daily, {

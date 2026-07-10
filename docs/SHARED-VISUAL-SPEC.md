@@ -20,14 +20,19 @@
      `paper-0`/cream. Auto-darken to reach it (`floorTextHex`/`floorAccentHex`,
      `contrastRatio` in `src/color.ts`); raw hex is fills-only.
   2. **Pre-lightened underlay** — the underlay receives each ink colour from the chapter's own
-     resolved palette, lifted lighter by a fixed HSL offset (`liftForUnderlay`), clamped so the
-     lift never drops contrast below the floor. One rule, two guarantees: the underlay is always
-     lighter than the user's own handwriting, and always readable.
+     resolved palette, lifted lighter by a fixed **OKLCH-lightness** offset
+     (`liftForUnderlay = 0.14`, confirmed 2026-07-10 — OKLCH, not HSL, so "one step lighter" reads
+     visually equal across every ink hue), clamped so the lift never drops contrast below the
+     floor. One rule, two guarantees: the underlay is always lighter than the user's own
+     handwriting, and always readable. Applies to underlay text / line marks (the middle rung of
+     the ladder); the washi/wash tier is lightened separately.
   3. **No reserved colours** — the underlay may use any colour from its derived (lightened)
      palette; a clash with the user's ink is resolved by regenerating, never prevented up front.
   - The **default** palette (no `harmony`/`accent`/preset `theme`) derives from the chapter's own
-    `paletteCharacter` (design/INK-PALETTE.md — a design proposal, names/hexes may change), or a
-    calm blue-family default character if none is set. `theme: "gold"` is kept only as a
+    `paletteCharacter` (design/INK-PALETTE.md — six confirmed shipping characters, 30 ink hexes,
+    signed off 2026-07-10), or a calm blue-family default character if none is set. A **monthly
+    (calendar) chapter** instead derives its 5 inks from its month (`monthlyInks[month]`, 12
+    distinct palettes) and skips the character picker entirely. `theme: "gold"` is kept only as a
     back-compat preset **name** — it resolves to this same default, not a fixed colour.
 - **Fonts (closed set):** `Mulish` (sans), `Newsreader` (serif), `IBM Plex Mono` (mono),
   `Caveat`, `Fredoka`, `Phosphor` (icons). Unknown families fall back to the serif.

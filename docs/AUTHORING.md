@@ -96,7 +96,9 @@ each template marks them as. Since the 2026-06 redesign, **`notes` is the user's
 surface (`fill: ink`) on every template** — don't write into it; the AI's text home is `ainotes`
 (`fill: ai`). So **read each region's `fill` from `read_page` and `read_ink` first** (see "Who
 fills a region" above) rather than assuming any region is yours; on a `shared` region, seed in the
-whitespace and leave the ruled lines for ink.
+whitespace and leave the ruled lines for ink. Note `read_ink` can **refuse** — a chapter may mark
+its ink private (`permissions.inkReadable: false`; reflection chapters default private). That
+never blocks writing the underlay; just compose without peeking at the handwriting there.
 
 **2. Never let the page read as blank — a rule, not a preference.** A light day is honest —
 summer, a weekend, a quiet schedule — but an *empty page* looks broken, and real use showed
@@ -156,6 +158,12 @@ cream page — you don't need to check contrast. `harmony` takes precedence over
 name. `chromeAccent` in the chapter theme is the chapter's accent colour (also the app's
 live/refreshing signal colour): here it becomes the default **washi-block tint**, so duration
 blocks echo the chapter's accent.
+
+**Monthly (calendar) chapters colour themselves by the month.** A chapter carrying a `month`
+(1–12) in its `.folder.json` derives its 5 default inks from that month's palette
+(`monthlyInks` — 12 distinct per-month sets, confirmed 2026-07-10) and **skips the
+palette-character picker entirely**; `read_page`'s `underlay` already reflects it, so you don't
+pass anything. A per-call `harmony`/preset/`accent` still overrides, same as any chapter.
 
 **Themes are defaults, not a lock — any color is yours.** Override a banner's color with a
 region's `labelFill` (region title) or a heading line's `fill` (sub-section), and body text

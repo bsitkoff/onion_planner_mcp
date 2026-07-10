@@ -73,7 +73,7 @@ to exercise the MCP transport itself.
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
 | `src/svg.ts` | Compose `ai.svg` from structured region input (text lines, `calendar` grid, `<image>` placement); `imageDims` header parse; the default (no-theme) underlay palette (a chapter's own resolved ink palette, gold retired); per-region font/size/weight defaults; theme resolution (named presets + adaptive `{harmony,varietyDial,fontPersonality}` param block → `Theme`). |
-| `src/color.ts` | Pure colour helpers (hex↔HSL) + `harmony` palette derivation from the template's sampled colours, with a lightness floor on derived text so it reads on cream. No deps. |
+| `src/color.ts` | Pure colour helpers (hex↔HSL, hex↔OKLab) + `harmony` palette derivation from the template's sampled colours, with a lightness floor on derived text so it reads on cream. The underlay lift (`liftForUnderlay = 0.14`) steps **OKLCH lightness** (perceptual); `monthlyInks` holds the 12 confirmed per-month palettes. No deps. |
 | `src/page.ts` | Read a page, **atomic** ai.svg + `media/ai/` image writes (`resolveImages`/`gcOrphanMedia`), manifest status flips, `create_page`. |
 
 The 10 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`, `read_ink`,
@@ -82,7 +82,8 @@ The 10 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`, 
 `clear_underlay`, `create_page`, and `set_chapter_theme` — which writes only the chapter's
 `.folder.json → theme` block); `read_ink` is read-only (the user's handwriting layer — read it before composing
 so you place AI content *around* a `shared` region's handwriting; bulky per-stroke `data-stroke`
-streams are stripped unless `includeStrokeData` is set) and `fetch_image` only writes a
+streams are stripped unless `includeStrokeData` is set; refuses when the chapter marks its ink
+private via `permissions.inkReadable: false`, reflection chapters private by default) and `fetch_image` only writes a
 validated download to the OS temp dir (HTTPS image → temp file, PNG/JPEG + 2MB check, optional `rembg`
 background removal), never the library. `write_underlay` is the workhorse (structured `regions` →
 composed `ai.svg`).

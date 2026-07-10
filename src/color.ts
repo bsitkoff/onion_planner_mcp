@@ -13,8 +13,9 @@
  *    contrast against `PAPER_COLOR` (`floorTextHex`/`floorAccentHex`, now real WCAG
  *    math via `contrastRatio`, replacing the old hand-tuned lightness bands).
  *  - **Rule 2 — pre-lightened underlay**: `liftForUnderlay` lifts an ink colour
- *    lighter by a fixed offset, clamped so the lift never drops contrast below the
- *    floor — one rule, two guarantees.
+ *    lighter by a fixed offset in **OKLCH lightness** (perceptual — confirmed
+ *    `liftForUnderlay = 0.14`, 2026-07-10), clamped so the lift never drops contrast
+ *    below the floor — one rule, two guarantees.
  *  - **Rule 3 — no reserved colours**: the underlay may use any colour from its
  *    derived (lightened) palette.
  *
@@ -32,12 +33,15 @@ export const STICKER_PALETTE = ["#D8638C", "#E2825E", "#8FA98A", "#88B0D4", "#A9
 
 /**
  * A named starting point for a chapter's 5 derived ink colours — mirrors the app's
- * `PaletteCharacter` (`Onionskin/DesignSystem/InkPalette.swift`). THESE NAMES AND
- * HEXES ARE A DESIGN PROPOSAL (design/INK-PALETTE.md) — confirm with Bridget before
- * treating as final; kept in sync by hand with the Swift catalogue for now.
+ * `PaletteCharacter` (`Onionskin/DesignSystem/InkPalette.swift`). These six characters
+ * + 30 ink hexes are **confirmed shipping tokens** (signed off 2026-07-10); kept in
+ * sync by hand with the Swift catalogue. See design/INK-PALETTE.md.
  */
 export const PALETTE_CHARACTERS: Record<string, string[]> = {
-  sunbaked: ["#B0492E", "#C4623F", "#8F6A16", "#A8506A", "#6F4A33"],
+  // Sunbaked's 5th ink is mahogany #6E3320 (confirmed 2026-07-10) — was umber
+  // #6F4A33, which duplicated Field notes; mahogany gives the warm set a deeper
+  // anchor (~9.7:1 on paper) and dedupes.
+  sunbaked: ["#B0492E", "#C4623F", "#8F6A16", "#A8506A", "#6E3320"],
   tidewater: ["#4A6FA5", "#2E7C82", "#4E5F82", "#2F6E57", "#45508C"],
   fieldNotes: ["#6B761F", "#4F7A4A", "#9A5A32", "#8A6A1E", "#6F4A33"],
   orchard: ["#7A3F73", "#93304C", "#226E6A", "#2F7A4E", "#6E4A8C"],
@@ -54,20 +58,40 @@ export function resolvePaletteCharacterInks(id: string | undefined): string[] {
 }
 
 /**
- * Monthly/seasonal ink derivation (mirrors the app's `MonthlyInkHarmony`) — 5 ink
- * hexes from a seasonal anchor hue + four companions spaced around the wheel.
+ * The 12 monthly ink palettes (confirmed 2026-07-10) — 5 AA-on-paper inks per month,
+ * **distinct per month** (not 4 seasonal sets shared by lookup), so adjacent months
+ * drift. Each month's inks are steered *away* from that month's sticker-set dominant
+ * hues so handwriting/underlay never blends into a sticker, and carry no black/muddy
+ * near-neutrals — saturated colours that show up on cream. A monthly (calendar)
+ * chapter derives its 5 inks from here and **skips the palette-character picker**;
+ * see `docs/AUTHORING.md` and the app's `design/INK-PALETTE.md`.
+ *
+ * Raw hexes are FILL seeds; any ink drawn as *text* still derives an auto-darkened
+ * on-paper variant (Rule 1) and the underlay lift (Rule 2) applies identically.
+ */
+const MONTHLY_INKS: Record<number, string[]> = {
+  1: ["#3E6FA0", "#2F6E57", "#5B5F9E", "#B23052", "#45508C"], // deep winter · cool
+  2: ["#B0325F", "#7A3F73", "#6A4F9E", "#45508C", "#2E7C82"], // valentine · warm-cool
+  3: ["#3E6FA0", "#2E7C82", "#7A3F73", "#8F6A16", "#BD5237"], // early spring · fresh
+  4: ["#4A6FA5", "#4F7A4A", "#B84E74", "#6A4F9E", "#C0533F"], // mid spring · bright
+  5: ["#B83A6A", "#6A4F9E", "#4F7A4A", "#4A6FA5", "#BD4032"], // late spring · floral
+  6: ["#2E6FA0", "#2E7C82", "#C0374F", "#2F7A4E", "#8F6A16"], // early summer · bright
+  7: ["#3E6FA0", "#1F7A6E", "#C0374F", "#B85221", "#7A3F73"], // high summer · hot
+  8: ["#2E6FA0", "#2E7C82", "#B0492E", "#7A3F73", "#45508C"], // late summer · sea
+  9: ["#A8442A", "#8A6A1E", "#4F7A4A", "#2E7C82", "#7A3F5E"], // early autumn · warm
+  10: ["#B0492E", "#8F6A16", "#4F7A4A", "#6E3A6E", "#2E7C82"], // deep autumn · spooky
+  11: ["#B0324A", "#B0492E", "#8F6A16", "#2F6E57", "#7A3F73"], // harvest · warm
+  12: ["#A8324C", "#285F4E", "#8F6A16", "#7A3F73", "#3E6FA0"], // holiday · festive
+};
+
+/**
+ * A monthly (calendar) chapter's 5 ink hexes for a given month (1–12) — the confirmed
+ * per-month palette. An out-of-range month wraps into 1–12 (defensive; callers pass a
+ * real `.folder.json → month`).
  */
 export function monthlyInks(month: number): string[] {
-  const base = seasonalAnchorHue(month);
-  return [0, 55, -55, 130, 190].map((offset) => hslToHex({ h: base + offset, s: 0.45, l: 0.34 }));
-}
-
-/** Northern-hemisphere season anchor hue — matches the app's `MonthlyInkHarmony`. */
-function seasonalAnchorHue(month: number): number {
-  if (month === 12 || month <= 2) return 212; // winter — icy blue
-  if (month <= 5) return 142; // spring — green
-  if (month <= 8) return 32; // summer — coral
-  return 22; // autumn — rust
+  const m = ((Math.trunc(month) - 1) % 12 + 12) % 12 + 1;
+  return MONTHLY_INKS[m];
 }
 
 // Legibility floors (lightness, 0–1) — retained ONLY for banner fills, which sit
@@ -151,6 +175,63 @@ function hexToHslLazy(): Hsl {
   return hexToHsl("#FFFEFB");
 }
 
+// MARK: - OKLab / OKLCH (perceptual lightness for the underlay lift, Rule 2)
+//
+// The underlay lift (`liftForUnderlay`) steps lightness in **OKLCH L**, not HSL:
+// HSL lightness isn't perceptually uniform, so a fixed HSL step lifts yellow inks far
+// more than blue and the darkness ladder looks inconsistent per ink. OKLab keeps "one
+// step lighter" visually equal across all inks (confirmed 2026-07-10 — `liftForUnderlay
+// = 0.14` in OKLCH L). Only the L axis is touched, so OKLab and OKLCH are the same here.
+// Björn Ottosson's sRGB↔OKLab, self-contained (no deps).
+
+/** sRGB channel (0–1, gamma) → linear-light. */
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+/** Linear-light channel → sRGB (0–1, gamma). */
+function linearToSrgb(c: number): number {
+  return c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+}
+
+/** `#rrggbb`/`#rgb` → OKLab `{ L, a, b }` (L is 0–1 perceptual lightness). */
+export function hexToOklab(hex: string): { L: number; a: number; b: number } {
+  // Reuse hexToHsl's parsing indirectly via hslToHex round-trip? No — parse directly.
+  const m = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!m) throw new Error(`not a hex colour: "${hex}"`);
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const r = srgbToLinear(parseInt(h.slice(0, 2), 16) / 255);
+  const g = srgbToLinear(parseInt(h.slice(2, 4), 16) / 255);
+  const b = srgbToLinear(parseInt(h.slice(4, 6), 16) / 255);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m_ = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return {
+    L: 0.2104542553 * l + 0.793617785 * m_ - 0.0040720468 * s,
+    a: 1.9779984951 * l - 2.428592205 * m_ + 0.4505937099 * s,
+    b: 0.0259040371 * l + 0.7827717662 * m_ - 0.808675766 * s,
+  };
+}
+
+/** OKLab `{ L, a, b }` → `#rrggbb` (sRGB channels clamped to gamut). */
+export function oklabToHex({ L, a, b }: { L: number; a: number; b: number }): string {
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = L - 0.0894841775 * a - 1.291485548 * b;
+  const l = l_ * l_ * l_;
+  const m = m_ * m_ * m_;
+  const s = s_ * s_ * s_;
+  const lr = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+  const lg = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+  const lb = -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s;
+  const to = (lin: number) =>
+    Math.round(clamp01(linearToSrgb(lin)) * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${to(lr)}${to(lg)}${to(lb)}`;
+}
+
 /** WCAG relative luminance (0 black … 1 white) from HSL via its RGB. */
 function relativeLuminance(hsl: Hsl): number {
   const hex = hslToHex(hsl);
@@ -196,34 +277,40 @@ function floorForContrast(hsl: Hsl): Hsl {
 }
 
 /**
- * Rule 2 — lift a colour lighter by `offset` (HSL lightness), but stop early — never
- * reaching the full offset — if going further would drop contrast against paper below
- * `CONTRAST_FLOOR`. The floor always wins over the offset: one rule, two guarantees
- * (the underlay is always lighter than the matching ink colour, and always readable).
+ * Rule 2 — lift a colour lighter by `offset` in **OKLCH lightness** (perceptual, so
+ * "one step lighter" reads visually equal across every ink — confirmed 2026-07-10),
+ * but stop early — never reaching the full offset — if going further would drop
+ * contrast against paper below `CONTRAST_FLOOR`. The floor always wins over the offset:
+ * one rule, two guarantees (the underlay is always lighter than the matching ink
+ * colour, and always readable). Applies to underlay text / line marks — the middle
+ * rung of the darkness ladder; the washi/wash tier is lightened separately.
  *
- * Defensively re-floors the input first (Rule 1) rather than assuming the caller
- * already guaranteed it: a palette-character hex is a design proposal, not a verified
- * token, and a couple of proposed inks (Sunbaked's coral, Highlighter's tangerine)
- * don't themselves clear 4.5:1 on paper — this makes the rule hold regardless.
+ * Defensively re-floors the input first (Rule 1, in HSL) rather than assuming the
+ * caller already guaranteed it: a couple of the ink tokens (Sunbaked's coral,
+ * Highlighter's tangerine) don't themselves clear 4.5:1 on paper — flooring first
+ * makes the rule hold regardless. An ink already sitting at the lightest AA-legal
+ * value collapses the
+ * underlay onto the floor (no lift) — accepted per the 2026-07-10 sign-off.
  *
- * `offset` (default 0.14) is a PROPOSED default (design/INK-PALETTE.md) — flag as TBD,
- * not a final token, when surfacing this to Bridget.
+ * `offset` is the OKLCH-L pre-lighten amount; the confirmed default is 0.14.
  */
 export function liftForUnderlay(hex: string, offset = 0.14): string {
   const floored = floorForContrast(hexToHsl(hex));
-  const targetL = Math.min(1, floored.l + offset);
-  if (targetL <= floored.l) return hslToHex(floored);
-  let current = floored;
-  let l = floored.l;
-  const step = 0.01;
+  const flooredHex = hslToHex(floored);
+  const base = hexToOklab(flooredHex);
+  const targetL = Math.min(1, base.L + offset);
+  if (targetL <= base.L) return flooredHex;
+  let currentHex = flooredHex;
+  let l = base.L;
+  const step = 0.005;
   while (l < targetL) {
     const candidateL = Math.min(targetL, l + step);
-    const candidate = { ...floored, l: candidateL };
-    if (contrastRatio(candidate, PAPER_HSL) < CONTRAST_FLOOR) break;
-    current = candidate;
+    const candidateHex = oklabToHex({ ...base, L: candidateL });
+    if (contrastRatioHex(candidateHex, "#FFFEFB") < CONTRAST_FLOOR) break;
+    currentHex = candidateHex;
     l = candidateL;
   }
-  return hslToHex(current);
+  return currentHex;
 }
 
 /** The underlay palette (5 hexes) lifted from a chapter's resolved ink-character inks. */

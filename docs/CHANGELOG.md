@@ -7,6 +7,40 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Colour system confirmed — OKLCH lift, 12 monthly palettes, `inkReadable` — 2026-07-10
+
+Bridget's 2026-07-10 sign-off resolves the four items the 2026-07-09 work flagged as proposals
+(decision text: `handoff-color-system/color-decisions-confirmed.md`). Nothing here is a new
+feature — it turns proposals into shipping tokens and wires two idle paths.
+
+- **Pre-lighten offset is `liftForUnderlay = 0.14` in OKLCH lightness, not HSL.** HSL lightness
+  isn't perceptually uniform, so a fixed HSL step lifted yellow inks far more than blue and the
+  darkness ladder looked uneven per ink. `src/color.ts` gains self-contained sRGB↔OKLab helpers
+  (`hexToOklab`/`oklabToHex`, Ottosson's matrices) and `liftForUnderlay` now steps the OKLab L
+  axis, still clamped at the ≥4.5:1 contrast floor (the clamp wins — a near-floor ink collapses
+  onto the floor, accepted per sign-off). The WCAG floor + Rule 1 darkening stay in sRGB/HSL.
+- **Sunbaked's 5th ink is mahogany `#6E3320`** (was umber `#6F4A33`, which duplicated Field
+  notes) — a deeper warm anchor (~9.7:1 on paper), dedupes. The rest of the six characters + 30
+  ink hexes are unchanged and now **shipping tokens**, not a proposal.
+- **`monthlyInks` wired — 12 distinct per-month palettes.** Replaces the old 4-season algorithmic
+  formula with the confirmed table (each month steered off its sticker set, no black/muddy
+  near-neutrals, all AA on paper). A **calendar chapter** (carrying `month` in its `.folder.json`)
+  now derives its 5 default inks from `monthlyInks[month]` and **skips the palette-character
+  picker** (`ThemeInput.monthlyMonth`, set by `resolveThemeInput`; outranks `paletteCharacter` on
+  the default path). `read_page`'s `underlay` reflects it automatically.
+- **`read_ink` honours `permissions.inkReadable`.** A `permissions` block (sibling to `theme`)
+  on the chapter `.folder.json` gates ink reads: explicit value wins; absent, it resolves from
+  chapter type (**monthly → readable, reflection → private, everything else → readable**).
+  `readInk` refuses when false with a clear message; writing the underlay stays ungated. The
+  everything-else fallback is the MCP's stand-in for the app's global new-chapter default (which
+  it can't see) — the one remaining NEEDS-CONFIRM. `resolvePageRel`'s Shared/ guard is untouched
+  (retires with the app's gate in the same release, #13).
+- Docs: `SHARED-VISUAL-SPEC.md` §0 (OKLCH lift + monthly derivation), `AUTHORING.md` (monthly
+  self-colouring + the `read_ink` refusal), `MCP-INTEGRATION.md` (the confirmed `inkReadable`
+  key), `ROADMAP.md` (proposals → confirmed).
+
+Smoke 311 checks, all passing · tsc clean.
+
 ## `read_page` exposes each region's printed text — 2026-07-09
 
 Closes [#9](https://github.com/bsitkoff/onion_planner_mcp/issues/9). An orchestrator had no
@@ -122,6 +156,9 @@ fixed seed anywhere — no `GOLD` constant, no gold preset colour, no gold fallb
 (`liftForUnderlay`), the six palette-character ids + 30 ink hexes (hand-mirrored from the
 app worktree's `InkPalette.swift`), the monthly-ink formula (`monthlyInks`, exported but
 unwired), and the ink-read toggle's `FORMAT.md` key name (undecided app-side).
+*(All four confirmed 2026-07-10 — see the entry at the top of this file. The offset is
+now OKLCH `0.14`, the hexes are shipping tokens, `monthlyInks` is wired to 12 monthly
+palettes, and the toggle is `permissions.inkReadable`.)*
 
 Smoke 279 checks, all passing · tsc clean.
 

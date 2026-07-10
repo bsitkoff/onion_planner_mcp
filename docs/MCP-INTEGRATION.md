@@ -19,11 +19,14 @@ write)** → `stickers.svg` (pink — the user's) → `ink.svg` (blue — the us
 handwriting). Your entire job is: **write `ai.svg` in a shared page, then mark it ready.**
 That's the whole "connection."
 
-**Permission model (2026-07-09 decisions):** the AI underlay is **not a privacy surface** —
-*writing* `ai.svg` needs no permission gating. The only gated operation is *reading the
-user's ink layer* (`read_ink`), which will be governed by the app's **per-chapter ink-read
-toggle** once it ships (the toggle's `FORMAT.md` key name is still TBD app-side; until then
-`read_ink` works everywhere under `Shared/`). The old location-based gate — "`Shared/` is
+**Permission model (2026-07-09 decisions; ink-read toggle confirmed 2026-07-10):** the AI
+underlay is **not a privacy surface** — *writing* `ai.svg` needs no permission gating. The only
+gated operation is *reading the user's ink layer* (`read_ink`), governed by the chapter's
+**`permissions.inkReadable`** boolean (a `permissions` block sibling to `theme` in the chapter
+`.folder.json`). `read_ink` refuses when it resolves false: an explicit value always wins;
+absent, it resolves from the chapter type — **monthly → readable, reflection → private,
+everything else → readable** (the last is the MCP's assumption for the app's global new-chapter
+default, which it can't see). The old location-based gate — "`Shared/` is
 readable/writable, everything else is private" — is retiring **app-side**, but the server's
 `resolvePageRel` guard still enforces `Shared/` containment today: dropping it is a
 same-release change coupled to the app shipping the gate retirement

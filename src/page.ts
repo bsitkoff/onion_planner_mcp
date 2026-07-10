@@ -68,19 +68,66 @@ export interface ChapterTheme {
 }
 
 /**
+ * The chapter-level `.folder.json` fields this server consumes, read leniently from a
+ * page's parent folder. All optional — the contract says an absent/garbled folder file
+ * degrades gracefully. `month` marks a **calendar chapter** (FORMAT.md §4); `permissions`
+ * gates `read_ink` (`inkReadable`); `defaultTemplate` helps type-detect a reflection
+ * chapter when no explicit permission is set.
+ */
+interface ChapterConfig {
+  theme: ChapterTheme | null;
+  /** 1–12 when this is a calendar chapter; undefined otherwise. */
+  month?: number;
+  /** `permissions.inkReadable` — whether `read_ink` may read the user's handwriting. */
+  inkReadable?: boolean;
+  defaultTemplate?: string;
+}
+
+/** Read + parse a page's parent `.folder.json` into the fields we consume (all lenient). */
+async function readChapterConfig(pageAbs: string): Promise<ChapterConfig> {
+  const raw = await readIfExists(path.join(path.dirname(pageAbs), ".folder.json"));
+  if (!raw) return { theme: null };
+  try {
+    const f = JSON.parse(raw) as Record<string, unknown>;
+    const theme = f.theme && typeof f.theme === "object" ? (f.theme as ChapterTheme) : null;
+    const month = typeof f.month === "number" && f.month >= 1 && f.month <= 12 ? f.month : undefined;
+    const perms =
+      f.permissions && typeof f.permissions === "object"
+        ? (f.permissions as Record<string, unknown>)
+        : undefined;
+    const inkReadable = typeof perms?.inkReadable === "boolean" ? perms.inkReadable : undefined;
+    const defaultTemplate = typeof f.defaultTemplate === "string" ? f.defaultTemplate : undefined;
+    return { theme, month, inkReadable, defaultTemplate };
+  } catch {
+    return { theme: null };
+  }
+}
+
+/**
+ * Whether `read_ink` may read this page's handwriting (confirmed 2026-07-10). An
+ * explicit `permissions.inkReadable` on the chapter always wins; absent, it resolves
+ * from the chapter *type*: a monthly (calendar) chapter → readable; a reflection
+ * chapter (its own or the chapter's default template names "reflection") → private;
+ * everything else → the user's global new-chapter default, which the MCP can't see, so
+ * it assumes **readable** (the daily-underlay workflow depends on reading ink to place
+ * AI content around handwriting). Writing the underlay is never gated — the AI layer
+ * isn't a privacy surface. NEEDS-CONFIRM: the everything-else fallback.
+ */
+function resolveInkReadable(config: ChapterConfig, manifest: Manifest): boolean {
+  if (config.inkReadable !== undefined) return config.inkReadable;
+  if (config.month !== undefined) return true; // monthly → readable
+  const templateHint = `${manifest.template ?? ""} ${config.defaultTemplate ?? ""}`;
+  if (/reflection/i.test(templateHint)) return false; // reflection → private
+  return true; // global new-chapter default (unseen by the MCP) — assume readable
+}
+
+/**
  * Read a page's chapter theme from the parent folder's `.folder.json → theme`.
  * Returns null when there's no folder file, no theme block, or it's unreadable —
  * the contract says an absent/garbled theme degrades gracefully to the default.
  */
 async function readChapterTheme(pageAbs: string): Promise<ChapterTheme | null> {
-  const raw = await readIfExists(path.join(path.dirname(pageAbs), ".folder.json"));
-  if (!raw) return null;
-  try {
-    const t = JSON.parse(raw)?.theme;
-    return t && typeof t === "object" ? (t as ChapterTheme) : null;
-  } catch {
-    return null;
-  }
+  return (await readChapterConfig(pageAbs)).theme;
 }
 
 /**
@@ -132,7 +179,9 @@ async function resolveThemeInput(
     fontPersonality?: ChapterTheme["fontPersonality"];
   },
 ): Promise<ThemeInput> {
-  const chapter = await readChapterTheme(pageAbs);
+  const config = await readChapterConfig(pageAbs);
+  const chapter = config.theme;
+  const monthlyMonth = config.month;
   const templatePalette = templateSvg ? inspectTemplate(templateSvg).palette : undefined;
   const callAdaptive =
     opts.harmony !== undefined ||
@@ -144,16 +193,19 @@ async function resolveThemeInput(
       fontPersonality: chapter?.fontPersonality,
       accent: chapter?.accent,
       paletteCharacter: chapter?.paletteCharacter,
+      monthlyMonth,
       customInk1: chapter?.customInk1,
       customInk2: chapter?.customInk2,
       chromeAccent: chapter?.chromeAccent,
       templatePalette,
     };
   }
-  // A chapter's `paletteCharacter` IS its colour identity, so it beats the chapter's
-  // own `harmony`/`varietyDial` (which derive from the template's colours instead) —
-  // but a *per-call* adaptive param is an explicit override and always forwards.
-  const chapterAdaptive = chapter?.paletteCharacter ? undefined : chapter;
+  // A chapter's `paletteCharacter` (or, for a calendar chapter, its month) IS its
+  // colour identity, so it beats the chapter's own `harmony`/`varietyDial` (which
+  // derive from the template's colours instead) — but a *per-call* adaptive param is an
+  // explicit override and always forwards.
+  const chapterAdaptive =
+    chapter?.paletteCharacter || monthlyMonth !== undefined ? undefined : chapter;
   return {
     name: opts.theme,
     harmony: opts.harmony ?? chapterAdaptive?.harmony,
@@ -161,6 +213,7 @@ async function resolveThemeInput(
     fontPersonality: opts.fontPersonality ?? chapter?.fontPersonality,
     accent: chapter?.accent,
     paletteCharacter: chapter?.paletteCharacter,
+    monthlyMonth,
     customInk1: chapter?.customInk1,
     customInk2: chapter?.customInk2,
     chromeAccent: chapter?.chromeAccent,
@@ -820,7 +873,15 @@ export async function readInk(
   includeStrokeData = false,
 ): Promise<{ page: string; inkSvg: string | null }> {
   const abs = resolvePageRel(root, rel);
-  await readJson<Manifest>(path.join(abs, "manifest.json")); // confirms it's a real page
+  const manifest = await readJson<Manifest>(path.join(abs, "manifest.json")); // confirms it's a real page
+  const config = await readChapterConfig(abs);
+  if (!resolveInkReadable(config, manifest)) {
+    throw new Error(
+      `read_ink refused: this chapter's ink is private ` +
+        `(permissions.inkReadable = false in its .folder.json). The AI may still write the ` +
+        `underlay (ungated) — it just can't read the user's handwriting here.`,
+    );
+  }
   let inkSvg = await readIfExists(path.join(abs, "ink.svg"));
   if (inkSvg && !includeStrokeData) {
     inkSvg = inkSvg.replace(/\s+data-stroke="[^"]*"/g, "");

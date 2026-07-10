@@ -70,15 +70,17 @@ nightly/morning runs:
    run can *see* what it wrote (every recent failure a human caught by eye would have been
    visible); day-end wants the same composite for ink cross-checks. Rasterizer-dependency
    decision lives in the issue. [#7](https://github.com/bsitkoff/onion_planner_mcp/issues/7)
-2. **Server-side image downscale / fit-to-region sizing** — absorb the "resize it yourself
-   with Python" chore the same way the server absorbed background knockout; `fit: "region"`
-   ends hand-computed widths. [#8](https://github.com/bsitkoff/onion_planner_mcp/issues/8)
-3. **Expose the template's printed text via `read_page`** — so an orchestrator can see that
+2. **Expose the template's printed text via `read_page`** — so an orchestrator can see that
    the template already prints the date/labels instead of memorizing "don't double-write the
    date" in skill prose. [#9](https://github.com/bsitkoff/onion_planner_mcp/issues/9)
-4. **Region recommended-image-size signal** — replace the 35%-of-box heuristic behind
+3. **Region recommended-image-size signal** — replace the 35%-of-box heuristic behind
    `image_small_for_region` with a declared floor (template `data-*` key or per-intent
    default). [#10](https://github.com/bsitkoff/onion_planner_mcp/issues/10)
+
+**Shipped 2026-07-09:** server-side image downscale / fit-to-region sizing —
+`images[].fit:"region"` ends hand-computed widths, `images[].maxDimension` downscales an
+over-large PNG instead of throwing — [#8](https://github.com/bsitkoff/onion_planner_mcp/issues/8);
+see `CHANGELOG.md`.
 
 ## Planned — blocked on the app
 

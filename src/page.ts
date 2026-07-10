@@ -27,7 +27,7 @@ import {
   type ThemeInput,
   type WarningDetail,
 } from "./svg.js";
-import { decodePng, encodePng, chromaKeyPixels } from "./png.js";
+import { decodePng, encodePng, chromaKeyPixels, resampleToMaxDimension } from "./png.js";
 
 /**
  * The underlay-relevant slice of a chapter's `.folder.json → theme` (the app's
@@ -475,15 +475,20 @@ export interface ResolveImagesDeps {
  * Decode, validate, size, and (unless dryRun) write each region's images into the
  * page's `media/ai/` folder, mutating each `ImageInput` in place with its resolved
  * `href`/`width`/`height` so `composeAiSvg` can reference it. Returns soft warnings.
+ * `geometry` (the template's parsed regions) resolves `fit: "region"` sizing —
+ * looked up by name, since `RegionInput` (the caller's write_underlay payload)
+ * carries no box geometry of its own.
  */
 async function resolveImages(
   pageAbs: string,
   regions: RegionInput[],
+  geometry: Region[],
   dryRun: boolean,
   deps: ResolveImagesDeps = {},
 ): Promise<{ warnings: string[]; warningDetails: WarningDetail[] }> {
   const warnings: string[] = [];
   const warningDetails: WarningDetail[] = [];
+  const geometryByName = new Map(geometry.map((r) => [r.name, r]));
   const mediaAiAbs = path.join(pageAbs, MEDIA_AI);
   // Filenames already claimed in THIS write (file → content sha) — two different
   // images sharing a `name` must not silently overwrite each other.
@@ -493,7 +498,14 @@ async function resolveImages(
       if ((img.data === undefined) === (img.path === undefined)) {
         throw new Error(`image in region "${region.region}" needs exactly one of \`data\` (base64) or \`path\`.`);
       }
-      if (img.width === undefined || img.width <= 0) {
+      if (img.fit === "region") {
+        if (img.width !== undefined || img.height !== undefined) {
+          throw new Error(
+            `image in region "${region.region}": fit:"region" computes width/height from the ` +
+              "region's own box — don't also pass `width`/`height`.",
+          );
+        }
+      } else if (img.width === undefined || img.width <= 0) {
         throw new Error(`image in region "${region.region}" needs a positive \`width\`.`);
       }
       // Source the bytes: a local file (no base64 through context) or inline base64.
@@ -532,9 +544,63 @@ async function resolveImages(
             `("png" or "jpeg"), the bytes are neither.`,
         );
       }
-      const dims = imageDims(buf, format); // also validates the magic bytes
-      const width = img.width;
-      const height = img.height ?? Math.round((width * dims.height) / dims.width);
+      let dims = imageDims(buf, format); // also validates the magic bytes
+
+      // maxDimension: downscale instead of just warning/throwing. Only PNG can be
+      // decoded/re-encoded here (see png.ts's deliberately narrow scope) — a JPEG
+      // source over the limit still needs downscaling by hand.
+      if (img.maxDimension !== undefined && Math.max(dims.width, dims.height) > img.maxDimension) {
+        if (format !== "png") {
+          throw new Error(
+            `image in region "${region.region}": maxDimension downscale only supports PNG ` +
+              `sources today (got ${format}) — convert to PNG or downscale before sending.`,
+          );
+        }
+        const before = dims;
+        let decoded;
+        try {
+          decoded = decodePng(buf);
+        } catch (e) {
+          throw new Error(`image in region "${region.region}": ${(e as Error).message}`);
+        }
+        const resampled = resampleToMaxDimension(decoded, img.maxDimension);
+        buf = encodePng(resampled);
+        checkImageSize(buf, region.region, warnings, warningDetails);
+        dims = { width: resampled.width, height: resampled.height };
+        const message =
+          `region "${region.region}": image downscaled ${before.width}×${before.height} → ` +
+          `${dims.width}×${dims.height} (maxDimension ${img.maxDimension}).`;
+        warnings.push(message);
+        warningDetails.push({ code: "image_downscaled", severity: "info", region: region.region, message });
+      }
+
+      let width: number;
+      let height: number;
+      if (img.fit === "region") {
+        const geo = geometryByName.get(region.region);
+        if (!geo || geo.width === null || geo.height === null) {
+          throw new Error(
+            `image in region "${region.region}": fit:"region" needs a region with a known box ` +
+              `— no box geometry found for "${region.region}".`,
+          );
+        }
+        const margin = img.margin ?? 8;
+        const boxW = geo.width - margin * 2;
+        const boxH = geo.height - margin * 2;
+        if (boxW <= 0 || boxH <= 0) {
+          throw new Error(
+            `image in region "${region.region}": fit:"region" box is too small for margin ` +
+              `${margin} (region box is ${geo.width}×${geo.height}).`,
+          );
+        }
+        const scale = Math.min(boxW / dims.width, boxH / dims.height);
+        width = Math.round(dims.width * scale);
+        height = Math.round(dims.height * scale);
+      } else {
+        width = img.width!;
+        height = img.height ?? Math.round((width * dims.height) / dims.width);
+      }
+
       if (Math.max(dims.width, dims.height) > WARN_IMAGE_DIMENSION) {
         const message =
           `region "${region.region}": image is ${dims.width}×${dims.height}px — over the ` +
@@ -903,11 +969,12 @@ export async function writeUnderlay(
       warningDetails.push({ code: "raw_svg_large", severity: "warning", message });
     }
   } else if (opts.regions) {
-    // Resolve images first (writes media/ai/ files, fills each image's href) so the
-    // composed ai.svg never references a file that isn't on disk yet.
-    const imageResult = await resolveImages(abs, opts.regions, opts.dryRun ?? false, deps);
+    // Parse the template's geometry first — resolveImages needs it (fit: "region"
+    // sizing looks up each region's box by name) before it writes media/ai/ files
+    // and fills each image's href, ahead of composeAiSvg.
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
+    const imageResult = await resolveImages(abs, opts.regions, regions, opts.dryRun ?? false, deps);
     const size = pageSize(manifest, templateSvg);
     const themeInput = await resolveThemeInput(abs, templateSvg, opts);
     const composed = composeAiSvg(size, opts.regions, regions, themeInput, manifest.template);

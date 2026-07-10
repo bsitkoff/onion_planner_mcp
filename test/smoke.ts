@@ -1417,6 +1417,78 @@ async function main() {
   check("a source over 1536px warns (image_dimensions_large, info)",
     bigDims.warningDetails.some((w) => w.code === "image_dimensions_large" && w.severity === "info"), JSON.stringify(bigDims.warningDetails));
 
+  console.log("\nimages[].fit:\"region\" + maxDimension (server-computed sizing / downscale)");
+  // fit:"region" sizes the display box from the region's own geometry (aspect-preserving
+  // contain, inset by margin) — derive the expected size from parsed geometry, not a
+  // hard-coded box, so the fixtures' template dims can keep changing.
+  const imgPageRead = await readPage(root, imgPage);
+  const todoGeo = imgPageRead.regions.find((r) => r.name === "todo")!;
+  const fitMargin = 8;
+  const fitBoxW = todoGeo.width! - fitMargin * 2;
+  const fitBoxH = todoGeo.height! - fitMargin * 2;
+  const fitScale = Math.min(fitBoxW / 40, fitBoxH / 20);
+  const expectedFitW = Math.round(40 * fitScale);
+  const expectedFitH = Math.round(20 * fitScale);
+  const fitSrc = encodePng({ width: 40, height: 20, pixels: new Uint8Array(40 * 20 * 4).fill(180) });
+  const fitResult = await writeUnderlay(root, imgPage, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "todo", images: [{ data: fitSrc.toString("base64"), format: "png", name: "fit-test", fit: "region" }] }],
+  });
+  const fitImgTag = fitResult.aiSvg?.match(/<image href="media\/ai\/fit-test\.png"[^/]*\/>/)?.[0] ?? "";
+  check(
+    "fit:\"region\" computes width/height from the region's own box (aspect-preserving contain)",
+    new RegExp(`width="${expectedFitW}" height="${expectedFitH}"`).test(fitImgTag),
+    fitImgTag,
+  );
+  let fitWidthConflict = false;
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: fitSrc.toString("base64"), format: "png", name: "fit-conflict", fit: "region", width: 100 }] }],
+    });
+  } catch { fitWidthConflict = true; }
+  check("fit:\"region\" + an explicit width errors clearly (mutually exclusive)", fitWidthConflict);
+
+  // maxDimension re-encodes the source at the smaller size (not just a display-box resize) —
+  // a real 100×10 PNG downscaled to fit 20px.
+  const bigSrc = encodePng({ width: 100, height: 10, pixels: new Uint8Array(100 * 10 * 4).fill(90) });
+  await writeUnderlay(root, imgPage, {
+    status: "ready",
+    regions: [{ region: "todo", images: [{ data: bigSrc.toString("base64"), format: "png", name: "downscaled", width: 100, maxDimension: 20 }] }],
+  });
+  const downscaledFile = path.join(root, imgPage, "media", "ai", "downscaled.png");
+  const downscaledDecoded = decodePng(await fs.readFile(downscaledFile));
+  check(
+    "maxDimension re-encodes the source file itself at the smaller size (100×10 → 20×2)",
+    downscaledDecoded.width === 20 && downscaledDecoded.height === 2,
+    `${downscaledDecoded.width}x${downscaledDecoded.height}`,
+  );
+  const downscaledWrite = await writeUnderlay(root, imgPage, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "todo", images: [{ data: bigSrc.toString("base64"), format: "png", name: "downscaled", width: 100, maxDimension: 20 }] }],
+  });
+  check(
+    "maxDimension downscale surfaces an info warning",
+    downscaledWrite.warningDetails.some((w) => w.code === "image_downscaled" && w.severity === "info"),
+    JSON.stringify(downscaledWrite.warningDetails),
+  );
+
+  // A JPEG source over maxDimension can't be resampled (no JPEG decoder in png.ts) — a clear
+  // error, not a silent no-op. Minimal real SOF0 header: 100×100.
+  const jpegSOF = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x64, 0x00, 0x64, 0x01, 0x01, 0x11, 0x00]);
+  let jpegMaxDimErr = "";
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: jpegSOF.toString("base64"), format: "jpeg", name: "jpeg-big", width: 40, maxDimension: 50 }] }],
+    });
+  } catch (e: any) { jpegMaxDimErr = e.message; }
+  check(
+    "a JPEG over maxDimension errors clearly instead of silently skipping the downscale",
+    /maxDimension downscale only supports PNG/.test(jpegMaxDimErr),
+    jpegMaxDimErr,
+  );
+
   console.log("\nraw svg size guard");
   const hugeRaw = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,

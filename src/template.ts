@@ -101,7 +101,8 @@ export interface TemplateInfo {
   stickersPresent: boolean;
   /**
    * Non-neutral colours the template itself uses (hex, most-saturated first) — the
-   * palette to MATCH when filling a styled template, instead of defaulting to gold.
+   * palette to MATCH when filling a styled template, instead of defaulting to the
+   * chapter's own ink palette.
    */
   palette: string[];
   /**
@@ -136,10 +137,11 @@ function isNeutral(hex: string): boolean {
 
 /**
  * The app's shared canvas-paper colour, drawn beneath every page (design-system
- * `--paper-0` / Swift `Palette.swift paper0`) — a fixed cross-repo constant, same
- * role as `GOLD` in `svg.ts`. `paperColorOf`'s fallback when a template draws no
- * background of its own, which (as of the 2026-06 redesign catalogue) is every
- * shipped template — the app paints its own canvas surface instead.
+ * `--paper-0` / Swift `Palette.swift paper0`) — a fixed cross-repo constant, and the
+ * background every underlay-palette contrast check (`contrastRatio` in `color.ts`) is
+ * computed against. `paperColorOf`'s fallback when a template draws no background of
+ * its own, which (as of the 2026-06 redesign catalogue) is every shipped template —
+ * the app paints its own canvas surface instead.
  */
 export const PAPER_COLOR = "#FFFEFB";
 

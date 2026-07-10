@@ -16,6 +16,7 @@ import { readUnderlayVoice, type UnderlayVoice } from "./library.js";
 import {
   composeAiSvg,
   mergeRegions,
+  resolveTheme,
   emptySvg,
   imageDims,
   imageSizeFloor,
@@ -27,13 +28,14 @@ import {
   type ThemeInput,
   type WarningDetail,
 } from "./svg.js";
-import { decodePng, encodePng, chromaKeyPixels } from "./png.js";
+import { decodePng, encodePng, chromaKeyPixels, resampleToMaxDimension } from "./png.js";
 
 /**
  * The underlay-relevant slice of a chapter's `.folder.json → theme` (the app's
  * `FORMAT.md §4` contract). `chromeAccent` is the app's concern (chrome only); the
- * other three are the underlay-theme axis this server honours. All optional — an
- * absent block (or key) just means "fall back to the default" (gold / region fonts).
+ * rest are the underlay-theme axis this server honours. All optional — an absent
+ * block (or key) just means "fall back to the default" (the chapter's own resolved
+ * ink palette, lifted for the underlay — gold is retired, there's no fixed seed).
  */
 export interface ChapterTheme {
   chromeAccent?: string;
@@ -44,9 +46,25 @@ export interface ChapterTheme {
    * An explicit underlay accent (hex) the whole chapter inherits — tints body text /
    * markers / banners so a chapter can carry a colour the named presets don't (e.g.
    * lavender). Additive to the app's `FORMAT.md §4` theme keys; the server reads it
-   * defensively (absent ⇒ the gold/preset default). Written by `set_chapter_theme`.
+   * defensively (absent ⇒ the palette-character/preset default). Written by
+   * `set_chapter_theme`. Takes precedence over `paletteCharacter` when both are set.
    */
   accent?: string;
+  /**
+   * The chapter's ink-tray identity (design/INK-PALETTE.md) — one of
+   * `PALETTE_CHARACTERS`' keys, additive alongside the app's own theme keys. When no
+   * `accent`/`harmony`/preset `theme` overrides it, this is the default underlay
+   * palette source (lifted lighter, still legible) instead of a fixed seed colour.
+   */
+  paletteCharacter?: string;
+  /**
+   * Extra user ink slots (hex) appended to the character's 5-ink pool — the app's
+   * tray is 7 (5 derived + 2 custom). Additive `FORMAT.md §4` keys, read defensively.
+   */
+  customInk1?: string;
+  customInk2?: string;
+  /** Friendly chapter identity (e.g. "lavender to-dos") — advisory, surfaced only. */
+  displayName?: string;
 }
 
 /**
@@ -125,15 +143,26 @@ async function resolveThemeInput(
       name: opts.theme,
       fontPersonality: chapter?.fontPersonality,
       accent: chapter?.accent,
+      paletteCharacter: chapter?.paletteCharacter,
+      customInk1: chapter?.customInk1,
+      customInk2: chapter?.customInk2,
+      chromeAccent: chapter?.chromeAccent,
       templatePalette,
     };
   }
+  // A chapter's `paletteCharacter` IS its colour identity, so it beats the chapter's
+  // own `harmony`/`varietyDial` (which derive from the template's colours instead) —
+  // but a *per-call* adaptive param is an explicit override and always forwards.
+  const chapterAdaptive = chapter?.paletteCharacter ? undefined : chapter;
   return {
     name: opts.theme,
-    harmony: opts.harmony ?? chapter?.harmony,
-    varietyDial: opts.varietyDial ?? chapter?.varietyDial,
+    harmony: opts.harmony ?? chapterAdaptive?.harmony,
+    varietyDial: opts.varietyDial ?? chapterAdaptive?.varietyDial,
     fontPersonality: opts.fontPersonality ?? chapter?.fontPersonality,
     accent: chapter?.accent,
+    paletteCharacter: chapter?.paletteCharacter,
+    customInk1: chapter?.customInk1,
+    customInk2: chapter?.customInk2,
     chromeAccent: chapter?.chromeAccent,
     templatePalette,
   };
@@ -447,15 +476,20 @@ export interface ResolveImagesDeps {
  * Decode, validate, size, and (unless dryRun) write each region's images into the
  * page's `media/ai/` folder, mutating each `ImageInput` in place with its resolved
  * `href`/`width`/`height` so `composeAiSvg` can reference it. Returns soft warnings.
+ * `geometry` (the template's parsed regions) resolves `fit: "region"` sizing —
+ * looked up by name, since `RegionInput` (the caller's write_underlay payload)
+ * carries no box geometry of its own.
  */
 async function resolveImages(
   pageAbs: string,
   regions: RegionInput[],
+  geometry: Region[],
   dryRun: boolean,
   deps: ResolveImagesDeps = {},
 ): Promise<{ warnings: string[]; warningDetails: WarningDetail[] }> {
   const warnings: string[] = [];
   const warningDetails: WarningDetail[] = [];
+  const geometryByName = new Map(geometry.map((r) => [r.name, r]));
   const mediaAiAbs = path.join(pageAbs, MEDIA_AI);
   // Filenames already claimed in THIS write (file → content sha) — two different
   // images sharing a `name` must not silently overwrite each other.
@@ -465,7 +499,14 @@ async function resolveImages(
       if ((img.data === undefined) === (img.path === undefined)) {
         throw new Error(`image in region "${region.region}" needs exactly one of \`data\` (base64) or \`path\`.`);
       }
-      if (img.width === undefined || img.width <= 0) {
+      if (img.fit === "region") {
+        if (img.width !== undefined || img.height !== undefined) {
+          throw new Error(
+            `image in region "${region.region}": fit:"region" computes width/height from the ` +
+              "region's own box — don't also pass `width`/`height`.",
+          );
+        }
+      } else if (img.width === undefined || img.width <= 0) {
         throw new Error(`image in region "${region.region}" needs a positive \`width\`.`);
       }
       // Source the bytes: a local file (no base64 through context) or inline base64.
@@ -504,9 +545,63 @@ async function resolveImages(
             `("png" or "jpeg"), the bytes are neither.`,
         );
       }
-      const dims = imageDims(buf, format); // also validates the magic bytes
-      const width = img.width;
-      const height = img.height ?? Math.round((width * dims.height) / dims.width);
+      let dims = imageDims(buf, format); // also validates the magic bytes
+
+      // maxDimension: downscale instead of just warning/throwing. Only PNG can be
+      // decoded/re-encoded here (see png.ts's deliberately narrow scope) — a JPEG
+      // source over the limit still needs downscaling by hand.
+      if (img.maxDimension !== undefined && Math.max(dims.width, dims.height) > img.maxDimension) {
+        if (format !== "png") {
+          throw new Error(
+            `image in region "${region.region}": maxDimension downscale only supports PNG ` +
+              `sources today (got ${format}) — convert to PNG or downscale before sending.`,
+          );
+        }
+        const before = dims;
+        let decoded;
+        try {
+          decoded = decodePng(buf);
+        } catch (e) {
+          throw new Error(`image in region "${region.region}": ${(e as Error).message}`);
+        }
+        const resampled = resampleToMaxDimension(decoded, img.maxDimension);
+        buf = encodePng(resampled);
+        checkImageSize(buf, region.region, warnings, warningDetails);
+        dims = { width: resampled.width, height: resampled.height };
+        const message =
+          `region "${region.region}": image downscaled ${before.width}×${before.height} → ` +
+          `${dims.width}×${dims.height} (maxDimension ${img.maxDimension}).`;
+        warnings.push(message);
+        warningDetails.push({ code: "image_downscaled", severity: "info", region: region.region, message });
+      }
+
+      let width: number;
+      let height: number;
+      if (img.fit === "region") {
+        const geo = geometryByName.get(region.region);
+        if (!geo || geo.width === null || geo.height === null) {
+          throw new Error(
+            `image in region "${region.region}": fit:"region" needs a region with a known box ` +
+              `— no box geometry found for "${region.region}".`,
+          );
+        }
+        const margin = img.margin ?? 8;
+        const boxW = geo.width - margin * 2;
+        const boxH = geo.height - margin * 2;
+        if (boxW <= 0 || boxH <= 0) {
+          throw new Error(
+            `image in region "${region.region}": fit:"region" box is too small for margin ` +
+              `${margin} (region box is ${geo.width}×${geo.height}).`,
+          );
+        }
+        const scale = Math.min(boxW / dims.width, boxH / dims.height);
+        width = Math.round(dims.width * scale);
+        height = Math.round(dims.height * scale);
+      } else {
+        width = img.width!;
+        height = img.height ?? Math.round((width * dims.height) / dims.width);
+      }
+
       if (Math.max(dims.width, dims.height) > WARN_IMAGE_DIMENSION) {
         const message =
           `region "${region.region}": image is ${dims.width}×${dims.height}px — over the ` +
@@ -630,6 +725,21 @@ export interface PageRead {
    */
   theme: ChapterTheme | null;
   /**
+   * The **resolved** underlay palette a default (no per-call override) write will
+   * use — the chapter's theme run through the same `resolveThemeInput → resolveTheme`
+   * path `write_underlay` takes, so what's advertised here and what gets composed can
+   * never drift. Hexes are already lifted + contrast-floored; an orchestrator picking
+   * per-line `fill`s should pick from these.
+   */
+  underlay: {
+    text: string;
+    serif: string;
+    accent: string;
+    banners: string[];
+    headingStyle: "banner" | "underline";
+    washiTint?: string;
+  };
+  /**
    * The library's `settings.json → underlayVoice` (name/tone/notes), or null if
    * absent/garbled — personalizes the `ainotes` note's voice. Read-only; the server
    * never writes settings.json.
@@ -652,6 +762,16 @@ export async function readPage(
   const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
   const size = pageSize(manifest, templateSvg);
   const theme = await readChapterTheme(abs);
+  // The default-write palette, via the exact path write_underlay resolves with.
+  const resolved = resolveTheme(await resolveThemeInput(abs, templateSvg, {})).theme;
+  const underlay = {
+    text: resolved.text,
+    serif: resolved.serif,
+    accent: resolved.accent,
+    banners: resolved.banners,
+    headingStyle: resolved.headingStyle,
+    ...(resolved.washiTint ? { washiTint: resolved.washiTint } : {}),
+  };
   const underlayVoice = await readUnderlayVoice(root);
   // labelFilled: cross-reference each region's labelSlot geometry (template-only)
   // against what the current ai.svg actually drew for that region — geometry alone
@@ -680,6 +800,7 @@ export async function readPage(
           paperColor: PAPER_COLOR,
         },
     theme,
+    underlay,
     underlayVoice,
     ...(includeTemplate && templateSvg ? { templateSvg } : {}),
   };
@@ -859,11 +980,12 @@ export async function writeUnderlay(
       warningDetails.push({ code: "raw_svg_large", severity: "warning", message });
     }
   } else if (opts.regions) {
-    // Resolve images first (writes media/ai/ files, fills each image's href) so the
-    // composed ai.svg never references a file that isn't on disk yet.
-    const imageResult = await resolveImages(abs, opts.regions, opts.dryRun ?? false, deps);
+    // Parse the template's geometry first — resolveImages needs it (fit: "region"
+    // sizing looks up each region's box by name) before it writes media/ai/ files
+    // and fills each image's href, ahead of composeAiSvg.
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
+    const imageResult = await resolveImages(abs, opts.regions, regions, opts.dryRun ?? false, deps);
     const size = pageSize(manifest, templateSvg);
     const themeInput = await resolveThemeInput(abs, templateSvg, opts);
     const composed = composeAiSvg(size, opts.regions, regions, themeInput, manifest.template);

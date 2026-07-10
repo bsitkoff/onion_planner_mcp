@@ -14,11 +14,21 @@ are, what to write, and the rules.
 ## 1. The one-paragraph model
 
 Every page is a **folder**. A page composites four SVG layers in z-order:
-`template.svg` (graphite grid + addressable regions) → **`ai.svg` (gold — yours to
+`template.svg` (graphite grid + addressable regions) → **`ai.svg` (yours to
 write)** → `stickers.svg` (pink — the user's) → `ink.svg` (blue — the user's
-handwriting). **Permission is location:** a page under `Shared/` may be read and written
-by the user's AI; everything else is private. Your entire job is: **write `ai.svg` in a
-shared page, then mark it ready.** That's the whole "connection."
+handwriting). Your entire job is: **write `ai.svg` in a shared page, then mark it ready.**
+That's the whole "connection."
+
+**Permission model (2026-07-09 decisions):** the AI underlay is **not a privacy surface** —
+*writing* `ai.svg` needs no permission gating. The only gated operation is *reading the
+user's ink layer* (`read_ink`), which will be governed by the app's **per-chapter ink-read
+toggle** once it ships (the toggle's `FORMAT.md` key name is still TBD app-side; until then
+`read_ink` works everywhere under `Shared/`). The old location-based gate — "`Shared/` is
+readable/writable, everything else is private" — is retiring **app-side**, but the server's
+`resolvePageRel` guard still enforces `Shared/` containment today: dropping it is a
+same-release change coupled to the app shipping the gate retirement
+([#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)) — do not remove the guard
+unilaterally.
 
 ---
 
@@ -122,19 +132,21 @@ label + rule, with its items flowing below). Don't ask for a richer template; co
 richness into `ai.svg`.
 
 ### c. Write `ai.svg`
-Emit one self-contained SVG on the page's `viewBox`. Gold is `#9C7C1A` — the single canonical
-Onionskin gold (shared by the app chrome, this server, and the on-device composer; deepened for
-legibility on white paper). This is what the reference server emits by default. Group your
+Emit one self-contained SVG on the page's `viewBox`. Gold is retired — the default palette
+derives from the chapter's own `paletteCharacter` (or a calm blue-family default), lifted lighter
+than the user's ink and floored to a real ≥4.5:1 contrast on paper. This is what the reference
+server emits by default. Group your
 output by region so it's legible:
 
 ```xml
 <svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg">
   <g data-region="schedule">
-    <text x="86" y="284" font-family="Mulish" font-size="14" fill="#9C7C1A">04:00  pill alarm</text>
-    <text x="86" y="362" font-family="Mulish" font-size="14" fill="#9C7C1A">09:00  standup</text>
+    <!-- fills come from the chapter's derived palette (these are the blue-family default's) -->
+    <text x="86" y="284" font-family="Mulish" font-size="14" fill="#4f76b0">04:00  pill alarm</text>
+    <text x="86" y="362" font-family="Mulish" font-size="14" fill="#4f76b0">09:00  standup</text>
   </g>
   <g data-region="ainotes">
-    <text x="80" y="1204" font-family="Newsreader" font-size="26" fill="#9C7C1A">I am capable of embracing change.</text>
+    <text x="80" y="1204" font-family="Newsreader" font-size="26" fill="#2f8086">I am capable of embracing change.</text>
   </g>
 </svg>
 ```

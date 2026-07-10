@@ -2,19 +2,20 @@ import type { Region } from "./template.js";
 import {
   derivePalette,
   deriveAccentPalette,
+  derivePaletteFromInks,
+  resolvePaletteCharacterInks,
+  PALETTE_CHARACTERS,
   floorTextHex,
   floorAccentHex,
   type Harmony,
 } from "./color.js";
 
 /**
- * The single canonical Onionskin gold, per the contract — one value shared by the
- * app chrome, this MCP, and the on-device composer (deepened so it stays legible on
- * the cream page). One constant — retune here if the brand gold shifts. (`#7E5C12`,
- * the chrome's AA-tuned *text* gold, is deliberately NOT used in the underlay — the
- * locked contract emits one gold here; see `docs/SHARED-VISUAL-SPEC.md` §0.)
+ * Gold is retired (design decisions, 2026-07-09) — there is no fixed seed colour any
+ * more. The default underlay palette derives from the chapter's own resolved ink
+ * palette (`derivePaletteFromInks` — a palette character's inks, or a month's
+ * `monthlyInks`), lifted lighter per Rule 2; see `docs/SHARED-VISUAL-SPEC.md` §0/§6.
  */
-export const GOLD = "#9C7C1A";
 
 /**
  * The SVG elements the app's custom renderer handles (SwiftUI `Canvas` + `XMLParser`,
@@ -67,10 +68,10 @@ export interface ThemeFonts {
 }
 
 /**
- * A resolved page palette + fonts. Gold was only ever a *default*, not a constraint —
- * the app renderer honours any `fill`, so the AI layer can carry colour. A theme maps
- * the composer's colour roles; callers pick a named preset *or* the adaptive param
- * block (`harmony`/`varietyDial`/`fontPersonality`) via `write_underlay`.
+ * A resolved page palette + fonts — the app renderer honours any `fill`, so the AI
+ * layer can carry colour. A theme maps the composer's colour roles; callers pick a
+ * named preset, a chapter's `paletteCharacter`, an explicit `accent`, *or* the
+ * adaptive param block (`harmony`/`varietyDial`/`fontPersonality`) via `write_underlay`.
  *
  * - `text`/`serif`: body text (serif = the `ainotes` AI-voice region).
  * - `accent`: markers (checkbox/bullet), rules, calendar day numbers.
@@ -88,13 +89,18 @@ export interface Theme {
   banners: string[];
   headingStyle: "banner" | "underline";
   fonts?: ThemeFonts;
+  /**
+   * The chapter's `chromeAccent`, when set — the default tint for washi duration
+   * blocks (a fill that carries no text, so it stays the raw chapter hex; the
+   * translucent tape is the page's strongest echo of the chapter's accent colour).
+   */
+  washiTint?: string;
 }
 
 /**
  * Floor a preset's text/serif/accent to the same cream-legibility bounds the adaptive
- * palette derives under (the contract's AA rule applies to every path, not just the
- * derived one). Banners are untouched — they sit behind white pill text, a different
- * bound. The gold preset skips this: gold is the one canonical value, tuned by hand.
+ * palette derives under (Rule 1 applies to every path, not just the derived one).
+ * Banners are untouched — they sit behind white pill text, a different bound.
  */
 function legible(t: Theme): Theme {
   return {
@@ -105,12 +111,24 @@ function legible(t: Theme): Theme {
   };
 }
 
+/**
+ * The default theme — the chapter's own resolved ink palette (or, absent one, the
+ * default palette character), lifted for the underlay. Kept as a named "gold" preset
+ * ONLY for back-compat with existing `theme:"gold"` calls; it no longer emits a fixed
+ * colour (gold is retired) — resolving it dynamically means a bare `theme:"gold"` call
+ * still honours whatever palette character the chapter has set.
+ */
+function defaultTheme(inks?: string[]): Theme {
+  const p = derivePaletteFromInks(inks ?? resolvePaletteCharacterInks(undefined));
+  return {
+    text: p.text, serif: p.serif, accent: p.accent,
+    bannerText: "#FFFFFF", banners: p.banners, headingStyle: "underline",
+  };
+}
+
 export const THEMES: Record<string, Theme> = {
-  // The legacy monochrome default — unchanged output when no theme is chosen.
-  gold: {
-    text: GOLD, serif: GOLD, accent: GOLD,
-    bannerText: "#FFFFFF", banners: [GOLD], headingStyle: "underline",
-  },
+  // Back-compat name only — no longer a fixed colour. See `defaultTheme`.
+  gold: defaultTheme(),
   // Lively, saturated — closest to a colourful planner spread.
   bright: legible({
     text: "#3A3A3A", serif: "#8E6FC9", accent: "#E86A92",
@@ -120,7 +138,7 @@ export const THEMES: Record<string, Theme> = {
   // Softer, hand-painted warmth.
   cozy: legible({
     text: "#4A4A4A", serif: "#7E5A78", accent: "#C56B6B",
-    bannerText: "#FFFFFF", banners: ["#C56B6B", "#7C8A5A", "#9C7C1A", "#7E5A78"],
+    bannerText: "#FFFFFF", banners: ["#C56B6B", "#7C8A5A", "#8F6A16", "#7E5A78"],
     headingStyle: "banner",
   }),
   // Restrained — one or two accents, quiet labels, lots of whitespace.
@@ -170,7 +188,20 @@ export interface ThemeInput {
    * given (harmony/preset win); floored dark for cream via `deriveAccentPalette`.
    */
   accent?: string;
-  /** App-only chrome accent; accepted for contract-completeness, not used here. */
+  /**
+   * The chapter's ink-tray identity (design/INK-PALETTE.md) — one of
+   * `PALETTE_CHARACTERS`' keys. The default underlay palette source when no
+   * `harmony`/`accent`/preset `name` is given: gold is retired, so an otherwise-bare
+   * page derives from the chapter's own ink colours (lifted lighter) instead.
+   */
+  paletteCharacter?: string;
+  /** Extra user ink slots (hex) appended to the character's 5-ink pool (app tray = 7). */
+  customInk1?: string;
+  customInk2?: string;
+  /**
+   * The chapter's accent (also the app's live/refreshing signal colour) — becomes
+   * `Theme.washiTint`, the default duration-block tint, on every resolution path.
+   */
   chromeAccent?: string;
   /** Current month (1–12) for `seasonal` harmony; defaults to the real month. */
   month?: number;
@@ -180,7 +211,7 @@ export interface ThemeInput {
  * True when the input asks for an adaptive (harmony-derived) *colour* palette. Only
  * the colour knobs (`harmony`/`varietyDial`) trigger this — `fontPersonality` is a
  * font axis (layered on any palette below) and the always-sampled `templatePalette`
- * is mere context, so neither one alone flips a default-gold page into a derived one.
+ * is mere context, so neither one alone flips a default page into a derived one.
  */
 function isAdaptive(t: ThemeInput): boolean {
   return t.harmony !== undefined || t.varietyDial !== undefined;
@@ -195,9 +226,11 @@ export interface ResolvedTheme {
 /**
  * Resolve a theme. Precedence: an **adaptive** param block (`harmony` and/or
  * `varietyDial` — see `isAdaptive`) derives a palette from the template's colours;
- * otherwise a named **preset**; otherwise a chapter `accent`; otherwise the gold
- * default. `fontPersonality` always layers its fonts on top of whichever palette
- * path is taken (it never selects one). A string is a bare preset name (back-compat).
+ * otherwise a named **preset**; otherwise a chapter `accent`; otherwise the chapter's
+ * own `paletteCharacter`; otherwise the default palette character (gold is retired —
+ * there is no fixed seed colour at the end of this chain any more).
+ * `fontPersonality` always layers its fonts on top of whichever palette path is taken
+ * (it never selects one). A string is a bare preset name (back-compat).
  */
 export function resolveTheme(input?: ThemeInput | string): ResolvedTheme {
   const t: ThemeInput = typeof input === "string" ? { name: input } : input ?? {};
@@ -240,17 +273,53 @@ export function resolveTheme(input?: ThemeInput | string): ResolvedTheme {
         headingStyle: "underline",
       };
     } catch {
-      warnings.push(`theme: accent "${t.accent}" is not a hex colour — used the gold default.`);
-      theme = THEMES.gold;
+      warnings.push(`theme: accent "${t.accent}" is not a hex colour — used the default palette.`);
+      theme = defaultTheme();
     }
   } else {
-    theme = THEMES.gold;
+    // No override at all — the chapter's own ink-tray identity (or the default
+    // palette character if unset), lifted for the underlay. Custom ink slots append
+    // to the pool (the app's tray = 5 derived + 2 custom), they never replace slots.
+    if (t.paletteCharacter && !PALETTE_CHARACTERS[t.paletteCharacter]) {
+      warnings.push(
+        `theme: unknown paletteCharacter "${t.paletteCharacter}" — used the default ` +
+          `character (known: ${Object.keys(PALETTE_CHARACTERS).join(", ")}).`,
+      );
+    }
+    const inks = [...resolvePaletteCharacterInks(t.paletteCharacter)];
+    for (const custom of [t.customInk1, t.customInk2]) {
+      if (custom === undefined) continue;
+      if (isHexColour(custom)) inks.push(custom);
+      else warnings.push(`theme: custom ink "${custom}" is not a hex colour — ignored.`);
+    }
+    theme = defaultTheme(inks);
   }
 
+  if (t.chromeAccent !== undefined) {
+    // The washi tint is a no-text fill, so the chapter accent rides through raw
+    // (Rule 1's auto-darkening is for text); it layers on every palette path.
+    if (isHexColour(t.chromeAccent)) theme = { ...theme, washiTint: t.chromeAccent };
+    else warnings.push(`theme: chromeAccent "${t.chromeAccent}" is not a hex colour — ignored.`);
+  }
   if (t.fontPersonality) {
     theme = { ...theme, fonts: FONT_PERSONALITIES[t.fontPersonality] };
   }
   return { theme, warnings };
+}
+
+/** Loose hex check (`#rgb`/`#rrggbb`) — mirrors `hexToHsl`'s accepted forms. */
+function isHexColour(s: string): boolean {
+  return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s.trim());
+}
+
+/**
+ * Rule 1 applied to a caller-supplied colour that will be drawn as TEXT: auto-darken
+ * to the contrast floor. Only text fills go through this — a raw hex stays raw on
+ * fills that carry no text (washi tint, banner pills, markers/icons). A non-hex
+ * value passes through untouched (same as before — the renderer decides).
+ */
+function floorTextFill(c: string): string {
+  return isHexColour(c) ? floorTextHex(c) : c;
 }
 
 /** Font family for a region's lines, honouring a `fontPersonality` override if set. */
@@ -264,7 +333,7 @@ function themeFontFor(theme: Theme, regionName: string, heading: boolean): strin
 }
 
 const DEFAULT_X_PAD = 24;
-/** Default text weight — heavier than regular to carry the gold on white. */
+/** Default text weight — heavier than regular to carry the theme colour on white. */
 const DEFAULT_WEIGHT = 600;
 
 /**
@@ -388,7 +457,7 @@ export interface LineInput {
   wrap?: boolean;
   /**
    * Render this line as a section heading rather than body text: bold, letter-
-   * spaced, with a hairline gold rule beneath it spanning the region width. This
+   * spaced, with a hairline themed rule beneath it spanning the region width. This
    * is how the AI layer draws *dynamic structure* into a neutral region — e.g.
    * carving the `notes` box into "Important" / "Tomorrow" / "Habits" sub-blocks
    * only on the days that need them, so the printed template can stay minimal.
@@ -416,7 +485,7 @@ export interface CalendarSpec {
   month: string;
   /** Optional per-day event labels / styling. */
   days?: CalendarDay[];
-  /** Day-number styling (defaults: Mulish 18 / weight 600 / gold). */
+  /** Day-number styling (defaults: Mulish 18 / weight 600 / theme accent). */
   numberFont?: string;
   numberSize?: number;
   numberWeight?: number;
@@ -485,7 +554,7 @@ export interface RegionInput {
    * A region *title* banner, drawn in the margin just above the region box (so it
    * never consumes a content row). This is how the AI labels a region the template
    * left bare — e.g. "SCHEDULE" / "TOP 3" over a minimal grid. `banner` themes draw
-   * a colored pill; `underline`/`gold` themes a bold label + short rule. (For
+   * a colored pill; `underline`-style themes a bold label + short rule. (For
    * sub-sections *inside* a box, use a `heading` line instead.)
    */
   label?: string;
@@ -708,8 +777,10 @@ function iconFragment(
   };
 }
 
-const WASHI_RX = 6; // reuses the one corner-radius convention (SHARED-VISUAL-SPEC §5)
-const WASHI_DEFAULT_OPACITY = 0.22;
+// Washi-block look per the 2026-07-09 decisions (spec owner: the app repo's
+// design/UNDERLAY-VISUAL.md, forthcoming — onionskin#23): ~8px radius, ~0.16 tint.
+const WASHI_RX = 8;
+const WASHI_DEFAULT_OPACITY = 0.16;
 
 /**
  * A washi-tape-style duration block: a rounded, translucent-tint rect spanning
@@ -974,7 +1045,7 @@ function gridBounds(
 /**
  * Lay a month's day cells onto a gridded region. Per day: a `<rect
  * data-date="YYYY-MM-DD" fill="none">` covering the cell (the app's tap-to-day
- * target) + a gold day number, plus an optional event label. Returns SVG fragments
+ * target) + a themed day number, plus an optional event label. Returns SVG fragments
  * in LOCAL coordinates (the caller wraps them in the region's translate group, so
  * we subtract the region origin from the absolute grid boundaries).
  */
@@ -1012,7 +1083,8 @@ function composeCalendar(
   const numFont = spec.numberFont ?? "Mulish";
   const numSize = spec.numberSize ?? 18;
   const numWeight = spec.numberWeight ?? 600;
-  const fill = spec.fill ?? theme.accent;
+  // Calendar day numbers are text → the override is floored (Rule 1).
+  const fill = spec.fill !== undefined ? floorTextFill(spec.fill) : theme.accent;
   const byDay = new Map((spec.days ?? []).map((d) => [d.day, d]));
 
   const parts: string[] = [];
@@ -1187,7 +1259,7 @@ export function composeAiSvg(
             `font-weight="800" letter-spacing="0.1em" fill="${theme.bannerText}">${escapeXml(input.label)}</text>`,
         );
       } else {
-        const lfill = input.labelFill ?? theme.text;
+        const lfill = input.labelFill !== undefined ? floorTextFill(input.labelFill) : theme.text;
         parts.push(
           `    <text x="${lx}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
             `font-weight="800" letter-spacing="0.1em" fill="${lfill}">${escapeXml(input.label)}</text>`,
@@ -1398,7 +1470,7 @@ export function composeAiSvg(
         const size = line.size ?? def.size;
         const font = line.font ?? themeFontFor(theme, region.name, !!line.heading) ?? def.font;
         const weight = line.weight ?? def.weight;
-        const fill = line.fill ?? baseFill;
+        const fill = line.fill !== undefined ? floorTextFill(line.fill) : baseFill;
         let x = line.x ?? def.xPad ?? DEFAULT_X_PAD;
 
         // A washi-tape duration block: `time` + (`endTime`/`durationMin`) draws a
@@ -1447,18 +1519,33 @@ export function composeAiSvg(
             r1 = Math.min(Math.max(0, r1), maxIdx);
             r2 = Math.min(Math.max(0, r2), maxIdx);
           }
-          if (r2 <= r1) {
-            // Too short to span rows on this grid (e.g. a 20-min meeting on a
-            // 1-row-per-hour grid: both ends snap to the same row). The event must
-            // still appear — fall through to the normal time-anchored text line.
+          if (r2 <= r1 && r1 >= maxIdx) {
+            // The one geometry no block fits: the event starts on the grid's last
+            // ruled line, so there is no next line to span to. The event must still
+            // appear — fall through to the normal time-anchored text line.
             warn(
               "washi_block_zero_duration",
               `region "${region.name}": block "${truncate(line.text)}" (${line.time}–${endTimeStr}) ` +
-                `is too short to span rows on this grid — drawn as a plain time line instead.`,
+                `starts on the grid's last ruled line — drawn as a plain time line instead.`,
               "info",
               region.name,
             );
           } else {
+            if (r2 <= r1) {
+              // Min block height is one schedule-line interval, read from the template's
+              // ruled lines (2026-07-09 decisions; spec: design/UNDERLAY-VISUAL.md,
+              // forthcoming) — a 20-min meeting on a 1-row-per-hour grid still draws a
+              // visible tape, not a bare text line. Supersedes the old sub-hour
+              // plain-line fallback (#17).
+              r2 = r1 + 1;
+              warn(
+                "washi_block_min_height",
+                `region "${region.name}": block "${truncate(line.text)}" (${line.time}–${endTimeStr}) ` +
+                  `is shorter than one schedule-line interval — drawn at the one-interval minimum.`,
+                "info",
+                region.name,
+              );
+            }
             const y1 = Math.round(region.ruledLines[r1] - region.y);
             const y2 = Math.round(region.ruledLines[r2] - region.y);
             const bx = line.x ?? def.xPad ?? DEFAULT_X_PAD;
@@ -1476,7 +1563,7 @@ export function composeAiSvg(
               size,
               weight,
               fill,
-              line.blockFill ?? theme.accent,
+              line.blockFill ?? theme.washiTint ?? theme.accent,
               line.blockOpacity ?? WASHI_DEFAULT_OPACITY,
             );
             parts.push(`    ${block.svg}`);
@@ -1574,7 +1661,7 @@ export function composeAiSvg(
                 `fill="${theme.bannerText}">${escapeXml(line.text)}</text>`,
             );
           } else {
-            const hfill = line.fill ?? theme.text;
+            const hfill = line.fill !== undefined ? floorTextFill(line.fill) : theme.text;
             parts.push(
               `    <text x="${x}" y="${y}" font-family="${escapeXml(font)}" ` +
                 `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em" ` +

@@ -5,7 +5,7 @@ import { type AiStatus, type Manifest, readIfExists } from "./page.js";
 
 /**
  * The library's `settings.json → underlayVoice` (the app's `FORMAT.md §4` contract) —
- * personalizes the gold daily note. All keys optional; `tone: "none"` means no written
+ * personalizes the AI daily note. All keys optional; `tone: "none"` means no written
  * note at all. Read-only here — the server never writes settings.json.
  */
 export interface UnderlayVoice {

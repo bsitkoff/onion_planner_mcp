@@ -9,7 +9,7 @@ that points back to it, and `docs/AUTHORING.md` covers how to fill pages.
 
 ## What this is
 
-A **local stdio** MCP server (TypeScript, run via `tsx`) that writes the gold `ai.svg`
+A **local stdio** MCP server (TypeScript, run via `tsx`) that writes the AI `ai.svg`
 underlay into [Onionskin](https://onionskin.sitkoff.net) planner pages. Integration is **filesystem-only** —
 it reads/writes plain SVG + JSON in the app's iCloud container. There is no network API.
 
@@ -22,7 +22,7 @@ access.
 ## How to document (keep docs from sprawling)
 
 **Facts live in one place; everywhere else links.** The file-format contract — layers, regions,
-the gold underlay, `manifest.json`, the on-device visual parity — is owned by
+the AI underlay, `manifest.json`, the on-device visual parity — is owned by
 the Onionskin app repo's `design/FORMAT.md`; link to it rather than restating
 (duplicated facts drift). Owners in this repo: `README.md` (usage), this file
 (architecture · invariants · gotchas), `docs/AUTHORING.md` (authoring underlays + themes),
@@ -72,7 +72,7 @@ to exercise the MCP transport itself.
 | `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under `Shared/`, no traversal). |
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
-| `src/svg.ts` | Compose `ai.svg` from structured region input (text lines, `calendar` grid, `<image>` placement); `imageDims` header parse; gold default `GOLD` (`#9C7C1A`); per-region font/size/weight defaults; theme resolution (named presets + adaptive `{harmony,varietyDial,fontPersonality}` param block → `Theme`). |
+| `src/svg.ts` | Compose `ai.svg` from structured region input (text lines, `calendar` grid, `<image>` placement); `imageDims` header parse; the default (no-theme) underlay palette (a chapter's own resolved ink palette, gold retired); per-region font/size/weight defaults; theme resolution (named presets + adaptive `{harmony,varietyDial,fontPersonality}` param block → `Theme`). |
 | `src/color.ts` | Pure colour helpers (hex↔HSL) + `harmony` palette derivation from the template's sampled colours, with a lightness floor on derived text so it reads on cream. No deps. |
 | `src/page.ts` | Read a page, **atomic** ai.svg + `media/ai/` image writes (`resolveImages`/`gcOrphanMedia`), manifest status flips, `create_page`. |
 
@@ -119,13 +119,13 @@ drawn as a shape — no font dependency) before its text, and `wrap: true` to br
 to the region width (continuations stack below the baseline without consuming the next ruled
 row). A line may also be a `heading` (a section label) — `banner` themes draw it as a colored
 pill, `underline` themes as a label + rule. The page mood is set two ways: a named **`theme`** preset
-(`gold` default / `bright` / `cozy` / `editorial`) **or** the adaptive param block
+(`bright` / `cozy` / `editorial`, plus `gold` kept as a back-compat name — no longer a fixed colour) **or** the adaptive param block
 **`{ harmony, varietyDial, fontPersonality }`** — the chapter-theme axis whose keys are owned by
 the app's `FORMAT.md §4` (`.folder.json → theme`). `write_underlay` reads the chapter theme as the
 **default** (and `read_page` surfaces it) and accepts **per-call overrides**; `harmony` derives the
 day's palette from the template's *own sampled colours* (`src/color.ts`), `fontPersonality` swaps
-fonts (orthogonal), `varietyDial` scales banner count + heading style. Gold was only ever a default,
-not a constraint, and the orchestrator is meant to pick the mood to fit the day (see
+fonts (orthogonal), `varietyDial` scales banner count + heading style. Gold is retired — the
+default is a chapter's own ink palette, not a constraint — and the orchestrator is meant to pick the mood to fit the day (see
 `docs/AUTHORING.md`). So callers never compute
 coordinates; they reference a region name and a row index from
 `read_page`. An unknown region name throws (listing the valid ones). Raw `svg` bypasses all
@@ -203,12 +203,12 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
 - **Fonts are a closed set** (`Mulish`, `Newsreader`, `IBM Plex Mono`, `Caveat`, `Fredoka`,
   `Phosphor`) — only these render in-app; the shared `FONT_ENUM` in `index.ts` and per-region
   defaults in `svg.ts` (`REGION_DEFAULTS`) encode that. Don't introduce other font families.
-- **Legibility:** the canonical Onionskin gold is **`#9C7C1A`** (one value in the underlay, shared by
-  the app chrome, this server, and the on-device composer — `colors.css`, `Palette.swift`, `FORMAT.md`).
-  The former brand gold `#C9A227` is retired (converged 2026-06; design/DECISIONS.md #35), so the
-  server's `GOLD` is no longer a divergence. The chrome *also* defines `--gold-ink #7E5C12` (AA-tuned
-  gold for small text) — but the **underlay deliberately does not adopt that fill/text split**; it emits
-  the single `#9C7C1A` so visual parity with the on-device composer stays trivial (SHARED-VISUAL-SPEC §0).
+- **Legibility:** gold is retired entirely (design decisions, 2026-07-09) — there is no fixed
+  underlay colour any more. Every underlay text colour clears a real ≥4.5:1 WCAG contrast floor
+  against paper (`floorTextHex`/`floorAccentHex`, `contrastRatio` in `src/color.ts`), and the
+  default (no `harmony`/`accent`/preset) palette derives from the chapter's own `paletteCharacter`
+  (or the default character if unset), lifted lighter per Rule 2 — never darker than the user's own
+  ink. See `docs/SHARED-VISUAL-SPEC.md` §0 and the app's `design/INK-PALETTE.md`.
   Only the `harmony`-**derived** palette deepens text (a lightness floor at derivation, so adaptive text
   stays legible on cream — not a runtime contrast checker). Text also carries a `font-weight` (per-region default
   600, 500 for the serif `ainotes`; per-line `weight` override) — **confirmed honoured**, since the

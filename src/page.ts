@@ -16,6 +16,7 @@ import { readUnderlayVoice, type UnderlayVoice } from "./library.js";
 import {
   composeAiSvg,
   mergeRegions,
+  resolveTheme,
   emptySvg,
   imageDims,
   scanRawSvgElements,
@@ -31,8 +32,9 @@ import { decodePng, encodePng, chromaKeyPixels, resampleToMaxDimension } from ".
 /**
  * The underlay-relevant slice of a chapter's `.folder.json → theme` (the app's
  * `FORMAT.md §4` contract). `chromeAccent` is the app's concern (chrome only); the
- * other three are the underlay-theme axis this server honours. All optional — an
- * absent block (or key) just means "fall back to the default" (gold / region fonts).
+ * rest are the underlay-theme axis this server honours. All optional — an absent
+ * block (or key) just means "fall back to the default" (the chapter's own resolved
+ * ink palette, lifted for the underlay — gold is retired, there's no fixed seed).
  */
 export interface ChapterTheme {
   chromeAccent?: string;
@@ -43,9 +45,25 @@ export interface ChapterTheme {
    * An explicit underlay accent (hex) the whole chapter inherits — tints body text /
    * markers / banners so a chapter can carry a colour the named presets don't (e.g.
    * lavender). Additive to the app's `FORMAT.md §4` theme keys; the server reads it
-   * defensively (absent ⇒ the gold/preset default). Written by `set_chapter_theme`.
+   * defensively (absent ⇒ the palette-character/preset default). Written by
+   * `set_chapter_theme`. Takes precedence over `paletteCharacter` when both are set.
    */
   accent?: string;
+  /**
+   * The chapter's ink-tray identity (design/INK-PALETTE.md) — one of
+   * `PALETTE_CHARACTERS`' keys, additive alongside the app's own theme keys. When no
+   * `accent`/`harmony`/preset `theme` overrides it, this is the default underlay
+   * palette source (lifted lighter, still legible) instead of a fixed seed colour.
+   */
+  paletteCharacter?: string;
+  /**
+   * Extra user ink slots (hex) appended to the character's 5-ink pool — the app's
+   * tray is 7 (5 derived + 2 custom). Additive `FORMAT.md §4` keys, read defensively.
+   */
+  customInk1?: string;
+  customInk2?: string;
+  /** Friendly chapter identity (e.g. "lavender to-dos") — advisory, surfaced only. */
+  displayName?: string;
 }
 
 /**
@@ -124,15 +142,26 @@ async function resolveThemeInput(
       name: opts.theme,
       fontPersonality: chapter?.fontPersonality,
       accent: chapter?.accent,
+      paletteCharacter: chapter?.paletteCharacter,
+      customInk1: chapter?.customInk1,
+      customInk2: chapter?.customInk2,
+      chromeAccent: chapter?.chromeAccent,
       templatePalette,
     };
   }
+  // A chapter's `paletteCharacter` IS its colour identity, so it beats the chapter's
+  // own `harmony`/`varietyDial` (which derive from the template's colours instead) —
+  // but a *per-call* adaptive param is an explicit override and always forwards.
+  const chapterAdaptive = chapter?.paletteCharacter ? undefined : chapter;
   return {
     name: opts.theme,
-    harmony: opts.harmony ?? chapter?.harmony,
-    varietyDial: opts.varietyDial ?? chapter?.varietyDial,
+    harmony: opts.harmony ?? chapterAdaptive?.harmony,
+    varietyDial: opts.varietyDial ?? chapterAdaptive?.varietyDial,
     fontPersonality: opts.fontPersonality ?? chapter?.fontPersonality,
     accent: chapter?.accent,
+    paletteCharacter: chapter?.paletteCharacter,
+    customInk1: chapter?.customInk1,
+    customInk2: chapter?.customInk2,
     chromeAccent: chapter?.chromeAccent,
     templatePalette,
   };
@@ -686,6 +715,21 @@ export interface PageRead {
    */
   theme: ChapterTheme | null;
   /**
+   * The **resolved** underlay palette a default (no per-call override) write will
+   * use — the chapter's theme run through the same `resolveThemeInput → resolveTheme`
+   * path `write_underlay` takes, so what's advertised here and what gets composed can
+   * never drift. Hexes are already lifted + contrast-floored; an orchestrator picking
+   * per-line `fill`s should pick from these.
+   */
+  underlay: {
+    text: string;
+    serif: string;
+    accent: string;
+    banners: string[];
+    headingStyle: "banner" | "underline";
+    washiTint?: string;
+  };
+  /**
    * The library's `settings.json → underlayVoice` (name/tone/notes), or null if
    * absent/garbled — personalizes the `ainotes` note's voice. Read-only; the server
    * never writes settings.json.
@@ -708,6 +752,16 @@ export async function readPage(
   const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
   const size = pageSize(manifest, templateSvg);
   const theme = await readChapterTheme(abs);
+  // The default-write palette, via the exact path write_underlay resolves with.
+  const resolved = resolveTheme(await resolveThemeInput(abs, templateSvg, {})).theme;
+  const underlay = {
+    text: resolved.text,
+    serif: resolved.serif,
+    accent: resolved.accent,
+    banners: resolved.banners,
+    headingStyle: resolved.headingStyle,
+    ...(resolved.washiTint ? { washiTint: resolved.washiTint } : {}),
+  };
   const underlayVoice = await readUnderlayVoice(root);
   // labelFilled: cross-reference each region's labelSlot geometry (template-only)
   // against what the current ai.svg actually drew for that region — geometry alone
@@ -735,6 +789,7 @@ export async function readPage(
           paperColor: PAPER_COLOR,
         },
     theme,
+    underlay,
     underlayVoice,
     ...(includeTemplate && templateSvg ? { templateSvg } : {}),
   };

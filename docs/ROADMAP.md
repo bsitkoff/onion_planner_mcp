@@ -30,9 +30,11 @@ below links its issue — detail, sketches, and open decisions live there, not h
    ([onionskin#144](https://github.com/bsitkoff/onionskin/issues/144)) once it ships. The
    app-side Shared/ visibility gate retires with it (see [#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)).
 4. **No gold** (app design decisions 2026-07-09) — the default decoration palette derives
-   from the chapter's palette character / `theme.harmony`, not a canonical gold token; this
-   supersedes `SHARED-VISUAL-SPEC.md` §0's gold value when
-   [#20](https://github.com/bsitkoff/onion_planner_mcp/issues/20) lands.
+   from the chapter's palette character / `theme.harmony`, not a canonical gold token.
+   **Shipped** ([#20](https://github.com/bsitkoff/onion_planner_mcp/issues/20), 2026-07-09);
+   `SHARED-VISUAL-SPEC.md` §0 now records the three underlay-palette rules instead. The
+   palette-character names/hexes and the pre-lighten offset (0.14) remain a **design
+   proposal pending Bridget's confirmation** (see CHANGELOG).
 
 ### Invariants every item must respect
 
@@ -54,21 +56,12 @@ below links its issue — detail, sketches, and open decisions live there, not h
 
 ## Planned — near-term
 
-From the app's 2026-07-09 design decisions
-(`onionskin/design/handoff-decisions-2026-07-09/decisions-source.md`):
-
-1. **Text boxes: one box per logical block, never one per line** — hard authoring rule
-   (`docs/AUTHORING.md`); today's one-box-per-line output can't reflow when a word is added.
-   **Blocks daily use — top of the list.**
-   [#18](https://github.com/bsitkoff/onion_planner_mcp/issues/18)
-2. **Washi/duration blocks: dimensions derive from template geometry** — min block height =
-   one schedule-line interval *read from the template*, never a hardcoded min-height. Gated
-   on the app's `design/UNDERLAY-VISUAL.md` (onionskin#23).
-   [#19](https://github.com/bsitkoff/onion_planner_mcp/issues/19)
-3. **Underlay default palette is chapter-derived, not gold** — gold is retired app-wide;
-   derive from palette character / `harmony`, enforce the shared contrast-floor +
-   pre-lightened-ceiling rules; revise `SHARED-VISUAL-SPEC.md` §0 in coordination.
-   [#20](https://github.com/bsitkoff/onion_planner_mcp/issues/20)
+The app's 2026-07-09 design-decision items
+(`onionskin/design/handoff-decisions-2026-07-09/decisions-source.md`) — one-box-per-block
+authoring ([#18](https://github.com/bsitkoff/onion_planner_mcp/issues/18)),
+template-geometry washi sizing ([#19](https://github.com/bsitkoff/onion_planner_mcp/issues/19)),
+and the chapter-derived palette ([#20](https://github.com/bsitkoff/onion_planner_mcp/issues/20))
+— **shipped 2026-07-09**; see `CHANGELOG.md`.
 
 Friction from the 2026-07-05 morning-run audit, ordered by leverage for the unattended
 nightly/morning runs:

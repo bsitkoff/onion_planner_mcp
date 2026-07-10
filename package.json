@@ -1,7 +1,7 @@
 {
   "name": "onion-planner-mcp",
   "version": "1.0.0",
-  "description": "MCP server that writes the gold AI underlay into Onionskin planner pages (filesystem-only iCloud integration)",
+  "description": "MCP server that writes the AI underlay into Onionskin planner pages (filesystem-only iCloud integration)",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {

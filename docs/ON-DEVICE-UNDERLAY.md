@@ -54,13 +54,13 @@ cut-out — the grey-background knockout currently lives only in the MCP-side im
 ## The collaboration point — visual parity
 
 The on-device path doesn't need this MCP's engine; it needs to **look consistent** with MCP
-output on the regions it fills — gold values, fonts, `label`/`heading` style, spacing, region
+output on the regions it fills — the resolved palette, fonts, `label`/`heading` style, spacing, region
 layout. That visual spec, not a shared codebase, is the contract between the two authors.
 
 **The spec is now locked** in [`SHARED-VISUAL-SPEC.md`](SHARED-VISUAL-SPEC.md) (parity decisions
 resolved 2026-06) and its agreed parts (§0–4 + markers) are mirrored into
 `../onionskin/design/FORMAT.md`. The on-device composer matches it on its subset (schedule
 agenda, to-do text, note band, monthly markers) and draws **no banners** (§5 is MCP-only). Key
-resolved points for this author: one canonical gold `#9C7C1A`; schedule is agenda-style (no
+resolved points for this author: the chapter's own ink palette, lifted for the underlay (gold is retired); schedule is agenda-style (no
 printed hour labels); write to-do **text only** where the template prints its own checkboxes;
-render **one quiet gold style**, not a per-day theme.
+render **one quiet default style**, not a per-day theme.

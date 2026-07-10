@@ -24,7 +24,7 @@ its level; don't fight it.**
   Tomorrow) uses a line with `heading`.
 - **`styled: true`** (it prints its own colour-filled banners, or ships a `stickers.svg`): it did the
   decorating. *Fill quietly into the existing slots* — no competing banners, little or no
-  added art. And don't fall back to drab gold: **use `template.palette`** (the template's own
+  added art. And don't fall back to a flat default: **use `template.palette`** (the template's own
   accent colors) for your text/markers so the fill harmonizes with the design.
 
 When in doubt, under-decorate — the user chose that template on purpose.
@@ -91,11 +91,12 @@ surface (`fill: ink`) on every template** — don't write into it; the AI's text
 fills a region" above) rather than assuming any region is yours; on a `shared` region, seed in the
 whitespace and leave the ruled lines for ink.
 
-**2. Never let the page read as blank.** A light day is honest — summer, a weekend, a quiet
-schedule — but an *empty page* looks broken. If the schedule is thin, lean into the other
-sections: fill todos, run the habit row, preview tomorrow, write a real note. A near-empty
-schedule with a rich right column and notes still feels like a planner; one lonely line in
-a 15-hour grid does not.
+**2. Never let the page read as blank — a rule, not a preference.** A light day is honest —
+summer, a weekend, a quiet schedule — but an *empty page* looks broken, and real use showed
+sparse output is the single most common way an underlay disappoints. If the schedule is thin,
+lean into the other sections: fill todos, run the habit row, preview tomorrow, write a real
+note. A near-empty schedule with a rich right column and notes still feels like a planner;
+one lonely line in a 15-hour grid does not.
 
 ## Pick a theme to fit the day
 
@@ -109,13 +110,13 @@ from a wide-open summer beach day.
 | `bright` | lively, saturated banners | a fun, light, or celebratory day |
 | `cozy` | warm, hand-painted | a calm, rainy, or homebound day |
 | `editorial` | restrained, quiet labels | a heads-down, focused work day |
-| `gold` | quiet monochrome (default) | when you want the underlay to recede |
+| `gold` | back-compat name for the default (the chapter's own ink palette) | when you want the underlay to recede |
 
 > **Two axes — theme vs template style.** Your `theme` is the underlay's *mood* (the day's
 > content). It is independent of the *template's* **style** — `minimal / cozy / colorful`, how
 > rich the printed page already is (visible in the template's id/name, and surfaced as the
 > `styled` flag + `palette` in the page summary). They pair naturally — **minimal ↔
-> `gold`/`editorial`, cozy ↔ `cozy`, colorful ↔ `bright`** — so a sensible default is to echo a
+> the default/`editorial`, cozy ↔ `cozy`, colorful ↔ `bright`** — so a sensible default is to echo a
 > styled template with the matching theme (or its own `palette`), then deviate when the day calls
 > for it. A loud theme on an already-colorful template competes; a quiet theme lets it breathe.
 
@@ -145,12 +146,18 @@ lavender to-dos a default, since no named preset is lavender and `harmony` only 
 template's own colours. A per-call `harmony`/preset still overrides it, and per-day exact colour
 is a line's `fill`. Derived text is always floored dark enough to read on the
 cream page — you don't need to check contrast. `harmony` takes precedence over a preset `theme`
-name; `chromeAccent` in the chapter theme is the app's chrome concern and is ignored here.
+name. `chromeAccent` in the chapter theme is the chapter's accent colour (also the app's
+live/refreshing signal colour): here it becomes the default **washi-block tint**, so duration
+blocks echo the chapter's accent.
 
 **Themes are defaults, not a lock — any color is yours.** Override a banner's color with a
 region's `labelFill` (region title) or a heading line's `fill` (sub-section), and body text
 with a line's `fill` — any hex. So an overnight job can drive an exact palette: e.g. all
-banners as lighter→darker shades of one hue for a subdued, "same-family" look. Note: the app
+banners as lighter→darker shades of one hue for a subdued, "same-family" look. Two things to
+know: **pick per-line fills from `read_page`'s `underlay` palette** (the resolved, already
+lifted-and-floored chapter colours) so your overrides stay in the chapter's family; and any
+colour drawn **as text** is auto-darkened to the ≥4.5:1 contrast floor (a raw hex passes
+through untouched only on no-text fills — washi tints, banner pills, markers). Note: the app
 renders **solid fills only** — no SVG gradients — so approximate a gradient with a family of
 solids.
 
@@ -158,7 +165,7 @@ solids.
 
 The template stays **minimal on purpose** (a neutral scaffold; see the
 [minimal-template principle](MCP-INTEGRATION.md)). *You* add the structure a given day
-needs, in the gold layer, so pages differ day to day. Inside a neutral box region (e.g.
+needs, in the AI layer, so pages differ day to day. Inside a neutral box region (e.g.
 `notes`), use `heading: true` to draw a section label (bold, letter-spaced, with a hairline
 rule); the lines after it flow below as its items. Only emit a section on the days it has
 content — no "Habits" header on a day you're not tracking habits.
@@ -178,6 +185,14 @@ content — no "Habits" header on a day you're not tracking habits.
 Box regions flow top-down, so heading → items → next heading stack naturally; you don't
 compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
 
+**Hard rule: one text box per logical block — never one per line.** A logical block (a
+note's paragraph, a to-do, an event label) is ONE `lines[]` entry, with wrapping doing the
+line-breaking (`wrap` is on by default for flow-placed body lines). Never pre-split a
+sentence across several entries to control its line breaks: those entries are independent
+boxes, so when a word is later added or the text is edited, nothing reflows — lines overlap
+or leave holes. Separate entries are for separate *things* (each to-do, each event), not for
+the visual lines of one thing.
+
 ## Use the placement the server already does for you
 
 - **Schedule by clock time, not coordinates.** Give each line a `time: "HH:MM"`; the server
@@ -192,8 +207,12 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
   calendar event with a real start and end should be a block: a column of bare one-line labels
   on a 15-row grid reads sparse and unfinished, while blocks fill the hours the day actually
   holds. Reserve a bare `time` line for genuine point-in-time notes (a reminder, a deadline, a
-  drop-off). Tint defaults to the theme's accent colour; override per-block with
-  `blockFill`/`blockOpacity`. `endTime`/`durationMin` without a `time` start is ignored
+  drop-off). Tint defaults to the **chapter's `chromeAccent`** (else the theme's accent),
+  drawn at a soft 0.16 opacity with an 8px radius; override per-block with
+  `blockFill`/`blockOpacity`. **Block dimensions come from the template's geometry** — the
+  minimum height is one schedule-line interval read from the template's ruled lines, so even
+  a 20-minute meeting draws a visible tape (info `washi_block_min_height`) instead of a bare
+  line. `endTime`/`durationMin` without a `time` start is ignored
   (mirrors how `marker`/`wrap` are ignored on a heading). A long event name wraps to fit the
   block automatically — no need to shorten it or pass `wrap` yourself.
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
@@ -214,7 +233,9 @@ compute any `y`. Headings ignore `marker`/`wrap` (they're labels).
   media-resolved, so use the structured `images` array for art. Reach for this rarely — the
   structured placement above is what keeps you aligned to the geometry.
 - **`merge: true`** — a mid-day "update my planner" patches only the regions you pass and
-  leaves the rest verbatim (slide a new meeting in without clearing the to-dos).
+  leaves the rest verbatim (slide a new meeting in without clearing the to-dos). Verbatim
+  includes colours: a region last written under an older palette (e.g. the retired gold)
+  keeps those colours until you rewrite that region — intentional, not a bug.
 - **Write once, then check `warnings`.** A real `write_underlay` returns the same `warnings`
   a `dryRun` would, so you don't need a separate preview pass — and emitting the whole
   `regions` payload twice is the slowest part of an unattended run. Write with status `ready`,

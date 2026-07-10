@@ -34,6 +34,55 @@ only response to an oversized image was to throw; separately, callers hand-compu
   re-written smaller on disk, the `image_downscaled` warning, and the JPEG+`maxDimension`
   error. 269/269 passing · tsc clean.
 
+## Gold retired — the underlay renders in the chapter's colours — 2026-07-09
+
+The app's 2026-07-09 colour-model rewrite lands server-side (issues #18/#19/#20; decision
+text: `onionskin/design/handoff-decisions-2026-07-09/decisions-source.md`; spec owner
+`design/UNDERLAY-VISUAL.md` forthcoming, onionskin#23). Gold (`#9C7C1A`) is no longer a
+fixed seed anywhere — no `GOLD` constant, no gold preset colour, no gold fallback.
+
+- **Chapter-derived default palette.** With no `harmony`/`accent`/preset override, the
+  underlay palette derives from the chapter's `paletteCharacter` (`.folder.json → theme`,
+  additive key; 5 ink hexes mirrored from the app's `InkPalette.swift`), lifted lighter than
+  the user's ink by one constant (`liftForUnderlay`, offset 0.14) and clamped at a real
+  WCAG ≥4.5:1 contrast floor on paper — the three underlay-palette rules. `theme: "gold"`
+  survives only as a back-compat *name* that resolves to this dynamic default.
+- **Rule 1 on per-line overrides.** Any caller-supplied colour drawn *as text* (a line's
+  `fill`, an underline label's `labelFill`, calendar day numbers) is auto-darkened to the
+  floor; raw hex passes through untouched only on no-text fills (washi tint, banner pills,
+  markers/icons).
+- **Washi blocks follow the 2026-07-09 spec.** `rx` 6→8, default tint opacity 0.22→0.16;
+  the tint now defaults to the **chapter's `chromeAccent`** (else `theme.accent`); and the
+  **minimum block height is one schedule-line interval read from the template's ruled
+  lines** (info `washi_block_min_height`) — a sub-interval or backwards span draws a visible
+  minimum tape instead of degrading to a bare time line, superseding #17's fallback (which
+  now survives only for an event starting on the grid's last ruled line, where no block fits).
+- **New chapter-theme keys (additive):** `customInk1`/`customInk2` (extra ink slots appended
+  to the character's 5-ink pool — the app's 7-slot tray) and `displayName` (advisory), on
+  `set_chapter_theme` and `ChapterTheme`. A chapter's `paletteCharacter` outranks the
+  chapter's own `harmony`/`varietyDial` (its colour identity wins), while per-call adaptive
+  params still override everything.
+- **`read_page` returns `underlay`** — the resolved (lifted + floored) palette a default
+  write will use (`text`/`serif`/`accent`/`banners`/`headingStyle`/`washiTint`), computed by
+  the exact `resolveThemeInput → resolveTheme` path `write_underlay` takes, so the advertised
+  and composed palettes can't drift. Orchestrators should pick per-line `fill`s from it.
+- **`merge` keeps old colours verbatim** — a region last written under the old gold stays
+  gold until that region is rewritten. Intentional (merge preserves untouched regions
+  byte-for-byte), documented in `AUTHORING.md`.
+- Docs: `AUTHORING.md` gains the **one-text-box-per-logical-block hard rule** (#18), the
+  template-driven washi geometry, and the sparse-day rule framing; `MCP-INTEGRATION.md`
+  states the 2026-07-09 permission model (underlay writes ungated; `read_ink` gated by the
+  app's per-chapter ink-read toggle once it ships — `resolvePageRel`'s Shared/ containment
+  stays until the app retires the gate, #13); `SHARED-VISUAL-SPEC.md` §7 + resolved-decisions
+  updated to the new washi/palette facts.
+
+**Needs-confirm (design proposals, not final tokens):** the pre-lighten offset **0.14**
+(`liftForUnderlay`), the six palette-character ids + 30 ink hexes (hand-mirrored from the
+app worktree's `InkPalette.swift`), the monthly-ink formula (`monthlyInks`, exported but
+unwired), and the ink-read toggle's `FORMAT.md` key name (undecided app-side).
+
+Smoke 279 checks, all passing · tsc clean.
+
 ---
 
 ## Washi-tape blocks widened + long labels wrap — 2026-07-06

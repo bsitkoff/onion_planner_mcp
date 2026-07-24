@@ -754,6 +754,66 @@ async function main() {
     !(regionGroup(noRuledHours.aiSvg, "ainotes") ?? "").includes('x="4"'),
     regionGroup(noRuledHours.aiSvg, "ainotes") ?? "",
   );
+  // `showHours` alone is a legitimate write — it stamps the hour gutter into a timed grid
+  // whose template prints no hour numbers. The drewNothing backstop didn't count it, so the
+  // call claimed nothing was drawn and that a merge would clear the region, both false (#38).
+  // empty_region is aimed squarely at unattended callers; a false positive there trains an
+  // orchestrator to ignore the one warning meant to catch real dropped content.
+  const hoursOnly = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", showHours: true }],
+  });
+  const hoursOnlyGroup = regionGroup(hoursOnly.aiSvg, "schedule") ?? "";
+  check(
+    "showHours-only actually draws the hour gutter",
+    [...hoursOnlyGroup.matchAll(/<text x="4"[^>]*>([^<]*)<\/text>/g)].length > 0,
+    hoursOnlyGroup.slice(0, 200),
+  );
+  check(
+    "showHours-only does NOT trip a false empty_region (#38)",
+    !hoursOnly.warningDetails.some((w) => w.code === "empty_region"),
+    JSON.stringify(hoursOnly.warningDetails),
+  );
+  // …but a showHours that genuinely drew nothing is still an empty region.
+  const hoursOnlyUnruled = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", showHours: true }],
+  });
+  check(
+    "showHours-only on an UNRULED region still warns empty_region (#38)",
+    hoursOnlyUnruled.warningDetails.some((w) => w.code === "empty_region" && w.region === "ainotes"),
+    JSON.stringify(hoursOnlyUnruled.warningDetails),
+  );
+  check(
+    "…and still carries the time_unruled_region info alongside it",
+    hoursOnlyUnruled.warningDetails.some((w) => w.code === "time_unruled_region" && w.severity === "info"),
+    JSON.stringify(hoursOnlyUnruled.warningDetails),
+  );
+  // A ruled region with no resolvable startHour is the other genuine no-op — derived from
+  // parsed geometry, since which region that is depends on the fixtures.
+  const ruledNoStart = read.regions.find((r) => r.ruledLines.length > 0 && r.startHour == null);
+  if (ruledNoStart) {
+    const hoursOnlyNoStart = await writeUnderlay(root, daily, {
+      status: "ready", dryRun: true,
+      regions: [{ region: ruledNoStart.name, showHours: true }],
+    });
+    check(
+      `showHours-only on a ruled region with no startHour ("${ruledNoStart.name}") still warns empty_region (#38)`,
+      hoursOnlyNoStart.warningDetails.some((w) => w.code === "empty_region" && w.region === ruledNoStart.name) &&
+        hoursOnlyNoStart.warningDetails.some((w) => w.code === "time_missing_start_hour"),
+      JSON.stringify(hoursOnlyNoStart.warningDetails),
+    );
+  }
+  // A region named with no content at all is untouched — the backstop's real job.
+  const trulyEmpty = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [] }],
+  });
+  check(
+    "a region with no content at all still warns empty_region (backstop intact)",
+    trulyEmpty.warningDetails.some((w) => w.code === "empty_region"),
+    JSON.stringify(trulyEmpty.warningDetails),
+  );
 
   console.log("\noverflow warnings + default-on wrap (dry-run, no write)");
   const longText = "This is an absurdly long line of text that cannot possibly fit the box";

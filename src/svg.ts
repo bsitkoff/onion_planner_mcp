@@ -1450,6 +1450,11 @@ export function composeAiSvg(
         }
       }
     }
+    // Whether the `showHours` gutter actually reached the page. `showHours` on its own is
+    // a legitimate write, so it has to count toward "drew something" below — but only when
+    // labels were really emitted; a showHours that no-op'd (no ruled rows, no resolvable
+    // startHour) has its own info warning and IS still an empty region.
+    let hourLabelsDrawn = false;
     if (input.svg !== undefined) {
       // Raw fragment, emitted verbatim inside the region group (escape hatch).
       const frag = input.svg.trim();
@@ -1556,6 +1561,7 @@ export function composeAiSvg(
               `    <text x="4" y="${ly}" font-family="Mulish" font-size="11" font-weight="700" ` +
                 `fill="${theme.text}" opacity="0.55">${formatHour(hour)}</text>`,
             );
+            hourLabelsDrawn = true;
           });
         }
       }
@@ -1867,7 +1873,8 @@ export function composeAiSvg(
       (input.images?.length ?? 0) === 0 &&
       input.calendar === undefined &&
       (input.svg === undefined || input.svg.trim() === "") &&
-      (input.lines?.length ?? 0) === 0;
+      (input.lines?.length ?? 0) === 0 &&
+      !hourLabelsDrawn;
     if (drewNothing) {
       warn(
         "empty_region",

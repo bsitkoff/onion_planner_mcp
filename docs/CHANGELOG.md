@@ -7,6 +7,25 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: a `showHours`-only region no longer trips a false `empty_region` — 2026-07-24
+
+[#38](https://github.com/bsitkoff/onion_planner_mcp/issues/38). `showHours: true` on its own is
+a legitimate write — it stamps the hour gutter into a timed grid whose template prints no hour
+numbers — but `composeAiSvg`'s `drewNothing` backstop didn't count it. The call reported that
+nothing was drawn *and* that a merge would clear the region, both false while the composed
+`ai.svg` contained the labels. `empty_region` is a `severity: "warning"` aimed squarely at
+unattended callers, so a false positive there trains an orchestrator to ignore the one warning
+meant to catch genuinely dropped content — and its "in merge mode this clears the region" clause
+could push a caller into an unnecessary corrective rewrite.
+
+- **`hourLabelsDrawn` gates the term**, set only where the `showHours` branch actually emits
+  labels. A `showHours` that no-op'd — no ruled rows, or no resolvable `startHour` — still
+  counts as empty, and keeps its existing `time_unruled_region` / `time_missing_start_hour`
+  info warning.
+
+Smoke 349 checks, all passing (6 new, including the backstop's real job asserted intact) · tsc
+clean.
+
 ## Fix: a blank `chapter` can no longer write into `Shared/` itself — 2026-07-24
 
 [#40](https://github.com/bsitkoff/onion_planner_mcp/issues/40). `chapter` was typed

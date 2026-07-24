@@ -116,10 +116,10 @@ function legible(t: Theme): Theme {
 
 /**
  * The default theme — the chapter's own resolved ink palette (or, absent one, the
- * default palette character), lifted for the underlay. Kept as a named "gold" preset
- * ONLY for back-compat with existing `theme:"gold"` calls; it no longer emits a fixed
- * colour (gold is retired) — resolving it dynamically means a bare `theme:"gold"` call
- * still honours whatever palette character the chapter has set.
+ * default palette character), lifted for the underlay. `theme:"gold"` is kept ONLY as a
+ * back-compat name for this path (gold is retired as a colour); it is deliberately NOT a
+ * member of `THEMES` — a snapshot taken at module load would freeze the default character
+ * and silently discard the chapter's own identity.
  */
 function defaultTheme(inks?: string[]): Theme {
   const p = derivePaletteFromInks(inks ?? resolvePaletteCharacterInks(undefined));
@@ -129,9 +129,11 @@ function defaultTheme(inks?: string[]): Theme {
   };
 }
 
+/**
+ * The FIXED presets. "gold" is absent on purpose — it names the dynamic default path
+ * (`defaultTheme`), which has to be resolved per call against the chapter's palette.
+ */
 export const THEMES: Record<string, Theme> = {
-  // Back-compat name only — no longer a fixed colour. See `defaultTheme`.
-  gold: defaultTheme(),
   // Lively, saturated — closest to a colourful planner spread.
   bright: legible({
     text: "#3A3A3A", serif: "#8E6FC9", accent: "#E86A92",
@@ -151,7 +153,8 @@ export const THEMES: Record<string, Theme> = {
   }),
 };
 
-export const THEME_NAMES = Object.keys(THEMES);
+/** Every name `theme` accepts — the fixed presets plus the dynamic back-compat "gold". */
+export const THEME_NAMES = ["gold", ...Object.keys(THEMES)];
 
 export type FontPersonality = "clean" | "handwritten" | "editorial";
 
@@ -272,6 +275,9 @@ export function resolveTheme(input?: ThemeInput | string): ResolvedTheme {
     };
   } else if (t.name && THEMES[t.name]) {
     // An explicit preset name wins over a chapter accent (a per-day override).
+    // `name:"gold"` deliberately does NOT match here (it isn't in THEMES) — it falls
+    // through to the accent/default branches below so it resolves to the chapter's own
+    // palette at call time, which is exactly what the back-compat name promises.
     theme = THEMES[t.name];
   } else if (t.accent) {
     // A chapter's explicit accent tints an otherwise-default page (e.g. lavender todos).

@@ -951,6 +951,41 @@ async function main() {
   // theme at all.
   check("gold preset resolves to the default ink-palette theme, not a fixed hex",
     resolveTheme("gold").theme.text === DEFAULT_INK && resolveTheme("gold").theme.accent === resolveTheme({}).theme.accent);
+  // …and "resolves to the chapter's own palette" has to mean AT CALL TIME (#35): a frozen
+  // THEMES.gold snapshot silently discarded the chapter's paletteCharacter / monthly inks,
+  // collapsing every gold call onto the default blue with no warning. `theme:"gold"` must
+  // be indistinguishable from passing no theme at all, on every chapter identity.
+  for (const character of Object.keys(PALETTE_CHARACTERS)) {
+    const bare = resolveTheme({ paletteCharacter: character } as any).theme;
+    const gold = resolveTheme({ name: "gold", paletteCharacter: character } as any).theme;
+    check(
+      `theme:"gold" honours the chapter's paletteCharacter "${character}" (#35)`,
+      gold.text === bare.text && gold.serif === bare.serif && gold.accent === bare.accent,
+      `gold ${gold.text}/${gold.accent} vs bare ${bare.text}/${bare.accent}`,
+    );
+  }
+  const bareMonthly = resolveTheme({ monthlyMonth: 10 } as any).theme;
+  const goldMonthly = resolveTheme({ name: "gold", monthlyMonth: 10 } as any).theme;
+  check(
+    "theme:\"gold\" honours a calendar chapter's monthly inks (#35)",
+    goldMonthly.text === bareMonthly.text && goldMonthly.accent === bareMonthly.accent,
+    `gold ${goldMonthly.text} vs bare ${bareMonthly.text}`,
+  );
+  const bareAccent = resolveTheme({ accent: "#8E6FC9" } as any).theme;
+  const goldAccent = resolveTheme({ name: "gold", accent: "#8E6FC9" } as any).theme;
+  check(
+    "theme:\"gold\" honours a chapter accent (#35)",
+    goldAccent.text === bareAccent.text && goldAccent.accent === bareAccent.accent,
+    `gold ${goldAccent.text} vs bare ${bareAccent.text}`,
+  );
+  // The real presets stay fixed — only "gold" is dynamic.
+  for (const preset of ["bright", "cozy", "editorial"]) {
+    check(
+      `theme:"${preset}" stays a fixed preset regardless of chapter palette`,
+      resolveTheme({ name: preset, paletteCharacter: "sunbaked" } as any).theme.text ===
+        resolveTheme({ name: preset } as any).theme.text,
+    );
+  }
 
   console.log("\nwrite_underlay (raw svg) + reject merge+svg");
   const rawOk = await writeUnderlay(root, daily, {

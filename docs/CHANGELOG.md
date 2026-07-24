@@ -7,6 +7,28 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: `theme:"gold"` honours the chapter's palette again — 2026-07-24
+
+[#35](https://github.com/bsitkoff/onion_planner_mcp/issues/35). Both the tool schema and the
+code's own docstring promised the back-compat `theme:"gold"` preset resolves **dynamically** to
+the chapter's palette. It didn't: `THEMES` is a module-level constant, so `gold: defaultTheme()`
+froze a snapshot at import time built from the *default* character (`tidewater`), and
+`resolveTheme` handed that object straight back before the `paletteCharacter` / `monthlyMonth`
+branch was ever reached. Every `theme:"gold"` call collapsed onto the default blue — silently,
+so an unattended write had no signal. It also put `read_page.underlay` (which resolves via the
+default path) at odds with what a `theme:"gold"` write actually composed, exactly the drift the
+`underlay` block exists to prevent.
+
+- **`gold` is no longer a member of `THEMES`.** It names the *dynamic default path*, so it now
+  falls through to the accent / `monthlyMonth` / `paletteCharacter` branches and resolves per
+  call. `theme:"gold"` is once again indistinguishable from passing no theme at all.
+- **`THEME_NAMES` still lists it** (`["gold", ...presets]`) — it remains a valid name.
+- **`bright`/`cozy`/`editorial` are untouched** — those are *meant* to be fixed palettes, and
+  the bug only ever misfired for `gold`.
+
+Smoke 335 checks, all passing (11 new — every palette character × gold, monthly inks, chapter
+accent, plus the three fixed presets asserted to stay fixed) · tsc clean.
+
 ## Fix: `images[].maxDimension` can finally clear the 2 MB cap — 2026-07-24
 
 [#36](https://github.com/bsitkoff/onion_planner_mcp/issues/36). `maxDimension` is documented in

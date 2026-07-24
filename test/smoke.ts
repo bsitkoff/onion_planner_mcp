@@ -12,6 +12,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import {
   requireLibrary,
@@ -1605,6 +1606,77 @@ async function main() {
     "a JPEG over maxDimension errors clearly instead of silently skipping the downscale",
     /maxDimension downscale only supports PNG/.test(jpegMaxDimErr),
     jpegMaxDimErr,
+  );
+
+  // maxDimension's whole promise is rescuing an over-large source, so the 2MB cap has to
+  // judge the RESAMPLED bytes — running it on the source made the feature unreachable for
+  // exactly the images it exists for (#36). Incompressible (random) pixels so the source
+  // genuinely clears the cap rather than deflating under it.
+  const overCapPixels = new Uint8Array(900 * 900 * 4);
+  crypto.randomFillSync(overCapPixels);
+  const overCapSrc = encodePng({ width: 900, height: 900, pixels: overCapPixels });
+  check(
+    "test fixture: the over-cap source really is over 2MB",
+    overCapSrc.length > 2 * 1024 * 1024,
+    `${overCapSrc.length} bytes`,
+  );
+  let overCapErr = "";
+  let overCapResult: any = null;
+  try {
+    overCapResult = await writeUnderlay(root, imgPage, {
+      status: "ready",
+      regions: [{ region: "todo", images: [{ data: overCapSrc.toString("base64"), format: "png", name: "over-cap", width: 100, maxDimension: 64 }] }],
+    });
+  } catch (e: any) { overCapErr = e.message; }
+  check(
+    "maxDimension rescues a source over the 2MB cap instead of throwing on it (#36)",
+    overCapErr === "",
+    overCapErr,
+  );
+  check(
+    "the rescued source still reports its downscale (image_downscaled)",
+    !!overCapResult?.warningDetails.some((w: any) => w.code === "image_downscaled"),
+    JSON.stringify(overCapResult?.warningDetails ?? []),
+  );
+  if (overCapResult) {
+    const rescued = await fs.readFile(path.join(root, imgPage, "media", "ai", "over-cap.png"));
+    const rescuedDims = decodePng(rescued);
+    check(
+      "the written file is the downscaled image, under the cap",
+      rescued.length <= 2 * 1024 * 1024 && Math.max(rescuedDims.width, rescuedDims.height) === 64,
+      `${rescued.length} bytes, ${rescuedDims.width}x${rescuedDims.height}`,
+    );
+    check(
+      "a rescued source does NOT warn about the source's pre-downscale size",
+      !overCapResult.warningDetails.some((w: any) => w.code === "image_large_for_sync"),
+      JSON.stringify(overCapResult.warningDetails),
+    );
+  }
+  // Without maxDimension the cap still throws on the source — unchanged behaviour.
+  let noRescueErr = "";
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: overCapSrc.toString("base64"), format: "png", name: "no-rescue", width: 100 }] }],
+    });
+  } catch (e: any) { noRescueErr = e.message; }
+  check(
+    "an over-cap source with NO maxDimension still throws (cap unchanged)",
+    /over the \d+-byte cap/.test(noRescueErr),
+    noRescueErr,
+  );
+  // Still over the cap after the downscale → still throws, now judged on the resampled bytes.
+  let stillOverErr = "";
+  try {
+    await writeUnderlay(root, imgPage, {
+      status: "ready", dryRun: true,
+      regions: [{ region: "todo", images: [{ data: overCapSrc.toString("base64"), format: "png", name: "still-over", width: 100, maxDimension: 880 }] }],
+    });
+  } catch (e: any) { stillOverErr = e.message; }
+  check(
+    "a source still over the cap AFTER downscaling throws",
+    /over the \d+-byte cap/.test(stillOverErr),
+    stillOverErr,
   );
 
   console.log("\nraw svg size guard");

@@ -281,6 +281,10 @@ const MEDIA_AI = path.join("media", "ai");
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // hard cap per image (iCloud-sync hygiene)
 const WARN_IMAGE_BYTES = 512 * 1024; // soft warning threshold
 const WARN_IMAGE_DIMENSION = 1536; // px guideline the docs promise — warn, don't block
+// Ceiling on the pixels a `maxDimension` downscale will decode (≈128 MB as RGBA). Far
+// above any planner art; exists only so deferring the byte cap can't be turned into an
+// unbounded in-process decode by a source that compresses well.
+const MAX_DECODE_PIXELS = 32_000_000;
 const WARN_RAW_SVG_BYTES = 256 * 1024; // a raw `svg` doc this big usually means embedded art
 
 /** Expand a leading `~` to the user's home dir (file paths from a caller may use it). */
@@ -577,7 +581,13 @@ async function resolveImages(
       if (buf.length === 0) {
         throw new Error(`image in region "${region.region}" has empty or invalid image data.`);
       }
-      checkImageSize(buf, region.region, warnings, warningDetails);
+      // `maxDimension` exists to rescue an over-large source, so when it's set the size
+      // checks have to judge the RESAMPLED bytes — running the hard cap on the source
+      // made the feature unreachable for exactly the images it was built for. The soft
+      // warning defers with it: flagging a size we're about to fix is noise. Both run
+      // below, before anything is written.
+      const deferSizeChecks = img.maxDimension !== undefined;
+      if (!deferSizeChecks) checkImageSize(buf, region.region, warnings, warningDetails);
 
       // Knockout runs on the source bytes, before format/dims/hash are resolved —
       // the digest and dims must reflect the post-knockout bytes, and a knocked-out
@@ -587,7 +597,7 @@ async function resolveImages(
       if (img.knockout && img.knockout !== "none") {
         buf = await applyKnockout(buf, img, region.region, deps);
         knockedOut = true;
-        checkImageSize(buf, region.region, warnings, warningDetails);
+        if (!deferSizeChecks) checkImageSize(buf, region.region, warnings, warningDetails);
       }
 
       // Format: declared, or sniffed from the file's magic bytes when reading a path.
@@ -610,6 +620,15 @@ async function resolveImages(
               `sources today (got ${format}) — convert to PNG or downscale before sending.`,
           );
         }
+        // Decoding is 4 bytes/px in RAM. The byte cap used to bound that implicitly;
+        // now that it runs after the resample, the pixel count needs its own ceiling so
+        // a highly-compressible monster source can't be inflated unbounded.
+        if (dims.width * dims.height > MAX_DECODE_PIXELS) {
+          throw new Error(
+            `image in region "${region.region}" is ${dims.width}×${dims.height} — over the ` +
+              `${MAX_DECODE_PIXELS}-pixel ceiling for a maxDimension downscale. Resize it before sending.`,
+          );
+        }
         const before = dims;
         let decoded;
         try {
@@ -619,7 +638,6 @@ async function resolveImages(
         }
         const resampled = resampleToMaxDimension(decoded, img.maxDimension);
         buf = encodePng(resampled);
-        checkImageSize(buf, region.region, warnings, warningDetails);
         dims = { width: resampled.width, height: resampled.height };
         const message =
           `region "${region.region}": image downscaled ${before.width}×${before.height} → ` +
@@ -627,6 +645,9 @@ async function resolveImages(
         warnings.push(message);
         warningDetails.push({ code: "image_downscaled", severity: "info", region: region.region, message });
       }
+      // Deferred cap + sync warning: judged on the bytes we are actually going to write.
+      // A source still over the cap after its downscale throws here, exactly as before.
+      if (deferSizeChecks) checkImageSize(buf, region.region, warnings, warningDetails);
 
       let width: number;
       let height: number;

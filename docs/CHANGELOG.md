@@ -7,6 +7,28 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: `images[].maxDimension` can finally clear the 2 MB cap — 2026-07-24
+
+[#36](https://github.com/bsitkoff/onion_planner_mcp/issues/36). `maxDimension` is documented in
+three places as the way to get an over-large source past the size limits *instead of* resizing
+by hand, but `resolveImages` ran the hard 2 MB check on the **source** bytes and threw several
+steps before it ever looked at `maxDimension` — so the escape hatch was unreachable for exactly
+the images it exists for. The error even told the caller to do by hand the thing the feature
+automates. It hit the overnight path hardest: a caller using `images[].path` (so generated art
+never crosses the model context) is the one most likely to hand over a full-resolution PNG.
+
+- **Size checks defer to the resampled bytes when `maxDimension` is set.** The hard cap and the
+  soft `image_large_for_sync` warning both move to after the downscale — warning about a size
+  we're about to fix is noise. Everything still runs before a single byte is written.
+- **Unchanged where it should be:** no `maxDimension` → the cap still throws on the source; a
+  source still over 2 MB *after* its downscale still throws; a JPEG over `maxDimension` still
+  gets the "PNG sources only" error.
+- **New `MAX_DECODE_PIXELS` ceiling (32 M px).** The byte cap used to implicitly bound the
+  in-process RGBA decode; deferring it means a highly-compressible monster source could
+  otherwise inflate unbounded. Far above any planner art.
+
+Smoke 324 checks, all passing · tsc clean.
+
 ## Fix: banner pill labels stay legible on a caller-supplied fill — 2026-07-24
 
 [#37](https://github.com/bsitkoff/onion_planner_mcp/issues/37). A `regions[].labelFill` or a

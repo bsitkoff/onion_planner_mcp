@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { resolvePageRel, normalizeChapter } from "./paths.js";
+import { resolvePageRel, requireChapterName } from "./paths.js";
 import {
   parseRegions,
   parseViewBox,
@@ -142,7 +142,7 @@ export async function writeChapterTheme(
   chapter: string,
   theme: ChapterTheme,
 ): Promise<{ chapter: string; theme: ChapterTheme }> {
-  const chapterRel = `Shared/${normalizeChapter(chapter)}`;
+  const chapterRel = `Shared/${requireChapterName(chapter)}`;
   const chapterAbs = resolvePageRel(root, chapterRel);
   const stat = await fs.stat(chapterAbs).catch(() => null);
   if (!stat || !stat.isDirectory()) {
@@ -1319,7 +1319,7 @@ export async function createPage(
       `Page name "${opts.name}" must be a single non-empty folder name (no slashes).`,
     );
   }
-  const chapterName = normalizeChapter(opts.chapter);
+  const chapterName = requireChapterName(opts.chapter);
   const chapterRel = `Shared/${chapterName}`;
   const chapterAbs = resolvePageRel(root, chapterRel);
   const newRel = `${chapterRel}/${opts.name}`;

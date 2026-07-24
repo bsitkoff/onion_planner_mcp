@@ -763,6 +763,7 @@ server.tool(
   {
     chapter: z
       .string()
+      .min(1)
       .describe(
         'Chapter under Shared/. Either the bare name ("2026-06") or the path ' +
           'get_library returns ("Shared/2026-06") works.',
@@ -820,6 +821,7 @@ server.tool(
   {
     chapter: z
       .string()
+      .min(1)
       .describe(
         'Chapter under Shared/. Either the bare name ("2026-06") or the path ' +
           'get_library returns ("Shared/2026-06") works.',

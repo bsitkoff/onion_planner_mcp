@@ -7,6 +7,29 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: a blank `chapter` can no longer write into `Shared/` itself — 2026-07-24
+
+[#40](https://github.com/bsitkoff/onion_planner_mcp/issues/40). `chapter` was typed
+`z.string()` with no minimum, and `normalizeChapter("  ")` reduces to `""` — so
+`writeChapterTheme` built `Shared/` + `""`, which `resolvePageRel` resolves to the `Shared/`
+directory itself (it explicitly permits `abs === base`). The existence check passed (Shared/
+*is* a directory) and the theme block was written to `Shared/.folder.json` — a file outside the
+documented write scope, which would sync to the iPad, and which the returned `chapter:
+"Shared/"` gave the caller no way to undo. `create_page` shared the gap and failed with an
+opaque `Illegal path "Shared//name"` instead of naming the real problem.
+
+- **New `paths.ts:requireChapterName`** — normalize, then throw on an empty result. Used by
+  both `writeChapterTheme` and `createPage`, so the guard sits on the shared path rather than
+  being duplicated per tool.
+- **`.min(1)` on both `chapter` schemas** closes the MCP surface, but the guard stays in
+  `page.ts` too: `"  "` clears `.min(1)`, and the dev CLI and any direct `page.ts` caller
+  bypass zod entirely (the same belt-and-suspenders reasoning `applyKnockout`'s `chromaColor`
+  re-check already uses).
+- `listPages`' optional `chapter` is untouched — it's read-only, and a blank value there just
+  lists every chapter.
+
+Smoke 343 checks, all passing (8 new) · tsc clean.
+
 ## Fix: `theme:"gold"` honours the chapter's palette again — 2026-07-24
 
 [#35](https://github.com/bsitkoff/onion_planner_mcp/issues/35). Both the tool schema and the

@@ -1722,6 +1722,43 @@ async function main() {
   check("a >256KB raw svg warns (raw_svg_large)",
     hugeRaw.warningDetails.some((w) => w.code === "raw_svg_large"), JSON.stringify(hugeRaw.warningDetails.map((w) => w.code)));
 
+  // A blank/whitespace chapter normalizes to "", and `Shared/` + "" resolves to the
+  // Shared/ root itself (resolvePageRel permits abs === base), which is a directory — so
+  // the existence check passed and the theme landed in Shared/.folder.json, a file outside
+  // the documented write scope entirely (#40). create_page had the milder twin: a page
+  // folder created directly under Shared/ instead of inside a chapter.
+  console.log("\nNEGATIVE: a blank chapter is not Shared/ itself");
+  const sharedFolderFile = path.join(root, "Shared", ".folder.json");
+  await fs.rm(sharedFolderFile, { force: true });
+  for (const blank of ["", "   ", "/", "Shared/", " Shared/ "]) {
+    let blankThemeErr = "";
+    try {
+      await writeChapterTheme(root, blank, { paletteCharacter: "orchard" });
+    } catch (e: any) { blankThemeErr = e.message; }
+    check(
+      `set_chapter_theme refuses a blank chapter ${JSON.stringify(blank)} (#40)`,
+      /must name a chapter/.test(blankThemeErr),
+      blankThemeErr,
+    );
+  }
+  check(
+    "no .folder.json was written into Shared/ itself (#40)",
+    !(await fs.access(sharedFolderFile).then(() => true, () => false)),
+  );
+  let blankPageErr = "";
+  try {
+    await createPage(root, { chapter: "  ", name: "blank-chapter-page" });
+  } catch (e: any) { blankPageErr = e.message; }
+  check(
+    "create_page refuses a blank chapter (#40)",
+    /must name a chapter/.test(blankPageErr),
+    blankPageErr,
+  );
+  check(
+    "no page folder was created directly under Shared/ (#40)",
+    !(await fs.access(path.join(root, "Shared", "blank-chapter-page")).then(() => true, () => false)),
+  );
+
   console.log("\nset_chapter_theme accent → chapter default the underlay picks up");
   const accentHex = "#7B5EA7"; // lavender
   await writeChapterTheme(root, "Daily", { accent: accentHex });

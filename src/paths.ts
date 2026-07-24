@@ -52,6 +52,28 @@ export function normalizeChapter(chapter: string): string {
 }
 
 /**
+ * `normalizeChapter` for the *write* paths, which need a chapter that actually exists.
+ *
+ * A blank or whitespace-only value normalizes to `""`, and `Shared/` + `""` resolves to
+ * the Shared/ root itself — `resolvePageRel` permits `abs === base`, and Shared/ *is* a
+ * directory, so the existence check passes and the write lands outside the documented
+ * scope (a `.folder.json` in Shared/, or a page folder created directly under it rather
+ * than inside a chapter). Zod's `.min(1)` alone doesn't close this — `"  "` clears it, and
+ * the dev CLI and any direct `page.ts` caller bypass zod entirely — so the guard belongs
+ * here, on the shared path both writers take.
+ */
+export function requireChapterName(chapter: string): string {
+  const name = normalizeChapter(chapter);
+  if (!name) {
+    throw new Error(
+      "`chapter` must name a chapter under Shared/ (got an empty value). " +
+        'Pass a chapter name like "2026-07" or "Daily" — Shared/ itself is not a chapter.',
+    );
+  }
+  return name;
+}
+
+/**
  * Validate a caller-supplied page-relative path and return its absolute path.
  *
  * The relative path is the page "id" handed back by list_pages, e.g.

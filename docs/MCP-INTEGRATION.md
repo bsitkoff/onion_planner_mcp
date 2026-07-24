@@ -184,8 +184,10 @@ instant pickup.) Write whenever you like; it appears on the next read.
 
 ## 4. Rules (the short version)
 
-- **Write only `ai.svg`, only under `Shared/`.** Never write `ink.svg`, `stickers.svg`,
-  or `template.svg`; never read or write under `Private/`.
+- **Write only `ai.svg`, only under `Shared/`** — plus the page's own `media/ai/` folder for
+  art you place, and a chapter's `.folder.json → theme` block if you set a chapter default.
+  Never write `ink.svg`, `stickers.svg`, `template.svg`, or the rest of `media/`; never read or
+  write under `Private/`.
 - **Write atomically.** Write to a temp file in the same directory and rename into place,
   so the app never reads a half-written `ai.svg`. Then flip `status` to `ready`.
 - **You own one file, so there is no write conflict.** The app never writes `ai.svg`;

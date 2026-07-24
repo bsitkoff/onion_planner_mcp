@@ -37,7 +37,8 @@ lighter than the user's ink and contrast-floored) — gold is retired.
 | `set_underlay_status` | write | Flip ai status (`empty`/`refreshing`/`ready`) without rewriting. |
 | `clear_underlay` | write | Reset ai.svg to empty + status `empty`. |
 | `create_page` | write | New shared page from a sibling's template, or from the `Templates/` catalogue by id. |
-| `fetch_image` | helper | Download an HTTPS PNG/JPEG to `/tmp/onionskin-fetch/` and return a local path for `images[].path`; optional background removal requires `rembg`. |
+| `set_chapter_theme` | write | Set a chapter's default theme (`.folder.json → theme`): `paletteCharacter`, explicit `accent`, `customInk1/2`, `harmony`/`varietyDial`/`fontPersonality`, `displayName`. Only the passed keys change; page order is preserved. `write_underlay` applies it as the default, `read_page` surfaces it. |
+| `fetch_image` | helper | Download an HTTPS PNG/JPEG to an `onionskin-fetch/` folder under the **OS temp dir** (`$TMPDIR` on macOS — not `/tmp`) and return a local path for `images[].path`; optional background removal requires `rembg`. |
 
 ### Typical flow
 
@@ -124,9 +125,13 @@ the future path if it ever needs distribution.)
 
 ## Safety
 
-- Writes **only** `ai.svg` and the manifest's `layers.ai` block (+ `modified`); on
-  `create_page`, a new page folder's own files and the chapter `.folder.json` order.
-- **Never** writes `ink.svg`, `stickers.svg`, or `template.svg`; never reads/writes `Private/`.
+- Writes **only** `ai.svg`, the manifest's `layers.ai` block (+ `modified`), and the page's
+  `media/ai/` folder (AI-owned art — written and garbage-collected there); on `create_page`, a
+  new page folder's own files and the chapter `.folder.json` order; via `set_chapter_theme`,
+  the chapter `.folder.json → theme` block (only the passed keys; order and other fields are
+  preserved).
+- **Never** writes `ink.svg`, `stickers.svg`, `template.svg`, or the rest of `media/`; never
+  reads/writes `Private/`.
 - Every write is validated to live under `Shared/` (no traversal) and is **atomic**
   (temp file + rename) so the app never reads a half-written file.
 - `fetch_image` is the one network-capable helper: it accepts HTTPS only, validates PNG/JPEG

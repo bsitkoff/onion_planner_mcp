@@ -70,7 +70,7 @@ to exercise the MCP transport itself.
 
 | File | Role |
 |---|---|
-| `src/index.ts` | MCP server + the 9 tools (zod schemas, annotations, error handling). |
+| `src/index.ts` | MCP server + the 10 tools (zod schemas, annotations, error handling). |
 | `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under `Shared/`, no traversal). |
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
@@ -78,10 +78,11 @@ to exercise the MCP transport itself.
 | `src/color.ts` | Pure colour helpers (hex↔HSL) + `harmony` palette derivation from the template's sampled colours, with a lightness floor on derived text so it reads on cream. No deps. |
 | `src/page.ts` | Read a page, **atomic** ai.svg + `media/ai/` image writes (`resolveImages`/`gcOrphanMedia`), manifest status flips, `create_page`. |
 
-The 9 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`,
+The 10 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`,
 `read_ink`, `write_underlay`, `set_underlay_status`, `clear_underlay`, `create_page`,
-`fetch_image`. The mutating page tools are `write_underlay`, `set_underlay_status`,
-`clear_underlay`, and `create_page`; `fetch_image` writes only to OS temp storage.
+`set_chapter_theme`, `fetch_image`. The mutating tools are `write_underlay`,
+`set_underlay_status`, `clear_underlay`, `create_page`, and `set_chapter_theme` (which writes
+only the chapter's `.folder.json → theme` block); `fetch_image` writes only to OS temp storage.
 `write_underlay` is the workhorse (structured `regions` → composed `ai.svg`).
 
 ## How a page is addressed

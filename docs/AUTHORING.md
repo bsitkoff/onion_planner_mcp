@@ -243,10 +243,10 @@ the visual lines of one thing.
   wrap a row/time-anchored line.
 - **Raw per-region `svg`** — when `lines` placement isn't enough, give a region a raw `svg`
   string instead; it's emitted verbatim inside that region's group and composes/merges like
-  any region (mutually exclusive with `lines`/`calendar`). Stay within the renderer's
-  elements (svg/g/rect/line/path/text/image/circle); an `<image href>` here is **not**
-  media-resolved, so use the structured `images` array for art. Reach for this rarely — the
-  structured placement above is what keeps you aligned to the geometry.
+  any region (mutually exclusive with `lines`/`calendar`). Stay within the renderer's element
+  set (see [What raw SVG may contain](#what-raw-svg-may-contain) below); an `<image href>`
+  here is **not** media-resolved, so use the structured `images` array for art. Reach for this
+  rarely — the structured placement above is what keeps you aligned to the geometry.
 - **`merge: true`** — a mid-day "update my planner" patches only the regions you pass and
   leaves the rest verbatim (slide a new meeting in without clearing the to-dos). Verbatim
   includes colours: a region last written under an older palette (e.g. the retired gold)
@@ -262,6 +262,50 @@ the visual lines of one thing.
   so the region names, ruled rows, and `startHour` from a single `read_page` apply to every
   page in that chapter. When filling several pages in one run (backfill / month rollover),
   `read_page` once and reuse it — don't re-read per page.
+
+## What raw SVG may contain
+
+Only relevant when you're writing raw `svg` (per-region or top-level) — the structured
+`regions` input already stays inside these bounds for you.
+
+The app's renderer is a **custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit).
+The renderer contract itself — colour syntax, transforms, the text/font subset — is owned by
+the app repo's [`design/TEMPLATES.md`](https://github.com/bsitkoff/onionskin/blob/main/design/TEMPLATES.md);
+read that for what the *device* does. What follows is the **MCP-side view**: what this
+server's validator accepts, and which warning fires when it doesn't.
+
+**Elements** (`RAW_SVG_ALLOWED_ELEMENTS` in `src/svg.ts`) — anything outside this set is
+silently dropped on device, so `write_underlay` warns `raw_svg_unsupported_element`:
+
+| Accepted | Rejected (warns) |
+|---|---|
+| `svg` `g` `rect` `line` `path` `text` `image` `circle` `ellipse` `polyline` `polygon` | everything else — notably `tspan`, `foreignObject`, `use`, `defs`, `style`, `clipPath`, `mask`, `filter`, `textPath` |
+
+**Attributes** — the split that costs the most trial-and-error is *what inherits*. The
+renderer resolves style per leaf element, not by cascading from ancestors:
+
+| Attribute | On `<text>` | On a wrapping `<g>` |
+|---|---|---|
+| `fill`, `fill-opacity`, `font-family`, `font-size` | works | **inherits** |
+| `text-anchor` (`middle` / `end`) | works | **dropped** — put it on each `<text>` |
+| `font-weight` (`400`–`800`) | works | **dropped** — put it on each `<text>` |
+
+The two "dropped" rows are app bug
+[onionskin#211](https://github.com/bsitkoff/onionskin/issues/211), still open as of
+2026-07-24 — a `text-anchor` set only on the `<g>` silently renders left-aligned, which can
+push centered content off-page. Set both per `<text>` until that lands.
+
+Two more things worth knowing before you design around them:
+
+- **`<tspan>` is not a positioned element.** Multi-line text is authored as *stacked
+  `<text>` elements*, one per line — which is exactly what the structured `lines` input
+  (and its `wrap`) already emits. The validator rejects `<tspan>` outright.
+- **`<g>` is file-level grouping only — not a selectable object.** Wrapping several lines in
+  a `<g>` does *not* make them one movable unit in the app's editor: `AIEditModel`
+  hit-tests and selects at the leaf level (text or image), descending through groups. There
+  is currently no way to author one multi-line text object
+  ([onionskin#212](https://github.com/bsitkoff/onionskin/issues/212)).
+- `xml:space="preserve"` passes the validator but has no effect on the renderer.
 
 ## Images (stickers / art)
 

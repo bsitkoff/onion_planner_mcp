@@ -199,8 +199,11 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
   600, 500 for the serif `quote`; per-line `weight` override) — **confirmed honoured**, since the
   app's `Mulish`/`Newsreader` are variable fonts the renderer weights at runtime.
 - **The app renderer is a custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit):
-  it handles `svg, g, rect, line, path, text, image, circle` and silently drops anything else
-  (`<circle>` support landed 2026-06-22, so the `bullet` marker now renders on device).
+  it handles `svg, g, rect, line, path, text, image, circle, ellipse, polyline, polygon`
+  (`RAW_SVG_ALLOWED_ELEMENTS` in `src/svg.ts` is the source of truth) and silently drops
+  anything else — notably `<tspan>`, which is why multi-line text is stacked `<text>`.
+  `text-anchor`/`font-weight` do **not** inherit from a wrapping `<g>` (app
+  [#211](https://github.com/bsitkoff/onionskin/issues/211)) — set them per `<text>`.
   `<image href>` resolves **only as a page-relative file path** (no data-URIs) and the
   **AI layer needs a non-nil `imageProvider`** (an app change) for images to appear at all.
   When emitting raw `svg`, stay within that element set.

@@ -1726,6 +1726,68 @@ async function main() {
     await fs.writeFile(path.join(root, "Shared", "Daily", ".folder.json"), JSON.stringify(f, null, 2) + "\n");
   }
 
+  // Regression — issue #37. A caller-supplied `labelFill` / heading `fill` on a BANNER
+  // theme becomes the pill behind the label, and the pill text used to be hard-coded to
+  // theme.bannerText (#FFFFFF): a pale hex gave white-on-near-white (~1.03:1) with no
+  // warning. The caller's colour is kept verbatim (it's a fill, per Rule 1); the pill
+  // TEXT is what has to move.
+  console.log("\nbanner pill labels stay legible on a caller-supplied fill (#37)");
+  // `fill` of the <text> whose content is exactly `label`.
+  const pillTextFill = (svg: string | null | undefined, label: string): string | undefined =>
+    (svg ?? "").match(new RegExp(`<text[^>]*fill="(#[0-9a-fA-F]{6})"[^>]*>${label}</text>`))?.[1];
+  const palePill = "#FFF9E0"; // ~1.06:1 against white — an invisible label before the fix
+  const pillWrite = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true, varietyDial: 1, // varietyDial >= 0.4 → banner heading style
+    regions: [{
+      region: "ainotes", label: "NOTES", labelFill: palePill,
+      lines: [{ text: "Section", heading: true, fill: palePill }],
+    }],
+  });
+  const pillGroup = regionGroup(pillWrite.aiSvg, "ainotes") ?? "";
+  check(
+    "a pale labelFill is still drawn VERBATIM as the pill (Rule 1: raw hex is fills-only)",
+    (pillGroup.match(new RegExp(`<rect[^>]*fill="${palePill}"`, "g")) ?? []).length === 2,
+    pillGroup.slice(0, 400),
+  );
+  const labelFill = pillTextFill(pillGroup, "NOTES");
+  check(
+    "the region-label pill's text clears 4.5:1 against a pale caller labelFill",
+    !!labelFill && contrastRatioHex(labelFill!, palePill) >= 4.5,
+    `emitted=${labelFill} ratio=${labelFill ? contrastRatioHex(labelFill, palePill).toFixed(2) : "n/a"}`,
+  );
+  const headFill = pillTextFill(pillGroup, "Section");
+  check(
+    "a heading line's pill text clears 4.5:1 against a pale caller fill",
+    !!headFill && contrastRatioHex(headFill!, palePill) >= 4.5,
+    `emitted=${headFill} ratio=${headFill ? contrastRatioHex(headFill, palePill).toFixed(2) : "n/a"}`,
+  );
+  // Scope guard: the theme's OWN banners are design-reviewed constants and keep white.
+  const themePill = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true, theme: "bright",
+    regions: [{ region: "ainotes", label: "NOTES" }],
+  });
+  check(
+    "a theme-derived banner keeps the theme's white pill text (unchanged)",
+    pillTextFill(regionGroup(themePill.aiSvg, "ainotes"), "NOTES") === "#FFFFFF",
+    regionGroup(themePill.aiSvg, "ainotes")?.slice(0, 300),
+  );
+  // When NEITHER candidate can clear the floor, the best one is used and the unattended
+  // caller gets a signal instead of silence.
+  const midPill = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true, varietyDial: 1,
+    regions: [{ region: "ainotes", label: "NOTES", labelFill: "#808080" }],
+  });
+  check(
+    "a mid-tone caller fill no pill text can clear warns (banner_label_contrast)",
+    midPill.warningDetails.some((w) => w.code === "banner_label_contrast" && w.severity === "warning"),
+    JSON.stringify(midPill.warningDetails.map((w) => w.code)),
+  );
+  check(
+    "a legible caller fill does NOT warn",
+    !pillWrite.warningDetails.some((w) => w.code === "banner_label_contrast"),
+    JSON.stringify(pillWrite.warningDetails.map((w) => w.code)),
+  );
+
   console.log("\nfetch_image validation after optional background removal");
   const fakeFetch: typeof fetch = async () =>
     new Response(Buffer.from(PNG_1x1, "base64"), { status: 200, statusText: "OK" });

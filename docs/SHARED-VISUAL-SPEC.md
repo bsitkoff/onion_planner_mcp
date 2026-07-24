@@ -97,6 +97,14 @@
   height `round(1.15 × size) + 6`, top `baseline − round(0.82 × size) − 3`; label **weight 700**,
   **letter-spacing 0.08em**, color `#FFFFFF`, inset `12px`. "Underline" style instead: bold
   label + hairline rule (`stroke = ink`, `opacity 0.4`) at `baseline + round(0.45 × size)`.
+- **Pill label colour on a CALLER-supplied fill.** A theme's own banners are banded for white
+  text, so they keep `#FFFFFF`. A caller's `labelFill` / heading `fill` has no such guarantee —
+  banding it wouldn't give one either (HSL lightness doesn't bound luminance: a banded pale
+  yellow still sits at ~1.4:1 under white). So the caller's hex lands on the pill **verbatim**
+  (§0 Rule 1: raw hex is fills-only) and the **label text** is chosen instead — `#FFFFFF` when it
+  already clears 4.5:1 on that pill, else the theme's floored ink, whichever reads better. When
+  neither candidate clears the floor the write emits a `banner_label_contrast` warning rather
+  than shipping an unreadable heading.
 - **Region label** (title banner): same pill at **size 15 / weight 800 / letter-spacing 0.1em**.
   When the template prints a dashed label slot (`<rect data-region="label-<name>">` nested in
   the region's own `<g>`), the banner pill stretches to **fill that slot's box exactly**

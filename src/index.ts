@@ -325,7 +325,9 @@ const lineSchema = z.object({
   fill: HEX_COLOR.optional().describe(
     "Override colour (hex). Defaults to the resolved theme colour (gold is retired). " +
       "Auto-darkened to the ≥4.5:1 contrast floor when drawn as text — pick from " +
-      "read_page's `underlay` palette to stay in the chapter's colours.",
+      "read_page's `underlay` palette to stay in the chapter's colours. On a `heading` " +
+      "line under a banner theme this is the PILL colour instead (used verbatim); the " +
+      "label text is then picked to read on it, and warns if nothing clears the floor.",
   ),
   marker: z
     .enum(["checkbox", "bullet"])
@@ -534,7 +536,11 @@ server.tool(
                 "\"TOP 3\"). Themed like headings (colored pill, or label+rule). For a sub-section " +
                 "INSIDE a box region, use a line with `heading` instead.",
             ),
-          labelFill: HEX_COLOR.optional().describe("Override the label banner color (hex; default: theme)."),
+          labelFill: HEX_COLOR.optional().describe(
+            "Override the label banner color (hex; default: theme). Used verbatim as the " +
+              "pill on a banner theme (the label text is picked to read on it, and warns if " +
+              "nothing clears 4.5:1); auto-darkened as the label text on an underline theme.",
+          ),
           lines: z
             .array(lineSchema)
             .optional()

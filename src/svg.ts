@@ -8,6 +8,8 @@ import {
   PALETTE_CHARACTERS,
   floorTextHex,
   floorAccentHex,
+  pillTextHex,
+  contrastRatioHex,
   type Harmony,
 } from "./color.js";
 
@@ -1261,6 +1263,35 @@ export function composeAiSvg(
   };
   // Banner heading colours cycle across the whole page so sections read distinctly.
   let bannerIdx = 0;
+  /**
+   * The label colour for a banner pill. A theme's own banners are design-reviewed
+   * constants banded for white text, so they keep `theme.bannerText` untouched. A
+   * CALLER's `labelFill` / heading `fill` is an arbitrary hex that used to be dropped
+   * behind hard-coded white — a pale one gave an invisible label at ~1:1 and no warning
+   * (issue #37). Their colour still lands verbatim on the pill (Rule 1: raw hex is
+   * fills-only); the text moves to whichever candidate reads on it, and if neither
+   * clears the floor the unattended caller gets told rather than shipping a broken page.
+   */
+  const pillLabelColor = (pill: string, callerSupplied: boolean, regionName: string): string => {
+    if (!callerSupplied) return theme.bannerText;
+    let picked;
+    try {
+      picked = pillTextHex(pill, theme.bannerText, theme.text);
+    } catch {
+      return theme.bannerText; // not a hex we can parse — leave the pill text as the theme's
+    }
+    if (!picked.clears) {
+      warn(
+        "banner_label_contrast",
+        `region "${regionName}": banner label on fill ${pill} reaches only ` +
+          `${contrastRatioHex(pill, picked.hex).toFixed(1)}:1 — under the 4.5:1 floor. ` +
+          `Use a darker or lighter fill so the label reads.`,
+        "warning",
+        regionName,
+      );
+    }
+    return picked.hex;
+  };
 
   for (const input of inputs) {
     const region = byName.get(input.region);
@@ -1313,12 +1344,13 @@ export function composeAiSvg(
         const bw = slot ? slot.width : lw + padX * 2;
         const color = input.labelFill ?? theme.banners[bannerIdx % theme.banners.length];
         bannerIdx++;
+        const labelText = pillLabelColor(color, input.labelFill !== undefined, region.name);
         parts.push(
           `    <rect x="${lx}" y="${by}" width="${bw}" height="${bh}" rx="6" fill="${color}"/>`,
         );
         parts.push(
           `    <text x="${lx + padX}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
-            `font-weight="800" letter-spacing="0.1em" fill="${theme.bannerText}">${escapeXml(input.label)}</text>`,
+            `font-weight="800" letter-spacing="0.1em" fill="${labelText}">${escapeXml(input.label)}</text>`,
         );
       } else {
         const lfill = input.labelFill !== undefined ? floorTextFill(input.labelFill) : theme.text;
@@ -1710,6 +1742,7 @@ export function composeAiSvg(
             const by = y - Math.round(size * 0.82) - 3;
             const color = line.fill ?? theme.banners[bannerIdx % theme.banners.length];
             bannerIdx++;
+            const headText = pillLabelColor(color, line.fill !== undefined, region.name);
             parts.push(
               `    <rect x="${x}" y="${by}" width="${labelW + padX * 2}" height="${bh}" ` +
                 `rx="6" fill="${color}"/>`,
@@ -1717,7 +1750,7 @@ export function composeAiSvg(
             parts.push(
               `    <text x="${x + padX}" y="${y}" font-family="${escapeXml(font)}" ` +
                 `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em" ` +
-                `fill="${theme.bannerText}">${escapeXml(line.text)}</text>`,
+                `fill="${headText}">${escapeXml(line.text)}</text>`,
             );
           } else {
             const hfill = line.fill !== undefined ? floorTextFill(line.fill) : theme.text;

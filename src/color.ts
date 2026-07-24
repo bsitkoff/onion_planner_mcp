@@ -258,6 +258,31 @@ export function contrastRatioHex(a: string, b: string): number {
 export const CONTRAST_FLOOR = 4.5;
 
 /**
+ * Pick the legible label colour for text sitting on a **banner pill** — a different
+ * contrast pair than Rule 1's "text on paper", since the pill, not the paper, is the
+ * background. Returns `preferred` (the theme's pill text) whenever it already clears
+ * the floor, otherwise whichever of the two candidates reads better on `pillHex`.
+ *
+ * A caller's `labelFill` is an arbitrary hex with no design review behind it, and
+ * lightness-banding it doesn't bound luminance (a banded pale yellow still sits at
+ * ~1.4:1 under white), so the pill colour is kept VERBATIM — Rule 1's "raw hex is
+ * fills-only" — and the TEXT is what moves. `clears` reports whether the winner
+ * actually made the floor, so a caller can be warned when neither candidate can.
+ */
+export function pillTextHex(
+  pillHex: string,
+  preferred: string,
+  alternate: string,
+): { hex: string; clears: boolean } {
+  const preferredRatio = contrastRatioHex(pillHex, preferred);
+  if (preferredRatio >= CONTRAST_FLOOR) return { hex: preferred, clears: true };
+  const alternateRatio = contrastRatioHex(pillHex, alternate);
+  return alternateRatio > preferredRatio
+    ? { hex: alternate, clears: alternateRatio >= CONTRAST_FLOOR }
+    : { hex: preferred, clears: false };
+}
+
+/**
  * Rule 1 — darken (drop HSL lightness, keep hue/sat) until `hsl` clears `CONTRAST_FLOOR`
  * against paper. A colour already at/above the floor passes through unchanged. This
  * replaces the old hand-tuned lightness bands (`TEXT_L_MAX`/`ACCENT_L_MAX`) with real

@@ -210,6 +210,9 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
   default (no `harmony`/`accent`/preset) palette derives from the chapter's own `paletteCharacter`
   (or the default character if unset), lifted lighter per Rule 2 — never darker than the user's own
   ink. See `docs/SHARED-VISUAL-SPEC.md` §0 and the app's `design/INK-PALETTE.md`.
+  A **banner pill** is a different contrast pair (text on the pill, not on paper): a caller's
+  `labelFill`/heading `fill` lands raw on the pill and the *label colour* is picked to read on it
+  (`pillTextHex`), warning `banner_label_contrast` when nothing clears — see SPEC §5.
   Only the `harmony`-**derived** palette deepens text (a lightness floor at derivation, so adaptive text
   stays legible on cream — not a runtime contrast checker). Text also carries a `font-weight` (per-region default
   600, 500 for the serif `ainotes`; per-line `weight` override) — **confirmed honoured**, since the

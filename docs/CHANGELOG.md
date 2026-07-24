@@ -7,6 +7,32 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: banner pill labels stay legible on a caller-supplied fill — 2026-07-24
+
+[#37](https://github.com/bsitkoff/onion_planner_mcp/issues/37). A `regions[].labelFill` or a
+heading line's `fill` becomes the **pill** under a banner theme, and the pill's label was
+hard-coded to `theme.bannerText` (`#FFFFFF`). A pale hex therefore composed white-on-near-white
+— `#FFFFFF` on `#FFF9E0` is ~1.03:1, an invisible heading — with **no warning**, on the write
+path that has no human watching. The same hex passed as body text *was* auto-darkened, so the
+behaviour was inconsistent and undiscoverable from the schema. It was also easy to hit by
+accident: `headingStyle` isn't caller-chosen, it falls out of the resolved theme
+(`varietyDial < 0.4` → underline, else banner), so the identical `fill` meant "legible label" on
+one theme and "invisible label" on another.
+
+- **The caller's colour stays verbatim on the pill; the label text moves.** New
+  `color.ts:pillTextHex` picks `#FFFFFF` when it already clears 4.5:1 on that pill, else the
+  theme's floored ink — whichever reads better. Banding the fill (the first thing tried) is
+  *not* a fix: HSL lightness doesn't bound luminance, so a banded pale yellow still sits at
+  ~1.4:1 under white. Keeping the fill raw also matches Rule 1's "raw hex is fills-only".
+- **New `banner_label_contrast` warning** when neither candidate clears the floor (a mid-tone
+  pill like `#808080`) — a signal instead of silence.
+- **Theme-derived banners are untouched** — they're design-reviewed constants already banded for
+  white text, and only caller-supplied fills bypassed a guard.
+- Docs: `SHARED-VISUAL-SPEC.md` §5 (new pill-label rule), the `labelFill` / `lines[].fill`
+  schema descriptions in `src/index.ts` (which said only "Override the label banner color").
+
+Smoke 317 checks, all passing · tsc clean.
+
 ## Colour system confirmed — OKLCH lift, 12 monthly palettes, `inkReadable` — 2026-07-10
 
 Bridget's 2026-07-10 sign-off resolves the four items the 2026-07-09 work flagged as proposals

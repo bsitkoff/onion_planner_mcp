@@ -103,9 +103,11 @@ instead of memorizing "don't double-write the date" in skill prose —
   longer bundled, but `SVGCanvasRenderer.drawText` repaints any `font-family="Phosphor"` node
   into the matching SF Symbol via `Phosphor(legacyCharacter:)`, so what this server emits
   still renders. The five weather/decoration names remain **absent** from the app enum.
-  New constraint the migration introduces: because the MCP addresses a glyph by its *legacy
-  codepoint*, a case the app adds as SF-Symbol-only (no `legacyScalar`) would be unreachable
-  from here — unblocking this needs the codepoint, not just the symbol name.
+  What unblocking needs is the **legacy codepoint** for each new glyph, not just its SF Symbol
+  name — the MCP addresses a glyph by codepoint, and the app's `legacyScalar` is `private`.
+  (The app's exhaustive switches do force a codepoint to *exist* for any new case; nothing
+  forces it to be published or to match our mirror — see
+  [#41](https://github.com/bsitkoff/onion_planner_mcp/issues/41).)
   [#11](https://github.com/bsitkoff/onion_planner_mcp/issues/11)
 - **Full-text / handwriting search** (`textContains` on `list_pages`) — needs the app-side
   OCR data source; the where-does-recognized-text-live decision is recorded in the issue.

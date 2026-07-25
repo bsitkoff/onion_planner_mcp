@@ -96,9 +96,16 @@ instead of memorizing "don't double-write the date" in skill prose —
 ## Planned — blocked on the app
 
 - **Phosphor weather/decoration glyphs** (`umbrella`, `sun`, `cloud`, `check`, `star`) —
-  plumbing shipped; waiting on the app's `Phosphor.swift` to publish the codepoints.
-  Coordinate with the app's Phosphor→SF Symbols migration (onionskin#113): confirm the
-  shared glyph names survive it.
+  plumbing shipped; still waiting on the app to publish these five. **The migration question
+  is now answered** (verified 2026-07-24): onionskin#113 (Phosphor→SF Symbols) closed
+  2026-07-12, and the shared glyph names *did* survive — all **22** names in
+  `PHOSPHOR_CODEPOINTS` match the app's enum with identical codepoints. `Phosphor.ttf` is no
+  longer bundled, but `SVGCanvasRenderer.drawText` repaints any `font-family="Phosphor"` node
+  into the matching SF Symbol via `Phosphor(legacyCharacter:)`, so what this server emits
+  still renders. The five weather/decoration names remain **absent** from the app enum.
+  New constraint the migration introduces: because the MCP addresses a glyph by its *legacy
+  codepoint*, a case the app adds as SF-Symbol-only (no `legacyScalar`) would be unreachable
+  from here — unblocking this needs the codepoint, not just the symbol name.
   [#11](https://github.com/bsitkoff/onion_planner_mcp/issues/11)
 - **Full-text / handwriting search** (`textContains` on `list_pages`) — needs the app-side
   OCR data source; the where-does-recognized-text-live decision is recorded in the issue.

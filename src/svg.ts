@@ -409,7 +409,22 @@ interface RegionDefault {
    *  schedule needs a wider gutter so its text clears the printed hour labels. */
   xPad?: number;
 }
-const REGION_DEFAULTS: Record<string, RegionDefault> = {
+/**
+ * The closed in-app font set (the app bundles exactly these under
+ * `Onionskin/DesignSystem/Fonts/`; `Phosphor` is the retired icon face the renderer
+ * repaints as SF Symbols). `index.ts` builds the tool schema's enum from this and
+ * `test/parity.ts` diffs it against the app's bundled font files.
+ */
+export const FONT_FAMILIES = [
+  "Mulish",
+  "Newsreader",
+  "IBM Plex Mono",
+  "Caveat",
+  "Fredoka",
+  "Phosphor",
+] as const;
+
+export const REGION_DEFAULTS: Record<string, RegionDefault> = {
   ainotes: { font: "Newsreader", size: 16, weight: 500 }, // the serif AI-voice register
   header: { font: "Mulish", size: 20, weight: 700 },
   schedule: { font: "Mulish", size: 15, weight: 600, xPad: 52 },
@@ -418,6 +433,24 @@ const REGION_DEFAULTS: Record<string, RegionDefault> = {
   notes: { font: "Mulish", size: 14, weight: 600 },
   focus: { font: "Mulish", size: 15, weight: 600 },
   month: { font: "Mulish", size: 13, weight: 600 },
+  // The rest of the 2026-06 catalogue family (#49) — previously fell to FALLBACK_DEFAULT.
+  "list-1": { font: "Mulish", size: 15, weight: 600 }, // todo template's three columns
+  "list-2": { font: "Mulish", size: 15, weight: 600 },
+  "list-3": { font: "Mulish", size: 15, weight: 600 },
+  habits: { font: "Mulish", size: 14, weight: 500 }, // the composer's habits block (#50)
+  last: { font: "Newsreader", size: 15, weight: 500 }, // reflection's "from last session"
+  photos: { font: "Mulish", size: 13, weight: 600 }, // captions under photo slots
+  morning: { font: "Mulish", size: 15, weight: 600 }, // weekend day-parts
+  afternoon: { font: "Mulish", size: 15, weight: 600 },
+  evening: { font: "Mulish", size: 15, weight: 600 },
+  weekdays: { font: "Mulish", size: 13, weight: 800 }, // monthly's Sun–Sat header (printed)
+  page: { font: "Mulish", size: 14, weight: 600 }, // lined/dotted/blank surface (ink)
+  joys: { font: "Mulish", size: 14, weight: 600 }, // reflection prompts (ink)
+  concerns: { font: "Mulish", size: 14, weight: 600 },
+  memories: { font: "Mulish", size: 14, weight: 600 },
+  // `accent` is image-only (one sticker or tiny drawing, never text) — typography here is
+  // only so a stray line still renders; composeAiSvg warns `accent_text` for it.
+  accent: { font: "Mulish", size: 12, weight: 600 },
   // legacy region names (retired 2026-06) — kept so older pages still style correctly.
   quote: { font: "Newsreader", size: 16, weight: 500 },
   affirmation: { font: "Newsreader", size: 16, weight: 500 },
@@ -656,8 +689,25 @@ export interface RegionInput {
   label?: string;
   /** Override the label banner color (defaults to the theme's cycled banner color). */
   labelFill?: string;
-  /** Text lines (ruled/box regions). Mutually exclusive with `calendar`/`svg`. */
+  /**
+   * How the region title is drawn (#49). Default = the theme's heading style (a coloured
+   * pill on `banner` themes, label + rule on `underline`). `"plain"` matches the app's
+   * on-device composer exactly — Mulish 12 / 700 / uppercase in the theme accent, at the
+   * printed `label-*` slot's origin (`x+2`, `y+min(height−4,16)`), no pill, no rule.
+   */
+  labelStyle?: "theme" | "plain";
+  /** Text lines (ruled/box regions). Mutually exclusive with `calendar`/`svg`/`habits`. */
   lines?: LineInput[];
+  /**
+   * Render the composer-parity **habits** block (#50): one row per habit name — a 13px
+   * `rx 2` square at `x+6` and the name in Mulish 14 at `x+26`, first baseline `y+18`,
+   * 21px pitch, stopping at the region height (`habits_overflow` warns). `true` means
+   * "the library's `settings.json → underlayHabits`" — `page.ts` resolves it to the
+   * list before compose; `composeAiSvg` itself only accepts the resolved `string[]`.
+   * Meant for a region named `habits` (titled via its `label-habits` slot when present).
+   * Mutually exclusive with `lines`/`calendar`/`svg`.
+   */
+  habits?: string[] | true;
   /** Calendar grid (the month region). Mutually exclusive with `lines`/`svg`. */
   calendar?: CalendarSpec;
   /**
@@ -1396,10 +1446,17 @@ export function composeAiSvg(
       input.lines !== undefined ? "lines" : null,
       input.calendar !== undefined ? "calendar" : null,
       input.svg !== undefined ? "svg" : null,
+      input.habits !== undefined ? "habits" : null,
     ].filter(Boolean);
+    if (input.habits === true) {
+      throw new Error(
+        `Region "${input.region}": \`habits: true\` must be resolved to the settings list ` +
+          `before compose (write_underlay does this; pass the names directly here).`,
+      );
+    }
     if (bodyKinds.length > 1) {
       throw new Error(
-        `Region "${input.region}": provide only one of \`lines\`, \`calendar\`, or ` +
+        `Region "${input.region}": provide only one of \`lines\`, \`calendar\`, \`habits\`, or ` +
           `\`svg\` (got ${bodyKinds.join(" + ")}).`,
       );
     }
@@ -1411,24 +1468,39 @@ export function composeAiSvg(
     // at it instead of the default margin position — banner style fills the slot's box
     // exactly; underline style just anchors its text off the slot's origin (it draws no
     // box of its own, so there's nothing to stretch).
-    if (input.label) {
+    // A habits region with a printed `label-habits` slot titles itself the way the
+    // on-device composer does ("Habits", plain) unless the caller passed a label (#50).
+    const effLabel =
+      input.label ?? (Array.isArray(input.habits) && region.labelSlot ? "Habits" : undefined);
+    const effLabelStyle = input.labelStyle ?? (input.label === undefined && effLabel ? "plain" : "theme");
+    if (effLabel) {
       const lsize = 15;
       const slot = region.labelSlot;
-      const lw = bannerLabelWidth(input.label, lsize);
+      const lw = bannerLabelWidth(effLabel, lsize);
       const labelFont = themeFontFor(theme, region.name, true) ?? "Mulish";
       // A printed slot sits inside the region's authored space, so it can't be
       // off-page by construction — only check the fallback margin placement.
       if (!slot && region.y - 12 - lsize < 0) {
         warn(
           "label_above_page",
-          `region "${region.name}": label "${truncate(input.label)}" may sit above the page top.`,
+          `region "${region.name}": label "${truncate(effLabel)}" may sit above the page top.`,
           "warning",
           region.name,
         );
       }
       const lx = slot ? slot.x : DEFAULT_X_PAD;
       const ly = slot ? slot.y + slot.height - Math.round(slot.height * 0.28) : -12;
-      if (theme.headingStyle === "banner") {
+      if (effLabelStyle === "plain") {
+        // Composer parity (`UnderlaySVGComposer.sectionLabel`): uppercase Mulish 12 / 700
+        // in the accent, anchored at the slot's origin — no pill, no rule.
+        const px = slot ? slot.x + 2 : DEFAULT_X_PAD;
+        const py = slot ? slot.y + (slot.height > 0 ? Math.min(slot.height - 4, 16) : 16) : -12;
+        const pfill = input.labelFill !== undefined ? floorTextFill(input.labelFill) : theme.accent;
+        parts.push(
+          `    <text x="${px}" y="${py}" font-family="Mulish" font-size="12" font-weight="700" ` +
+            `fill="${pfill}">${escapeXml(effLabel.toUpperCase())}</text>`,
+        );
+      } else if (theme.headingStyle === "banner") {
         const padX = BANNER_PAD_X;
         const bh = slot ? slot.height : Math.round(lsize * 1.15) + 6;
         const by = slot ? slot.y : ly - Math.round(lsize * 0.82) - 3;
@@ -1441,13 +1513,13 @@ export function composeAiSvg(
         );
         parts.push(
           `    <text x="${lx + padX}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
-            `font-weight="800" letter-spacing="0.1em" fill="${labelText}">${escapeXml(input.label)}</text>`,
+            `font-weight="800" letter-spacing="0.1em" fill="${labelText}">${escapeXml(effLabel)}</text>`,
         );
       } else {
         const lfill = input.labelFill !== undefined ? floorTextFill(input.labelFill) : theme.text;
         parts.push(
           `    <text x="${lx}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
-            `font-weight="800" letter-spacing="0.1em" fill="${lfill}">${escapeXml(input.label)}</text>`,
+            `font-weight="800" letter-spacing="0.1em" fill="${lfill}">${escapeXml(effLabel)}</text>`,
         );
         parts.push(
           `    <line x1="${lx}" y1="${ly + 4}" x2="${lx + lw + 18}" y2="${ly + 4}" ` +
@@ -1594,6 +1666,47 @@ export function composeAiSvg(
         }
         parts.push(`    ${frag}`);
       }
+    } else if (Array.isArray(input.habits)) {
+      // Composer-parity habits block (#50; `UnderlaySVGComposer.habitsGroup`): one row per
+      // habit, a square checkbox + the name, region-local. Geometry mirrors the app so a
+      // page authored here and one authored on device look the same.
+      const hSize = 14;
+      const hLineH = Math.round(hSize * 1.5); // 21
+      const hBox = Math.round(hSize * 0.9); // 13
+      const hLabelX = 6 + hBox + 7; // 26
+      let hy = 18;
+      let drawn = 0;
+      for (const name of input.habits) {
+        if (region.height !== null && hy > region.height) break;
+        parts.push(
+          `    <rect x="6" y="${hy - hBox}" width="${hBox}" height="${hBox}" rx="2" ` +
+            `fill="none" stroke="${theme.text}" stroke-width="1"/>`,
+        );
+        parts.push(
+          `    <text x="${hLabelX}" y="${hy}" font-family="Mulish" font-size="${hSize}" ` +
+            `font-weight="500" fill="${theme.text}">${escapeXml(name)}</text>`,
+        );
+        hy += hLineH;
+        drawn++;
+      }
+      if (drawn < input.habits.length) {
+        warn(
+          "habits_overflow",
+          `region "${region.name}": ${input.habits.length - drawn} of ${input.habits.length} ` +
+            `habits don't fit the ${region.height}px box — only the first ${drawn} drawn.`,
+          "warning",
+          region.name,
+        );
+      }
+      if (region.name !== "habits") {
+        warn(
+          "habits_region_name",
+          `region "${region.name}": the habits block is meant for a region named "habits" ` +
+            `(the on-device composer only renders habits there) — drawn here as asked.`,
+          "info",
+          region.name,
+        );
+      }
     } else if (input.calendar) {
       parts.push(
         ...composeCalendar(region, input.calendar, theme, (days) => {
@@ -1681,6 +1794,21 @@ export function composeAiSvg(
       // baseline y -> the text of the `lines[]` entry that owns it (row_collision, #30).
       const baselineOwners = new Map<number, string>();
       let handwritingWarned = false;
+      // `accent` is the catalogue's universal decorative pocket — "one sticker or tiny
+      // drawing, never text, ok to leave empty" (#49).
+      if (region.name === "accent" && lines.length > 0) {
+        warn(
+          "accent_text",
+          `region "accent": ${lines.length} text line(s) given — the accent pocket is for one ` +
+            `small sticker/drawing, never text (drawn anyway; consider an \`images\` entry).`,
+          "warning",
+          region.name,
+        );
+      }
+      // Header composition parity (#48): when art fills the header's slot, the date /
+      // eyebrow text must clear it — the composer reserves the slot plus 12px.
+      const artClearX =
+        region.artSlot && imageRects.length > 0 ? region.artSlot.x - 12 : null;
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
         const font = line.font ?? themeFontFor(theme, region.name, !!line.heading) ?? def.font;
@@ -2023,14 +2151,15 @@ export function composeAiSvg(
         // Available width is box-relative: from the inset to the right edge when
         // left-aligned; symmetric about the centre; from the left inset to the anchor
         // when right-aligned.
+        const rightEdge = artClearX !== null ? Math.min(region.width ?? artClearX, artClearX) : region.width;
         const maxWidth =
-          region.width === null
+          rightEdge === null
             ? null
             : align === "center"
-              ? region.width - 2 * xPadR
+              ? rightEdge - 2 * xPadR
               : align === "right"
                 ? anchorX - xPadR
-                : region.width - x;
+                : rightEdge - x;
         const segments =
           effWrap && maxWidth !== null && maxWidth > 0
             ? wrapText(line.text, font, size, maxWidth)
@@ -2141,6 +2270,7 @@ export function composeAiSvg(
       !input.label &&
       (input.images?.length ?? 0) === 0 &&
       input.calendar === undefined &&
+      input.habits === undefined &&
       (input.svg === undefined || input.svg.trim() === "") &&
       (input.lines?.length ?? 0) === 0 &&
       !hourLabelsDrawn;

@@ -76,11 +76,12 @@ to exercise the MCP transport itself.
 | `src/color.ts` | Pure colour helpers (hex↔HSL, hex↔OKLab) + `harmony` palette derivation from the template's sampled colours, with a lightness floor on derived text so it reads on cream. The underlay lift (`liftForUnderlay = 0.14`) steps **OKLCH lightness** (perceptual); `monthlyInks` holds the 12 confirmed per-month palettes. No deps. |
 | `src/page.ts` | Read a page, **atomic** ai.svg + `media/ai/` image writes (`resolveImages`/`gcOrphanMedia`), manifest status flips, `create_page`. |
 
-The 10 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`, `read_ink`,
+The 11 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`, `read_ink`,
 `write_underlay`, `set_underlay_status`, `clear_underlay`, `create_page`, `set_chapter_theme`,
-`fetch_image`. Only five mutate the library (`write_underlay`, `set_underlay_status`,
-`clear_underlay`, `create_page`, and `set_chapter_theme` — which writes only the chapter's
-`.folder.json → theme` block); `read_ink` is read-only (the user's handwriting layer — read it before composing
+`set_habits`, `fetch_image`. Only six mutate the library (`write_underlay`, `set_underlay_status`,
+`clear_underlay`, `create_page`, `set_chapter_theme` — which writes only the chapter's
+`.folder.json → theme` block — and `set_habits`, which writes only the root `settings.json →
+underlayHabits` key, read-modify-write, every other key preserved, refusing a garbled file); `read_ink` is read-only (the user's handwriting layer — read it before composing
 so you place AI content *around* a `shared` region's handwriting; bulky per-stroke `data-stroke`
 streams are stripped unless `includeStrokeData` is set; refuses when the chapter marks its ink
 private via `permissions.inkReadable: false`, reflection chapters private by default) and `fetch_image` only writes a
@@ -202,7 +203,8 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
   and the page's **`media/ai/`** subfolder (AI-owned images — written + garbage-collected
   here); on create, the new page's own files + the chapter `.folder.json` order; and via
   `set_chapter_theme`, the chapter `.folder.json → theme` block (only the passed keys, order +
-  other fields preserved). Never touch
+  other fields preserved); and via `set_habits`, the root `settings.json → underlayHabits` key
+  only (the app's `UNDERLAY-AUTOFILL.md` names it MCP read/writable). Never touch
   `ink.svg`, `stickers.svg`, `template.svg`, the rest of `media/`, or anything under `Private/`.
 - All writes go through `resolvePageRel` (enforces `Shared/` containment) and `atomicWrite`
   (temp + rename).

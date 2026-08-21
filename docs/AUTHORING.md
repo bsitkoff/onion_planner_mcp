@@ -217,6 +217,32 @@ past the grid, which would otherwise fold onto the last rule), and `text_below_r
 line whose baseline falls below the region box). Treat any of these as "re-layout", not noise —
 an unattended write has no human to notice the pile-up.
 
+### Composer parity: habits, section titles, the header (#48, #49, #50)
+
+The app's on-device composer is the *other* author of `ai.svg`; where it has a fixed look,
+match it so a device-authored day and an MCP-authored day read the same.
+
+- **Habits** are a vector block, never a raster sticker. The list lives in the library's
+  `settings.json → underlayHabits` (see `get_library` / `read_page`; set it with
+  `set_habits`). Draw it with `{ region: "habits", habits: true }` — one 13px square + the
+  name per row (Mulish 14, 21px pitch), titled "HABITS" through the region's `label-habits`
+  slot when the template prints one. It belongs in a region named `habits` (the composer
+  renders habits only there); on a template without one, `habits_region_name` info-flags the
+  detour. Never infer habits from to-dos or merge them into the to-do list.
+- **Section titles** go into the printed `label-*` slot (`labelSlot` on `read_page`). The
+  region's `label` already targets the slot; `labelStyle: "plain"` draws it exactly as the
+  composer does (uppercase Mulish 12/700, accent, no pill). Mind the slot names on the todo
+  template: columns are `list-1/2/3`, slots are `label-list1/2/3` (no hyphen) — `read_page`
+  resolves each region's own slot, so never derive one name from the other.
+- **The `accent` pocket** (every template) is one small sticker or tiny drawing — never text
+  (`accent_text` warns), and fine to leave empty.
+- **Header recipe** (the composer's geometry): date as `EEEE, MMMM d` at size 38 / weight 700
+  (28 on a header under 80px tall), then an optional uppercased one-line "story eyebrow" at
+  size 14 / weight 700 in the accent above it; art fills the `art-header` slot with
+  `fit: "contain"`. When art is present the server clamps header text to clear the slot by
+  12px, so the date never runs under the banner. Or skip the text entirely for a one-piece
+  date sticker (above).
+
 ### Font roles (#29)
 
 AI underlay copy is **clean UI type**; the handwriting faces belong to the user's ink layer.

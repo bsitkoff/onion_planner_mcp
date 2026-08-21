@@ -8,7 +8,8 @@
     "start": "tsx src/index.ts",
     "call": "tsx test/cli.ts",
     "build": "tsc",
-    "smoke": "rm -rf /tmp/onionskin-test && cp -R ../onionskin/Onionskin/Fixtures/Library /tmp/onionskin-test && ONIONSKIN_CONTAINER=/tmp/onionskin-test tsx test/smoke.ts"
+    "smoke": "rm -rf /tmp/onionskin-test && cp -R ../onionskin/Onionskin/Fixtures/Library /tmp/onionskin-test && ONIONSKIN_CONTAINER=/tmp/onionskin-test tsx test/smoke.ts && tsx test/parity.ts",
+    "parity": "tsx test/parity.ts"
   },
   "author": "Bridget Sitkoff",
   "license": "MIT",

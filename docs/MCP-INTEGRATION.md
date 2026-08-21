@@ -52,7 +52,7 @@ That `Documents/` directory is the **library root**. Layout:
 
 ```
 Documents/                         ← library root
-├─ settings.json                   ← global settings (read-only for you)
+├─ settings.json                   ← global settings (read `underlayVoice`; `underlayHabits` is the ONE key you may write)
 ├─ Templates/                      ← catalogue of templates (read-only; create_page source)
 │  ├─ templates.json               ← id/name/category/style/files per template
 │  └─ daily-minimal/template.svg   ← one folder per template id

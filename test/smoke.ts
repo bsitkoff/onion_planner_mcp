@@ -20,6 +20,8 @@ import {
   listPages,
   listPageRows,
   readUnderlayVoice,
+  readUnderlayHabits,
+  writeUnderlayHabits,
   LibraryMissingError,
 } from "../src/library.js";
 import {
@@ -32,7 +34,7 @@ import {
   writeChapterTheme,
   fetchImageToTemp,
 } from "../src/page.js";
-import { resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages } from "../src/svg.js";
+import { resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages, REGION_DEFAULTS } from "../src/svg.js";
 import {
   hexToHsl,
   contrastRatioHex,
@@ -41,7 +43,7 @@ import {
   monthlyInks,
   PALETTE_CHARACTERS,
 } from "../src/color.js";
-import { inspectTemplate, parseRegions, PAPER_COLOR } from "../src/template.js";
+import { inspectTemplate, parseRegions, PAPER_COLOR, FILL_BY_NAME } from "../src/template.js";
 import { decodePng, encodePng, chromaKeyPixels } from "../src/png.js";
 
 // Gold is retired — the default (no theme override) resolves to the chapter's own ink
@@ -1490,6 +1492,52 @@ async function main() {
   });
   check("default Mulish 15 body text trips neither typography warning", !cleanTypo.warningDetails.some((w) => w.code === "text_too_small" || w.code === "handwriting_body_font"), JSON.stringify(cleanTypo.warnings));
 
+  console.log("\n#50 habits (settings.json ↔ vector block); #49 accent + plain labels; #48 header art clearance");
+  check("no underlayHabits → null", (await readUnderlayHabits(root)) === null);
+  await fs.writeFile(settingsPath, JSON.stringify({ underlayVoice: { name: "B" }, pencil: { smoothing: 0.6 } }));
+  const habitsWritten = await writeUnderlayHabits(root, ["PT", " Water ", "", "Read"]);
+  check("set_habits trims/drops blanks and returns the list", JSON.stringify(habitsWritten) === JSON.stringify(["PT", "Water", "Read"]), JSON.stringify(habitsWritten));
+  const settingsAfter = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+  check("other settings keys survive the habits write", settingsAfter.underlayVoice?.name === "B" && settingsAfter.pencil?.smoothing === 0.6, JSON.stringify(settingsAfter));
+  check("read_page surfaces underlayHabits", JSON.stringify((await readPage(root, daily)).underlayHabits) === JSON.stringify(["PT", "Water", "Read"]));
+  // A BYO template with a `habits` region + label-habits slot (no catalogue template ships one yet).
+  const habitsTpl = parseRegions('<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><g id="region-habits" data-region="habits" data-fill="shared" transform="translate(100,900)"><rect x="0" y="0" width="280" height="50" fill="none"/><rect x="0" y="-40" width="100" height="30" data-region="label-habits" stroke-dasharray="3 5"/></g></svg>');
+  const habitsOut = composeAiSvg([1024, 1366], [{ region: "habits", habits: ["PT", "Water", "Read"] }], habitsTpl);
+  const habitsGroup = regionGroup(habitsOut.svg, "habits") ?? "";
+  const habitBoxes = [...habitsGroup.matchAll(/<rect x="6" y="(\d+)" width="13" height="13" rx="2"/g)].map((m) => Number(m[1]));
+  check("habits block draws a 13px rx2 square per habit at x=6 (composer geometry)", habitBoxes.length === 2, JSON.stringify(habitBoxes));
+  check("habit rows start at baseline 18 and pitch 21 (boxes at y=5, 26)", habitBoxes[0] === 5 && habitBoxes[1] === 26, JSON.stringify(habitBoxes));
+  check("habit names are Mulish 14 at x=26", /<text x="26" y="18" font-family="Mulish" font-size="14"[^>]*>PT<\/text>/.test(habitsGroup), habitsGroup.slice(0, 300));
+  check("a 50px-tall box fits 2 of 3 habits and warns habits_overflow", habitsOut.warningDetails.some((w) => w.code === "habits_overflow" && w.message.includes("1 of 3")), JSON.stringify(habitsOut.warnings));
+  check("the label-habits slot is titled HABITS in the composer's plain style", /<text x="2" y="-24" font-family="Mulish" font-size="12" font-weight="700"[^>]*>HABITS<\/text>/.test(habitsGroup), habitsGroup.slice(0, 400));
+  check("habits: true is rejected by composeAiSvg (must be resolved by write_underlay)", (() => { try { composeAiSvg([1024, 1366], [{ region: "habits", habits: true }], habitsTpl); return false; } catch { return true; } })());
+  let habitsAndLines = false;
+  try { composeAiSvg([1024, 1366], [{ region: "habits", habits: ["PT"], lines: [{ text: "x" }] }], habitsTpl); } catch { habitsAndLines = true; }
+  check("habits is mutually exclusive with lines", habitsAndLines);
+  // write_underlay resolves `habits: true` from settings.json — the daily page has no habits
+  // region, so drive a todo region (info-flagged habits_region_name) to exercise the path.
+  const habitsLive = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", habits: true }] });
+  check("write_underlay resolves habits:true from settings.json (3 rows drawn)", (regionGroup(habitsLive.aiSvg, "todo") ?? "").split("<rect").length - 1 === 3, JSON.stringify(habitsLive.warnings));
+  check("a habits block outside a `habits` region is info-flagged habits_region_name", habitsLive.warningDetails.some((w) => w.code === "habits_region_name" && w.severity === "info"));
+  await writeUnderlayHabits(root, []);
+  check("set_habits [] removes the key", !("underlayHabits" in JSON.parse(await fs.readFile(settingsPath, "utf8"))));
+  let habitsMissing = false;
+  try { await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", habits: true }] }); } catch (e: any) { habitsMissing = /set_habits/.test(e.message); }
+  check("habits:true with no configured habits is a clear error naming set_habits", habitsMissing);
+  await fs.writeFile(settingsPath, "{ not json");
+  let garbledRefused = false;
+  try { await writeUnderlayHabits(root, ["PT"]); } catch { garbledRefused = true; }
+  check("set_habits refuses to overwrite a garbled settings.json", garbledRefused);
+  await fs.rm(settingsPath, { force: true });
+  // #49 — accent is image-only; the 2026-06 family has real defaults; plain label style.
+  const accentText = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "accent", lines: [{ text: "no text here" }] }] });
+  check("text in the accent pocket warns accent_text", accentText.warningDetails.some((w) => w.code === "accent_text"), JSON.stringify(accentText.warnings));
+  check("accent / list-1 / morning / last have explicit REGION_DEFAULTS (no fallback typography)", ["accent", "list-1", "morning", "last", "habits", "photos"].every((n) => n in REGION_DEFAULTS));
+  check("accent derives fill ai; habits derives shared (FILL_BY_NAME)", FILL_BY_NAME.accent === "ai" && FILL_BY_NAME.habits === "shared");
+  const plainLabel = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", label: "Schedule", labelStyle: "plain", lines: [{ text: "x", row: 1 }] }] });
+  const plainGroup = regionGroup(plainLabel.aiSvg, "schedule") ?? "";
+  const schedSlot = schedule!.labelSlot!;
+  check("labelStyle plain writes uppercase Mulish 12/700 at the slot origin (composer sectionLabel)", plainGroup.includes(`<text x="${schedSlot.x + 2}" y="${schedSlot.y + Math.min(schedSlot.height - 4, 16)}" font-family="Mulish" font-size="12" font-weight="700"`) && plainGroup.includes(">SCHEDULE</text>") && !/<rect[^>]*rx="6"/.test(plainGroup), plainGroup.slice(0, 300));
   console.log("\n#43: minting a YYYY-MM chapter stamps year/month (no title); order is chronological");
   await createPage(root, { chapter: "2026-09", name: "2026-09-15", template: "daily-minimal" });
   const m43FolderFile = path.join(root, "Shared", "2026-09", ".folder.json");
@@ -1680,6 +1728,17 @@ async function main() {
   check("header text with no image info-flags art_slot_unfilled", textOnlyHdr.warningDetails.some((w) => w.code === "art_slot_unfilled" && w.severity === "info"), JSON.stringify(textOnlyHdr.warnings));
   check("a header with a banner does not flag art_slot_unfilled", !contain.warningDetails.some((w) => w.code === "art_slot_unfilled"));
   check("a region with no art slot never flags art_slot_unfilled", !footer.warningDetails.some((w) => w.code === "art_slot_unfilled"));
+  // #48 — header text wraps clear of the art slot when a banner fills it.
+  const hdrRead = await readPage(root, hdrPage);
+  const hdrSlot = hdrRead.regions.find((r) => r.name === "header")!.artSlot!;
+  const longDate = "Thursday, August 20 — a long header line that would otherwise run right under the banner art on the right, and keeps going with an eyebrow-length story about the day so the wrap width difference shows";
+  const hdrWithArt = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", fit: "contain" }], lines: [{ text: longDate, wrap: true }] }] });
+  const hdrTexts = [...(regionGroup(hdrWithArt.aiSvg, "header") ?? "").matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  check("header text wraps to clear the filled art slot (several segments, none competing)", hdrTexts.length > 1 && !hdrWithArt.warningDetails.some((w) => w.code === "image_competes_with_text"), JSON.stringify({ hdrTexts, warnings: hdrWithArt.warnings, slotX: hdrSlot.x }));
+  const hdrNoArt = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", lines: [{ text: longDate, wrap: true }] }] });
+  const hdrNoArtTexts = [...(regionGroup(hdrNoArt.aiSvg, "header") ?? "").matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  check("without art the same line uses the full band (fewer segments)", hdrNoArtTexts.length < hdrTexts.length, `${hdrNoArtTexts.length} vs ${hdrTexts.length}`);
+
 
   console.log("\nwrite_underlay images via local file `path` (no base64 through context)");
   const srcPng = path.join(os.tmpdir(), "onionskin-smoke-src.png");

@@ -262,11 +262,12 @@ export function parseViewBox(templateSvg: string): [number, number] | null {
  * shipped templates (`../onionskin/.../Templates/`). Unknown names fall through to
  * template-type, then geometry (see deriveFill).
  */
-const FILL_BY_NAME: Record<string, RegionFill> = {
+export const FILL_BY_NAME: Record<string, RegionFill> = {
   // shared — AI seeds (calendar/tasks), the user augments by hand on top.
   schedule: "shared",
   agenda: "shared",
   todo: "shared",
+  habits: "shared", // the composer's habits block — AI draws boxes, the user checks them (#50)
   "list-1": "shared",
   "list-2": "shared",
   "list-3": "shared",
@@ -280,6 +281,7 @@ const FILL_BY_NAME: Record<string, RegionFill> = {
   ainotes: "ai", // the AI voice: weather/context/affirmation + a home for a small image
   last: "ai", // reflection's "from last session" — the AI surfaces it
   header: "ai",
+  accent: "ai", // every template's small decorative pocket — one sticker, never text (#49)
   // The monthly templates print Sun–Sat themselves — nothing for the AI to own here
   // (an `ai` default invited double-printing the weekday header).
   weekdays: "shared",

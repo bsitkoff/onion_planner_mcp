@@ -7,6 +7,34 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Feature: composer parity — habits block + `set_habits`, region vocab, plain labels, header clearance, parity guard — 2026-08-21
+
+[#50](https://github.com/bsitkoff/onion_planner_mcp/issues/50),
+[#49](https://github.com/bsitkoff/onion_planner_mcp/issues/49),
+[#48](https://github.com/bsitkoff/onion_planner_mcp/issues/48),
+[#41](https://github.com/bsitkoff/onion_planner_mcp/issues/41),
+[#51](https://github.com/bsitkoff/onion_planner_mcp/issues/51). Habit trackers were hand-placed
+raster stickers (broken hrefs, black boxes), the universal `accent` region and the rest of the
+2026-06 family fell to fallback typography, section titles didn't match the device composer,
+header text could run under the banner, and the hand-mirrored app tables had no drift check.
+
+- **`set_habits`** (11th tool) writes `settings.json → underlayHabits` — the one settings key
+  this server writes (read-modify-write, other keys preserved, garbled file refused);
+  `get_library`/`read_page` surface it. **`regions[].habits: true | string[]`** draws the
+  composer's vector block (13px `rx 2` square at x+6, Mulish 14 at x+26, baseline 18, pitch 21,
+  `habits_overflow`), self-titled "HABITS" through a `label-habits` slot. The catalogue
+  `habits` region itself ships from the app side (onionskin#225).
+- **Region vocab:** `accent` (+ `accent_text` warning), `habits`, `list-1/2/3`, `last`,
+  `photos`, `morning/afternoon/evening`, `weekdays`, `page`, `joys/concerns/memories` added to
+  `REGION_DEFAULTS`; `accent`/`habits` to `FILL_BY_NAME`.
+- **`labelStyle: "plain"`** — the composer's `sectionLabel` look (uppercase Mulish 12/700 in the
+  accent at the slot origin). **Header clearance:** with art in the slot, header text wraps to
+  `artSlot.x − 12`.
+- **`test/parity.ts`** (run by `npm run smoke`, skips without `../onionskin`): Phosphor
+  codepoints vs `Phosphor.swift`, catalogue regions/fills vs `FILL_BY_NAME`/`REGION_DEFAULTS`,
+  `RAW_SVG_ALLOWED_ELEMENTS` vs `SVGParser.swift`, `FONT_FAMILIES` (now exported from `svg.ts`,
+  the source of `FONT_ENUM`) vs the bundled `.ttf`s.
+
 ## Feature: `fit:"contain"`, `flatten:"paper"`, and composition warnings for images — 2026-08-20
 
 [#47](https://github.com/bsitkoff/onion_planner_mcp/issues/47),

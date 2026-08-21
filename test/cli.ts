@@ -15,7 +15,7 @@
  * A Bash-spawned process inherits the host's Full Disk Access, so live reads/writes
  * work here without reconnecting the registered server.
  */
-import { requireLibrary, listChapters, listPageRows, type PageFilter } from "../src/library.js";
+import { requireLibrary, listChapters, listPageRows, writeUnderlayHabits, type PageFilter } from "../src/library.js";
 import {
   readPage,
   readInk,
@@ -47,7 +47,7 @@ async function main() {
         "Tools: get_library | list_pages [chapter] [key=value filters] | read_page <page> [--template] |\n" +
         "  read_ink <page> | write_underlay <page> <json> | set_underlay_status <page> <status> |\n" +
         "  clear_underlay <page> | create_page <json> | set_chapter_theme <chapter> <json> |\n" +
-        "  fetch_image <json:{url,name?}>",
+        "  set_habits <json:[names]> | fetch_image <json:{url,name?}>",
     );
   }
 
@@ -133,6 +133,13 @@ async function main() {
       if (!args[0]) throw new Error("set_chapter_theme needs <chapter> <json>.");
       const body = parseJson(args[1], "theme");
       return out({ ok: true, ...(await writeChapterTheme(root, args[0], body)) });
+    }
+
+    case "set_habits": {
+      // args: <json:["PT","Water",...]>  ([] clears)
+      const body = parseJson(args[0], "habits");
+      if (!Array.isArray(body)) throw new Error("set_habits needs a JSON array of habit names.");
+      return out({ ok: true, underlayHabits: await writeUnderlayHabits(root, body) });
     }
 
     case "fetch_image": {

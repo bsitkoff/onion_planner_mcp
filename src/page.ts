@@ -13,7 +13,7 @@ import {
   type Region,
   type TemplateInfo,
 } from "./template.js";
-import { readUnderlayVoice, type UnderlayVoice } from "./library.js";
+import { readUnderlayVoice, readUnderlayHabits, type UnderlayVoice } from "./library.js";
 import {
   composeAiSvg,
   mergeRegions,
@@ -272,7 +272,7 @@ async function sweepStaleTmp(absFile: string): Promise<void> {
 }
 
 /** Write a file atomically: temp sibling + rename, so no reader sees a partial file. */
-async function atomicWrite(absFile: string, content: string | Uint8Array): Promise<void> {
+export async function atomicWrite(absFile: string, content: string | Uint8Array): Promise<void> {
   await sweepStaleTmp(absFile);
   const tmp = `${absFile}.tmp-${process.pid}-${tmpCounter++}`;
   await fs.writeFile(tmp, content); // string defaults to utf8; Uint8Array writes bytes
@@ -938,6 +938,12 @@ export interface PageRead {
    * never writes settings.json.
    */
   underlayVoice: UnderlayVoice | null;
+  /**
+   * `settings.json → underlayHabits` — the habit names the on-device composer draws into
+   * a `habits` region; null when unset. Author the same list with a region entry
+   * `{ region: "habits", habits: true }` (#50). Written only via `set_habits`.
+   */
+  underlayHabits: string[] | null;
   templateSvg?: string;
 }
 
@@ -966,6 +972,7 @@ export async function readPage(
     ...(resolved.washiTint ? { washiTint: resolved.washiTint } : {}),
   };
   const underlayVoice = await readUnderlayVoice(root);
+  const underlayHabits = await readUnderlayHabits(root);
   // labelFilled: cross-reference each region's labelSlot geometry (template-only)
   // against what the current ai.svg actually drew for that region — geometry alone
   // can't tell you whether the AI filled the slot or the template just prints one.
@@ -995,6 +1002,7 @@ export async function readPage(
     theme,
     underlay,
     underlayVoice,
+    underlayHabits,
     ...(includeTemplate && templateSvg ? { templateSvg } : {}),
   };
 }
@@ -1205,6 +1213,20 @@ export async function writeUnderlay(
     // and fills each image's href, ahead of composeAiSvg.
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
+    // `habits: true` → the library's `settings.json → underlayHabits` (#50), resolved here
+    // so composeAiSvg stays pure. No configured habits is a caller error, not an empty block.
+    for (const r of opts.regions) {
+      if (r.habits === true) {
+        const list = await readUnderlayHabits(root);
+        if (!list) {
+          throw new Error(
+            `Region "${r.region}": \`habits: true\` but settings.json has no underlayHabits — ` +
+              `set them with set_habits first, or pass the names as \`habits: ["…"]\`.`,
+          );
+        }
+        r.habits = list;
+      }
+    }
     const imageResult = await resolveImages(
       abs,
       opts.regions,

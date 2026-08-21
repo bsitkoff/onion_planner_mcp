@@ -177,9 +177,25 @@ async function main() {
     !!schedule?.labelSlot && schedule.width !== schedule.labelSlot.width && schedule.height !== schedule.labelSlot.height,
     JSON.stringify({ box: [schedule?.width, schedule?.height], slot: schedule?.labelSlot }),
   );
-  // header's dashed art-banner rect has no data-region, so it's NOT a label slot.
+  // header's dashed art-banner rect is tagged data-region="art-header" (catalogue ≥ 14,
+  // onionskin#224) — an art slot, NOT a label slot, and never a region of its own.
   const header = read.regions.find((r) => r.name === "header");
-  check("header's decorative dashed rect (no data-region) is not read as a label slot", header?.labelSlot === null, JSON.stringify(header?.labelSlot));
+  check("header's tagged art-header rect is not read as a label slot", header?.labelSlot === null, JSON.stringify(header?.labelSlot));
+  check("the tagged art rect is surfaced by name (artSlotName = art-header)", header?.artSlotName === "art-header", String(header?.artSlotName));
+  check("art-header is addressed through header, not listed as a region", !read.regions.some((r) => r.name === "art-header"), JSON.stringify(read.regions.map((r) => r.name)));
+  check("header's box is the untagged 912-wide rect, not the 300px art rect", header?.width === 912 && header?.height === 116, JSON.stringify([header?.width, header?.height]));
+  // The live library's pages froze the PRE-#224 template (an untagged dashed rect), and
+  // the app never migrates a page that already carries an underlay — so both shapes
+  // must resolve to the same slot, regardless of rect order inside the <g>.
+  const legacyHeader = (order: "box-first" | "art-first") => {
+    const boxR = '<rect x="0" y="0" width="912" height="116" fill="none"/>';
+    const artR = '<rect x="612" y="6" width="300" height="104" rx="12" fill="none" stroke="#D9CFE3" stroke-dasharray="3 5"/>';
+    return parseRegions(`<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><g id="region-header" data-region="header" data-fill="ai" transform="translate(56,84)">${order === "box-first" ? boxR + artR : artR + boxR}</g></svg>`).find((r) => r.name === "header");
+  };
+  const legacy = legacyHeader("box-first");
+  check("an untagged dashed rect (live pages) still resolves as artSlot, artSlotName null", legacy?.artSlot?.width === 300 && legacy?.artSlotName === null && legacy?.width === 912, JSON.stringify(legacy));
+  const taggedFirst = parseRegions('<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><g id="region-header" data-region="header" transform="translate(56,84)"><rect x="612" y="6" width="300" height="104" stroke-dasharray="3 5" data-region="art-header" data-fill="ai"/><rect x="0" y="0" width="912" height="116" fill="none"/></g></svg>').find((r) => r.name === "header");
+  check("a tagged art rect listed BEFORE the box rect is still the slot, not the box", taggedFirst?.width === 912 && taggedFirst?.artSlot?.x === 612 && taggedFirst?.artSlotName === "art-header", JSON.stringify(taggedFirst));
   // #45: the dashed illustration rect IS surfaced as `artSlot` — the intended image
   // drop-zone — so image sizing/floors target it, not the full header band.
   check("header exposes its dashed illustration rect as artSlot", !!header?.artSlot && header.artSlot.width === 300 && header.artSlot.height === 104, JSON.stringify(header?.artSlot));
@@ -381,6 +397,75 @@ async function main() {
     await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", startHour: 8, lines: [{ text: "x", time: "9am" }] }] });
   } catch { badTime = true; }
   check("rejects malformed time string", badTime);
+
+  console.log("\n#32 sub-hour times interpolate between rules; #30/#31 row discipline; #44 gutter");
+  const pitch = rl[1] - rl[0];
+  const off = Math.round(pitch * 0.4);
+  // 13:30 on the schedule's own grid (startHour 7, 1 row/hour) is row 6.5 — the baseline
+  // must sit halfway between the 1 PM and 2 PM rules, not on the 2 PM rule (it used to).
+  const halfHour = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "onethirty", time: "13:30" }, { text: "twopm", time: "14:00" }] }],
+  });
+  const y130 = yOf(halfHour.aiSvg, ">onethirty</text>");
+  const y200 = yOf(halfHour.aiSvg, ">twopm</text>");
+  check("13:30 line sits halfway between the 13:00 and 14:00 rules", y130 === Math.round(rl[6] + pitch / 2 + off), `y=${y130} expected=${Math.round(rl[6] + pitch / 2 + off)} (rules ${rl[6]}..${rl[7]})`);
+  check("13:30 line is above the 14:00 line (no longer snapped onto it)", y130 < y200 && y200 === Math.round(rl[7] + off), `${y130} vs ${y200}`);
+  check("a sub-hour time does not collide-warn against the next hour", !halfHour.warningDetails.some((w) => w.code === "row_collision"), JSON.stringify(halfHour.warnings));
+  // A washi block 13:30–14:30 starts mid-interval and spans one full interval.
+  const halfBlock = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "Dentist", time: "13:30", endTime: "14:30" }] }],
+  });
+  const halfRect = (regionGroup(halfBlock.aiSvg, "schedule") ?? "").match(/<rect[^>]*fill-opacity="[\d.]+"[^>]*\/>/);
+  const hbY = Number(halfRect?.[0].match(/ y="(-?\d+)"/)?.[1]);
+  const hbH = Number(halfRect?.[0].match(/height="(\d+)"/)?.[1]);
+  check("13:30–14:30 block starts halfway down the 13:00 interval", hbY === Math.round(rl[6] + pitch / 2), `y=${hbY} expected=${Math.round(rl[6] + pitch / 2)}`);
+  check("13:30–14:30 block spans one full interval", Math.abs(hbH - pitch) <= 1, `h=${hbH} pitch=${pitch}`);
+  check("a mid-interval one-hour block is NOT flagged below the minimum height", !halfBlock.warningDetails.some((w) => w.code === "washi_block_min_height"), JSON.stringify(halfBlock.warnings));
+  // #30 repro 2: 30 rows into a 15-row grid used to fold 16 strings onto the last rule
+  // with `warnings: []`. Now each out-of-range row warns, and the pile-up is a collision.
+  const tooManyRows = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: Array.from({ length: rl.length + 3 }, (_, i) => ({ text: `item ${i}`, row: i })) }],
+  });
+  check("an out-of-range row warns row_out_of_range (naming the clamp)", tooManyRows.warningDetails.filter((w) => w.code === "row_out_of_range").length === 3, JSON.stringify(tooManyRows.warningDetails.map((w) => w.code)));
+  check("two entries folded onto one baseline warn row_collision", tooManyRows.warningDetails.some((w) => w.code === "row_collision" && w.message.includes(`item ${rl.length}`)), JSON.stringify(tooManyRows.warnings));
+  // A time-anchored line landing on an explicit-row line is the realistic collision.
+  const mixed = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "by row", row: 2 }, { text: "by time", time: "09:00" }] }],
+  });
+  check("a time line on the same rule as a row line warns row_collision", mixed.warningDetails.some((w) => w.code === "row_collision"), JSON.stringify(mixed.warnings));
+  // #31: wrapped continuations of ONE entry are one item — never a collision.
+  const wrappedItems = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [
+      { text: "Important", heading: true },
+      { text: "A long note that certainly wraps onto a second and probably a third line inside the ainotes box today." },
+      { text: "Second item" },
+    ] }],
+  });
+  check("a wrapped paragraph + following item produce no row_collision / text_below_region", !wrappedItems.warningDetails.some((w) => w.code === "row_collision" || w.code === "text_below_region"), JSON.stringify(wrappedItems.warnings));
+  // #30 repro 1: 40 flow lines into the ainotes box ran 500px past its floor, silently.
+  const overflowBox = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: Array.from({ length: 40 }, (_, i) => ({ text: `note ${i}`, wrap: false })) }],
+  });
+  check("flow text past the bottom of a box region warns text_below_region", overflowBox.warningDetails.some((w) => w.code === "text_below_region"), JSON.stringify(overflowBox.warnings.slice(0, 3)));
+  check("a short fitting list does not warn text_below_region", !wrappedItems.warningDetails.some((w) => w.code === "text_below_region"));
+  // #44: the cozy/colorful schedule + agenda print an IBM Plex Mono hour gutter; their
+  // rules start at x=34. The minimal moods print none (rules from x=0). Blocks and text
+  // never start left of the gutter.
+  check("daily-minimal schedule gutterX is 0 (no printed hour labels)", schedule?.gutterX === 0, String(schedule?.gutterX));
+  check("daily-cozy schedule gutterX is 34 (printed hour gutter)", cozyScheduleRegion?.gutterX === 34, String(cozyScheduleRegion?.gutterX));
+  const cozyRegions = parseRegions(cozyScheduleTemplateSvg, "daily-cozy");
+  const cozyBlock = composeAiSvg([1024, 1366], [{ region: "schedule", lines: [{ text: "Sync", time: "09:00", endTime: "10:00", x: 10 }] }], cozyRegions);
+  const cozyTape = (regionGroup(cozyBlock.svg, "schedule") ?? "").match(/<rect[^>]*fill-opacity="[\d.]+"[^>]*\/>/);
+  check("an explicit x still wins (caller's call)", Number(cozyTape?.[0].match(/ x="(-?[\d.]+)"/)?.[1]) === 10, cozyTape?.[0]);
+  const cozyDefault = composeAiSvg([1024, 1366], [{ region: "schedule", lines: [{ text: "Sync", time: "09:00", endTime: "10:00" }] }], cozyRegions);
+  const cozyTapeDefault = (regionGroup(cozyDefault.svg, "schedule") ?? "").match(/<rect[^>]*fill-opacity="[\d.]+"[^>]*\/>/);
+  check("a default-placed cozy block starts at or right of the 34px hour gutter", Number(cozyTapeDefault?.[0].match(/ x="(-?[\d.]+)"/)?.[1]) >= 34, cozyTapeDefault?.[0]);
 
   console.log("\nwashi-tape duration blocks (time + endTime/durationMin; dry-run)");
   const washi = await writeUnderlay(root, daily, {

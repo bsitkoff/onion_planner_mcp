@@ -146,9 +146,12 @@ server.tool(
     "a weekday header, hour-line numbers), in document order, empty if the template prints " +
     "nothing here; check it before writing a line so you don't double-write content the " +
     "template already shows (e.g. the date under a template that already prints \"TODAY\"), " +
-    "`artSlot` — a printed dashed illustration drop-zone nested in the region (e.g. the " +
-    "header's right-side banner box), region-local {x,y,width,height} or null; when present, " +
-    "image placement (corner/fit) and sizing target it, not the full region box, " +
+    "`artSlot` — a printed illustration drop-zone nested in the region (the header's " +
+    "right-side banner box, tagged `art-header` on newer templates — `artSlotName` — or an " +
+    "untagged dashed rect on older pages), region-local {x,y,width,height} or null; when present, " +
+    "image placement (corner/fit) and sizing target it, not the full region box (address it " +
+    "through its parent region — it is not a region name), `gutterX` — where a ruled region's " +
+    "rules start (the printed hour-label gutter; default x never sits left of it), " +
     "`imageFloor` — the {width,height} a centered image below trips `image_small_for_region` " +
     "in this region (245×245 when `intent` marks it interactive, e.g. a habit tracker the " +
     "user pencil-checks; else 35% of the box, or of the `artSlot` when it has one), so you " +

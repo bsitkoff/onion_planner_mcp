@@ -231,13 +231,14 @@ an unattended write has no human to notice the pile-up.
 The app's on-device composer is the *other* author of `ai.svg`; where it has a fixed look,
 match it so a device-authored day and an MCP-authored day read the same.
 
-- **Habits** are a vector block, never a raster sticker. The list lives in the library's
-  `settings.json → underlayHabits` (see `get_library` / `read_page`; set it with
-  `set_habits`). Draw it with `{ region: "habits", habits: true }` — one 13px square + the
-  name per row (Mulish 14, 21px pitch), titled "HABITS" through the region's `label-habits`
-  slot when the template prints one. It belongs in a region named `habits` (the composer
-  renders habits only there); on a template without one, `habits_region_name` info-flags the
-  detour. Never infer habits from to-dos or merge them into the to-do list.
+- **Habits** live in the `habits` region — either the **illustrated tracker sticker** Bridget
+  prefers (catalogue ≥ `16-big-header` gives it 289×282 on the dailies: generate the tracker
+  with the habit names baked in, cut out, and place it with `fit: "contain"` — pencil-checkable
+  at ≥245px), or the composer-parity vector block `{ region: "habits", habits: true }` (one
+  13px square + the name per row from `settings.json → underlayHabits`, set with
+  `set_habits`; titled "HABITS" via the `label-habits` slot). On a 128px region (catalogue 15)
+  the vector block is the only thing that fits. Never infer habits from to-dos or merge them
+  into the to-do list; `habits_region_name` info-flags a block drawn outside `habits`.
 - **Section titles** go into the printed `label-*` slot (`labelSlot` on `read_page`). The
   region's `label` already targets the slot; `labelStyle: "plain"` draws it exactly as the
   composer does (uppercase Mulish 12/700, accent, no pill). Mind the slot names on the todo
@@ -447,6 +448,10 @@ that work (#25, #28):
   date text lands in the band, clear of the slot — see the header recipe under *Composer
   parity*). Leaving the slot empty while writing text prints an orphaned dashed box under your
   copy — the server info-flags `art_slot_unfilled`.
+- **Make it big enough to feel like a sticker.** On catalogue ≥ `16-big-header` the art box is
+  460×164 — `fit: "contain"` is plenty. On older pages (300×104) add `scale: 1.5`: the banner
+  overflows the box into the header's whitespace, pinned to the box's right/top edge, and reads
+  as a real sticker rather than a tiny inset (no `image_overflow` — that's intended).
 - **One integrated date sticker.** When the art already carries the day/date (the strongest
   planner look — a finished sticker, not text-plus-decoration), put it in the slot with
   `fit: "contain"` and **write no separate date line** (`lines: []`). Don't mix both: a date

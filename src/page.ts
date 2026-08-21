@@ -726,7 +726,7 @@ async function resolveImages(
               `${margin} (image box is ${bw}×${bh}).`,
           );
         }
-        const scale = Math.min(boxW / dims.width, boxH / dims.height);
+        const scale = Math.min(boxW / dims.width, boxH / dims.height) * (img.scale ?? 1);
         width = Math.round(dims.width * scale);
         height = Math.round(dims.height * scale);
       } else {

@@ -643,6 +643,14 @@ export interface ImageInput {
    */
   fit?: "region" | "contain";
   /**
+   * Multiply the `fit`-computed size (default 1). A sticker may be *bigger* than its
+   * printed box — a date banner at `scale: 1.5` overflows the 300×104 art box into the
+   * whitespace around it, anchored to the box's right edge and top (so it grows left and
+   * down, never into the page margin). `image_overflow` is suppressed (intended), but
+   * `image_off_page` / `image_overlaps_region` still fire. Only with `fit`.
+   */
+  scale?: number;
+  /**
    * Composite a transparent PNG onto the page's paper colour before writing it
    * (#26) — the "finished sticker on paper" look. A generated sticker's alpha (or a
    * baked-in checkerboard) otherwise reads as unfinished scaffolding on device. The
@@ -1123,6 +1131,11 @@ function placeImage(region: Region, img: ImageInput): { x: number; y: number } {
   const w = img.width ?? 0;
   const h = img.height ?? 0;
   if (W === null || H === null) return { x: box.x + margin, y: box.y + margin }; // no box → top-left inset
+  // A scaled-up fit deliberately exceeds its box: pin it to the box's right edge and top
+  // so it grows leftward/downward into the region's whitespace, not off the page.
+  if (img.scale !== undefined && img.scale > 1 && img.corner === undefined) {
+    return { x: Math.round(box.x + W - w), y: box.y };
+  }
   switch (img.corner ?? "center") {
     case "top-left":
       return { x: box.x + margin, y: box.y + margin };
@@ -1542,6 +1555,7 @@ export function composeAiSvg(
       if (
         region.width !== null &&
         region.height !== null &&
+        (img.scale === undefined || img.scale <= 1) &&
         (x < 0 || y < 0 || x + img.width > region.width || y + img.height > region.height)
       ) {
         warn(
@@ -1601,6 +1615,18 @@ export function composeAiSvg(
       for (const other of regions) {
         if (other.name === region.name) continue;
         if (other.width === null || other.height === null) continue;
+        // A pocket nested inside a bigger region (the accent pocket inside the header
+        // band, catalogue 16) overlaps its host by construction — not a collision.
+        if (
+          region.width !== null &&
+          region.height !== null &&
+          region.x >= other.x &&
+          region.y >= other.y &&
+          region.x + region.width <= other.x + other.width &&
+          region.y + region.height <= other.y + other.height
+        ) {
+          continue;
+        }
         if (bboxesOverlap(imgBox, { x: other.x, y: other.y, w: other.width, h: other.height })) {
           warn(
             "image_overlaps_region",

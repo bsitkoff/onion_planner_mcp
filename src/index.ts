@@ -502,6 +502,18 @@ const imageSchema = z.object({
         "inset by `margin` (8). Never invent an aspect gate; if the art is the wrong shape " +
         "for the box, contain it and let it not fill. Mutually exclusive with `width`/`height`.",
     ),
+  scale: z
+    .number()
+    .min(0.25)
+    .max(3)
+    .optional()
+    .describe(
+      "Multiply the `fit`-computed size (default 1). A sticker may be BIGGER than its printed " +
+        "box: a date banner at 1.5 overflows the header's art box into the whitespace around " +
+        "it (anchored to the box's right edge and top), reading as a real sticker rather than a " +
+        "tiny inset. `image_overflow` is intentionally not raised; off-page and cross-region " +
+        "overlap still warn. Only with `fit`.",
+    ),
   flatten: z
     .literal("paper")
     .optional()
@@ -557,6 +569,8 @@ const imageSchema = z.object({
   message: '`fit` computes width/height itself — omit both.',
 }).refine((i) => i.fit !== undefined || i.width !== undefined, {
   message: "`width` is required unless `fit` is set.",
+}).refine((i) => i.scale === undefined || i.fit !== undefined, {
+  message: "`scale` multiplies a `fit` size — set `fit` too (or size with `width` directly).",
 });
 
 server.tool(

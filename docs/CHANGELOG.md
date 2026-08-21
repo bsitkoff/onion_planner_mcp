@@ -7,6 +7,17 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Feature: `images[].scale` — a sticker may be bigger than its box; nested pockets — 2026-08-21
+
+Bridget: "the header just feels so tiny." The art box was 300×104 on a 1366px page. Two fixes,
+both shipped today: **`images[].scale`** (with `fit`) multiplies the contained size — a date
+banner at `scale: 1.5` overflows the box into the whitespace, pinned to the box's right edge and
+top so it grows left/down; `image_overflow` is intentionally not raised (off-page and cross-region
+overlap still are). And app catalogue **`16-big-header`** (onionskin PR) makes the daily header
+180px tall with a 460×164 art box, re-homes the `accent` pocket into the header band, and grows
+`habits` to 289×282 so the illustrated tracker sticker she prefers fits pencil-checkable. The
+cross-region overlap check now skips a pocket fully nested inside its host region.
+
 ## Polish: page-level delight nudges (`page_no_art`, `header_unwritten`) — 2026-08-21
 
 Real orchestrator friction (2026-08-21 morning run): both header-image attempts "failed the

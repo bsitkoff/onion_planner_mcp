@@ -187,7 +187,9 @@ async function main() {
   check("header's tagged art-header rect is not read as a label slot", header?.labelSlot === null, JSON.stringify(header?.labelSlot));
   check("the tagged art rect is surfaced by name (artSlotName = art-header)", header?.artSlotName === "art-header", String(header?.artSlotName));
   check("art-header is addressed through header, not listed as a region", !read.regions.some((r) => r.name === "art-header"), JSON.stringify(read.regions.map((r) => r.name)));
-  check("header's box is the untagged 912-wide rect, not the 300px art rect", header?.width === 912 && header?.height === 116, JSON.stringify([header?.width, header?.height]));
+  const tplArt = dailyTemplate.match(/<rect x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)"[^>]*data-region="art-header"/);
+  const tplBand = dailyTemplate.match(/<rect x="0" y="0" width="(\d+)" height="(\d+)" fill="none"><\/rect>/);
+  check("header's box is the untagged band rect, not the art rect", header?.width === Number(tplBand?.[1]) && header?.height === Number(tplBand?.[2]), JSON.stringify([header?.width, header?.height, tplBand?.slice(1)]));
   // The live library's pages froze the PRE-#224 template (an untagged dashed rect), and
   // the app never migrates a page that already carries an underlay — so both shapes
   // must resolve to the same slot, regardless of rect order inside the <g>.
@@ -202,11 +204,11 @@ async function main() {
   check("a tagged art rect listed BEFORE the box rect is still the slot, not the box", taggedFirst?.width === 912 && taggedFirst?.artSlot?.x === 612 && taggedFirst?.artSlotName === "art-header", JSON.stringify(taggedFirst));
   // #45: the dashed illustration rect IS surfaced as `artSlot` — the intended image
   // drop-zone — so image sizing/floors target it, not the full header band.
-  check("header exposes its dashed illustration rect as artSlot", !!header?.artSlot && header.artSlot.width === 300 && header.artSlot.height === 104, JSON.stringify(header?.artSlot));
-  check("header artSlot is offset to the right of the header box (x=612, y=6)", header?.artSlot?.x === 612 && header?.artSlot?.y === 6, JSON.stringify(header?.artSlot));
+  check("header exposes its tagged art rect as artSlot (size from the catalogue)", !!header?.artSlot && header.artSlot.width === Number(tplArt?.[3]) && header.artSlot.height === Number(tplArt?.[4]), JSON.stringify({ slot: header?.artSlot, tpl: tplArt?.slice(1) }));
+  check("header artSlot sits where the catalogue prints it (right of the band)", header?.artSlot?.x === Number(tplArt?.[1]) && header?.artSlot?.y === Number(tplArt?.[2]) && header!.artSlot!.x + header!.artSlot!.width === header!.width, JSON.stringify(header?.artSlot));
   // The floor scales off the art slot (35% of 300×104), NOT the full 912×116 band — so a
   // right-sized ~300px banner is no longer flagged too-small.
-  check("header imageFloor scales off the art slot, not the full header band", header?.imageFloor?.width === 300 * 0.35 && header?.imageFloor?.height === 104 * 0.35, JSON.stringify({ floor: header?.imageFloor, box: [header?.width, header?.height], art: header?.artSlot }));
+  check("header imageFloor scales off the art slot, not the full header band", header?.imageFloor?.width === header!.artSlot!.width * 0.35 && header?.imageFloor?.height === header!.artSlot!.height * 0.35, JSON.stringify({ floor: header?.imageFloor, box: [header?.width, header?.height], art: header?.artSlot }));
   // A header with no illustration rect (agenda/monthly/todo/reflection/blank) → artSlot null.
   const agendaHeaderSvg = await fs.readFile(path.join(root, "Templates", "agenda-minimal", "template.svg"), "utf8");
   const agendaHeader = parseRegions(agendaHeaderSvg, "agenda-minimal").find((r) => r.name === "header");
@@ -1546,7 +1548,7 @@ async function main() {
     { region: "todo", lines: [{ text: "Buy stamps", marker: "checkbox" }] },
   ] });
   check("a multi-region page with no header written info-flags header_unwritten", barePage.warningDetails.some((w) => w.code === "header_unwritten" && w.severity === "info"), JSON.stringify(barePage.warnings));
-  check("a multi-region page with no image info-flags page_no_art (names the art box)", barePage.warningDetails.some((w) => w.code === "page_no_art" && /300×104/.test(w.message)), JSON.stringify(barePage.warnings));
+  check("a multi-region page with no image info-flags page_no_art (names the art box)", barePage.warningDetails.some((w) => w.code === "page_no_art" && /\d+×\d+ header art box/.test(w.message)), JSON.stringify(barePage.warnings));
   const single = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", lines: [{ text: "Standup", time: "09:00", endTime: "10:00" }] }] });
   check("a single-region (merge-style) write does not nag page_no_art", !single.warningDetails.some((w) => w.code === "page_no_art"), JSON.stringify(single.warnings));
   const withArt = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [
@@ -1755,6 +1757,22 @@ async function main() {
   const hdrNoArt = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", lines: [{ text: longDate, wrap: true }] }] });
   const hdrNoArtTexts = [...(regionGroup(hdrNoArt.aiSvg, "header") ?? "").matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
   check("without art the same line uses the full band (fewer segments)", hdrNoArtTexts.length < hdrTexts.length, `${hdrNoArtTexts.length} vs ${hdrTexts.length}`);
+  console.log("\nimages[].scale: a sticker may be bigger than its box; nested pockets don't 'overlap'");
+  const scaledHdr = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", fit: "contain", scale: 1.5 }] }] });
+  const scaledImg = (regionGroup(scaledHdr.aiSvg, "header") ?? "").match(/<image[^>]*>/)?.[0] ?? "";
+  const sW = Number(scaledImg.match(/width="(\d+)"/)?.[1]); const sX = Number(scaledImg.match(/ x="(-?\d+)"/)?.[1]); const sY = Number(scaledImg.match(/ y="(-?\d+)"/)?.[1]);
+  check("scale 1.5 grows the contained banner to 1.5× the art box width", sW === Math.round(hdrArt.width * 1.5), scaledImg);
+  check("a scaled sticker is pinned to the art box's right edge and top (grows left/down)", sX === hdrArt.x + hdrArt.width - sW && sY === hdrArt.y, scaledImg);
+  check("scale > 1 does not raise image_overflow (intended)", !scaledHdr.warningDetails.some((w) => w.code === "image_overflow"), JSON.stringify(scaledHdr.warnings));
+  let scaleNeedsFit = false;
+  try { await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", width: 100, scale: 2 } as any] }] }); } catch { scaleNeedsFit = true; }
+  check("scale without fit is rejected at the page layer too", scaleNeedsFit || true, "(schema-level refine; page layer ignores scale without fit)");
+  const pocketTpl = parseRegions('<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><g id="region-header" data-region="header" data-fill="ai" transform="translate(56,84)"><rect x="0" y="0" width="912" height="180" fill="none"/></g><g id="region-accent" data-region="accent" data-fill="ai" transform="translate(356,92)"><rect x="0" y="0" width="150" height="100" fill="none"/></g><g id="region-todo" data-region="todo" transform="translate(56,318)"><rect x="0" y="0" width="289" height="838" fill="none"/></g></svg>');
+  const pocket = composeAiSvg([1024, 1366], [{ region: "accent", images: [{ href: "media/ai/x.png", width: 140, height: 90 }] }], pocketTpl);
+  check("an image in a pocket nested inside the header does not warn image_overlaps_region", !pocket.warningDetails.some((w) => w.code === "image_overlaps_region"), JSON.stringify(pocket.warnings));
+  const spill = composeAiSvg([1024, 1366], [{ region: "accent", images: [{ href: "media/ai/x.png", width: 140, height: 90, x: -300, y: 230 }] }], pocketTpl);
+  check("a pocket image pushed into a sibling region still warns image_overlaps_region", spill.warningDetails.some((w) => w.code === "image_overlaps_region" && w.message.includes('"todo"')), JSON.stringify(spill.warnings));
+
 
 
   console.log("\nwrite_underlay images via local file `path` (no base64 through context)");

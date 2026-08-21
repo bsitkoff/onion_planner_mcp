@@ -7,6 +7,30 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Feature: `fit:"contain"`, `flatten:"paper"`, and composition warnings for images — 2026-08-20
+
+[#47](https://github.com/bsitkoff/onion_planner_mcp/issues/47),
+[#26](https://github.com/bsitkoff/onion_planner_mcp/issues/26),
+[#27](https://github.com/bsitkoff/onion_planner_mcp/issues/27),
+[#25](https://github.com/bsitkoff/onion_planner_mcp/issues/25),
+[#28](https://github.com/bsitkoff/onion_planner_mcp/issues/28). Orchestrators invented aspect
+gates and stretched art because "contain at native aspect, whitespace OK" wasn't a first-class
+knob; transparent stickers rendered as scaffolding; a sticker could sit on the prose with no
+signal; and a header written with text only left the printed art box orphaned.
+
+- **`images[].fit: "contain"`** — aspect-preserving contain against the region's image box (the
+  art slot when present), no margin, never flagged `image_small_for_region`. `"region"` keeps its
+  8px inset. The fit guard now reads the image box, so a region whose only known box is its art
+  slot still fits.
+- **`images[].flatten: "paper"`** composites a PNG's alpha onto the template's paper colour
+  (`paperColorOf`) before the `media/ai/` write (info `image_flattened`); an unflattened PNG with
+  real alpha is info-flagged **`image_has_alpha`** (decode bounded at 4M px).
+- **`image_competes_with_text`** — a line's estimated band runs under a placed image in the same
+  region (once per image). **`art_slot_unfilled`** (info) — a region with a printed art box got
+  text but no image. `AUTHORING.md` gains the contain-by-default rule, the two header
+  compositions (banner + date / one integrated date sticker), and the `ainotes` text-first +
+  footer-sticker pattern.
+
 ## Feature: `align` on structured lines, positioned `<tspan>` accepted, typography warnings — 2026-08-20
 
 [#33](https://github.com/bsitkoff/onion_planner_mcp/issues/33),

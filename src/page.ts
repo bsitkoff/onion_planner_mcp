@@ -9,6 +9,7 @@ import {
   parseViewBox,
   inspectTemplate,
   PAPER_COLOR,
+  paperColorOf,
   type Region,
   type TemplateInfo,
 } from "./template.js";
@@ -545,6 +546,7 @@ async function resolveImages(
   geometry: Region[],
   dryRun: boolean,
   deps: ResolveImagesDeps = {},
+  paperColor: string = PAPER_COLOR,
 ): Promise<{ warnings: string[]; warningDetails: WarningDetail[] }> {
   const warnings: string[] = [];
   const warningDetails: WarningDetail[] = [];
@@ -558,11 +560,11 @@ async function resolveImages(
       if ((img.data === undefined) === (img.path === undefined)) {
         throw new Error(`image in region "${region.region}" needs exactly one of \`data\` (base64) or \`path\`.`);
       }
-      if (img.fit === "region") {
+      if (img.fit !== undefined) {
         if (img.width !== undefined || img.height !== undefined) {
           throw new Error(
-            `image in region "${region.region}": fit:"region" computes width/height from the ` +
-              "region's own box — don't also pass `width`/`height`.",
+            `image in region "${region.region}": fit:"${img.fit}" computes width/height from the ` +
+              "region's own image box — don't also pass `width`/`height`.",
           );
         }
       } else if (img.width === undefined || img.width <= 0) {
@@ -651,27 +653,76 @@ async function resolveImages(
       // A source still over the cap after its downscale throws here, exactly as before.
       if (deferSizeChecks) checkImageSize(buf, region.region, warnings, warningDetails);
 
+      // Transparency (#26). `flatten: "paper"` composites a PNG's alpha onto the page's
+      // paper colour so a generated sticker lands as finished art, not scaffolding. When
+      // NOT flattened, a PNG that carries real alpha is info-flagged once — fine when the
+      // paper is meant to show through, a trap when the model baked in a checkerboard.
+      // Decoding is bounded (≤ ALPHA_SCAN_MAX_PIXELS) so the scan never dominates a write.
+      if (format === "png") {
+        const px = dims.width * dims.height;
+        if (img.flatten === "paper") {
+          if (px > MAX_DECODE_PIXELS) {
+            throw new Error(
+              `image in region "${region.region}" is ${dims.width}×${dims.height} — over the ` +
+                `${MAX_DECODE_PIXELS}-pixel ceiling for flatten:"paper". Downscale it first (maxDimension).`,
+            );
+          }
+          let decoded;
+          try {
+            decoded = decodePng(buf);
+          } catch (e) {
+            throw new Error(`image in region "${region.region}": ${(e as Error).message}`);
+          }
+          if (pngHasAlpha(decoded)) {
+            buf = encodePng(flattenOntoColor(decoded, paperColor));
+            const message =
+              `region "${region.region}": image flattened onto the paper colour ${paperColor} ` +
+              `(opaque PNG written).`;
+            warnings.push(message);
+            warningDetails.push({ code: "image_flattened", severity: "info", region: region.region, message });
+          }
+        } else if (px <= ALPHA_SCAN_MAX_PIXELS) {
+          let hasAlpha = false;
+          try {
+            hasAlpha = pngHasAlpha(decodePng(buf));
+          } catch {
+            /* imageDims already validated the magic; an undecodable PNG just skips the scan */
+          }
+          if (hasAlpha) {
+            const message =
+              `region "${region.region}": PNG has transparency — fine if the paper is meant to ` +
+              `show through; for a finished opaque sticker pass flatten:"paper" (a baked-in ` +
+              `checkerboard needs knockout first — see docs/AUTHORING.md).`;
+            warnings.push(message);
+            warningDetails.push({ code: "image_has_alpha", severity: "info", region: region.region, message });
+          }
+        }
+      }
+
       let width: number;
       let height: number;
-      if (img.fit === "region") {
+      if (img.fit !== undefined) {
         const geo = geometryByName.get(region.region);
-        if (!geo || geo.width === null || geo.height === null) {
+        // Fit into the region's image box — the art slot (e.g. the header's banner box)
+        // when present, else the full region box (#45). A region whose only known box IS
+        // its art slot still fits (the guard reads the image box, not the region rect).
+        const fitBox = geo ? imageBox(geo) : null;
+        const bw = fitBox?.width ?? null;
+        const bh = fitBox?.height ?? null;
+        if (bw === null || bh === null || bw <= 0 || bh <= 0) {
           throw new Error(
-            `image in region "${region.region}": fit:"region" needs a region with a known box ` +
+            `image in region "${region.region}": fit:"${img.fit}" needs a region with a known box ` +
               `— no box geometry found for "${region.region}".`,
           );
         }
-        // Fit into the region's image box — the art slot (e.g. the header's banner box)
-        // when present, else the full region box (#45).
-        const fitBox = imageBox(geo);
-        const bw = fitBox.width ?? geo.width;
-        const bh = fitBox.height ?? geo.height;
-        const margin = img.margin ?? 8;
+        // "contain" = native aspect inside the box, whitespace OK, no inset (#47);
+        // "region" keeps its 8px inset.
+        const margin = img.margin ?? (img.fit === "contain" ? 0 : 8);
         const boxW = bw - margin * 2;
         const boxH = bh - margin * 2;
         if (boxW <= 0 || boxH <= 0) {
           throw new Error(
-            `image in region "${region.region}": fit:"region" box is too small for margin ` +
+            `image in region "${region.region}": fit:"${img.fit}" box is too small for margin ` +
               `${margin} (image box is ${bw}×${bh}).`,
           );
         }
@@ -729,6 +780,35 @@ async function resolveImages(
     }
   }
   return { warnings, warningDetails };
+}
+
+/** Upper bound on the pixels we'll decode just to *look* for alpha (info warning). */
+const ALPHA_SCAN_MAX_PIXELS = 4_000_000;
+
+/** True when any pixel is less than fully opaque. */
+function pngHasAlpha(img: { pixels: Uint8Array }): boolean {
+  const p = img.pixels;
+  for (let i = 3; i < p.length; i += 4) if (p[i] !== 255) return true;
+  return false;
+}
+
+/** Composite RGBA pixels onto an opaque hex colour (straight alpha, "over"). */
+function flattenOntoColor(
+  img: { width: number; height: number; pixels: Uint8Array },
+  hex: string,
+): { width: number; height: number; pixels: Uint8Array } {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  const bg = m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 254, 251];
+  const src = img.pixels;
+  const out = new Uint8Array(src.length);
+  for (let i = 0; i < src.length; i += 4) {
+    const a = src[i + 3] / 255;
+    out[i] = Math.round(src[i] * a + bg[0] * (1 - a));
+    out[i + 1] = Math.round(src[i + 1] * a + bg[1] * (1 - a));
+    out[i + 2] = Math.round(src[i + 2] * a + bg[2] * (1 - a));
+    out[i + 3] = 255;
+  }
+  return { width: img.width, height: img.height, pixels: out };
 }
 
 /** Delete any file in `media/ai/` not referenced by an href in the final ai.svg. */
@@ -1125,7 +1205,14 @@ export async function writeUnderlay(
     // and fills each image's href, ahead of composeAiSvg.
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
-    const imageResult = await resolveImages(abs, opts.regions, regions, opts.dryRun ?? false, deps);
+    const imageResult = await resolveImages(
+      abs,
+      opts.regions,
+      regions,
+      opts.dryRun ?? false,
+      deps,
+      templateSvg ? paperColorOf(templateSvg) : PAPER_COLOR,
+    );
     const size = pageSize(manifest, templateSvg);
     const themeInput = await resolveThemeInput(abs, templateSvg, opts);
     const composed = composeAiSvg(size, opts.regions, regions, themeInput, manifest.template);

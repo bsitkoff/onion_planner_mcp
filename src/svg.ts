@@ -602,9 +602,20 @@ export interface ImageInput {
    * contain, inset by `margin`) instead of a caller-computed `width`/`height` —
    * resolved in `page.ts:resolveImages` once the region's geometry and the
    * image's intrinsic dimensions are both known. Mutually exclusive with
-   * `width`/`height`.
+   * `width`/`height`. `"contain"` is the frictionless default for decorative art
+   * (#47): the same aspect-preserving contain against the image box (the art slot
+   * when the region has one) with **no** margin and no size-floor warning — native
+   * proportions, whitespace inside the box is expected, nothing is stretched or
+   * cropped. `"region"` is the older spelling with an 8px inset.
    */
-  fit?: "region";
+  fit?: "region" | "contain";
+  /**
+   * Composite a transparent PNG onto the page's paper colour before writing it
+   * (#26) — the "finished sticker on paper" look. A generated sticker's alpha (or a
+   * baked-in checkerboard) otherwise reads as unfinished scaffolding on device. The
+   * written file is an opaque PNG. No-op for JPEG (no alpha).
+   */
+  flatten?: "paper";
   /**
    * Downscale the source (PNG only) so neither dimension exceeds this, before
    * sizing/hashing/writing — resolved in `page.ts:resolveImages`. Use instead of
@@ -1444,10 +1455,13 @@ export function composeAiSvg(
         );
       }
     }
-    // Images paint first (background); text/calendar lands on top.
+    // Images paint first (background); text/calendar lands on top. Their region-local
+    // rects are kept so the text pass can flag a line that runs under one (#27).
+    const imageRects: Array<Bbox & { flagged: boolean }> = [];
     for (const img of input.images ?? []) {
       if (!img.href || !img.width || !img.height) continue;
       const { x, y } = placeImage(region, img);
+      imageRects.push({ x, y, w: img.width, h: img.height, flagged: false });
       const op = img.opacity !== undefined ? ` opacity="${img.opacity}"` : "";
       parts.push(
         `    <image href="${escapeXml(img.href)}" x="${x}" y="${y}" ` +
@@ -1473,7 +1487,9 @@ export function composeAiSvg(
       const centered =
         img.x === undefined && img.y === undefined && (img.corner === undefined || img.corner === "center");
       const floor = imageSizeFloor(region);
-      if (centered && floor && img.width < floor.width && img.height < floor.height) {
+      // A `fit` image was sized against the box on purpose (native aspect, contained) —
+      // that's the good case, never "too small" (#47).
+      if (centered && img.fit === undefined && floor && img.width < floor.width && img.height < floor.height) {
         const guidance = floor.interactive
           ? `content the user interacts with (a habit tracker) needs real size (~${INTERACTIVE_IMAGE_FLOOR}px tall to pencil-check)`
           : "size it toward the box, or corner-place it if it's meant as a small accent";
@@ -1523,6 +1539,19 @@ export function composeAiSvg(
           );
         }
       }
+    }
+    // The template prints an art placeholder here and this write fills the region with
+    // text but no image — the dashed box ships empty under/next to the copy (#25). Info:
+    // an orchestrator that meant "no banner today" can ignore it.
+    if (region.artSlot && imageRects.length === 0 && (input.lines?.length ?? 0) > 0) {
+      warn(
+        "art_slot_unfilled",
+        `region "${region.name}": the template prints a ${region.artSlot.width}×${region.artSlot.height} ` +
+          `art box here and nothing fills it — the dashed placeholder will show. Give this ` +
+          `region an \`images\` entry (fit:"contain") or accept the empty box.`,
+        "info",
+        region.name,
+      );
     }
     // Whether the `showHours` gutter actually reached the page. `showHours` on its own is
     // a legitimate write, so it has to count toward "drew something" below — but only when
@@ -2015,6 +2044,27 @@ export function composeAiSvg(
               `font-size="${size}" font-weight="${weight}"${anchorAttr} fill="${fill}">${escapeXml(seg)}</text>`,
           );
         });
+
+        // Text running under a placed image reads as competition, not composition
+        // (#27) — a sticker can fit the box geometrically and still sit on the prose.
+        // Flag each image once, against the line's estimated band.
+        if (imageRects.length > 0) {
+          const bandW = segments.reduce((m, s) => Math.max(m, estimateTextWidth(s, font, size)), 0);
+          const bandX = align === "center" ? anchorX - bandW / 2 : align === "right" ? anchorX - bandW : textX;
+          const band: Bbox = { x: bandX, y: y - size, w: bandW, h: size * 0.3 + (segments.length - 1) * subPitch + size };
+          for (const r of imageRects) {
+            if (r.flagged || !bboxesOverlap(band, r)) continue;
+            r.flagged = true;
+            warn(
+              "image_competes_with_text",
+              `region "${region.name}": line "${truncate(line.text)}" runs under the ` +
+                `${r.w}×${r.h} image at (${r.x},${r.y}) — keep text first and anchor a ` +
+                `supporting sticker in a free corner (e.g. corner:"bottom-right").`,
+              "warning",
+              region.name,
+            );
+          }
+        }
 
         // A single-segment line whose baseline (+ descender) sits below the region box
         // is drawn into whatever lies underneath — 40 flow lines into a 422px box used to

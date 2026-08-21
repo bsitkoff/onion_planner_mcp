@@ -1634,6 +1634,53 @@ async function main() {
   const okHref = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "real", width: 40 }] }] });
   check("a resolved structured image does not warn image_href_missing", !okHref.warningDetails.some((w) => w.code === "image_href_missing"), JSON.stringify(okHref.warningDetails));
 
+  console.log("\n#47 fit:\"contain\"; #26 flatten:\"paper\" + image_has_alpha; #27 image_competes_with_text; #25 art_slot_unfilled");
+  const hdrRegions = (await readPage(root, hdrPage)).regions;
+  const hdrArt = hdrRegions.find((r) => r.name === "header")!.artSlot!;
+  const widePixels = new Uint8Array(60 * 20 * 4).fill(200);
+  for (let i = 3; i < widePixels.length; i += 4) widePixels[i] = 255; // opaque
+  const wideSrc = encodePng({ width: 60, height: 20, pixels: widePixels }).toString("base64");
+  const contain = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", name: "wide", fit: "contain" }] }] });
+  const containImg = (regionGroup(contain.aiSvg, "header") ?? "").match(/<image[^>]*>/)?.[0] ?? "";
+  const cW = Number(containImg.match(/width="(\d+)"/)?.[1]);
+  const cH = Number(containImg.match(/height="(\d+)"/)?.[1]);
+  const cX = Number(containImg.match(/ x="(-?\d+)"/)?.[1]);
+  check("fit:contain sizes a 3:1 source to the art slot's full width at native aspect (300×100)", cW === hdrArt.width && cH === Math.round(hdrArt.width / 3), containImg);
+  check("fit:contain centres the box in the art slot (no margin)", cX === hdrArt.x, containImg);
+  check("fit:contain emits no size-floor / aspect / overflow warning (the good case)", !contain.warningDetails.some((w) => ["image_small_for_region", "image_aspect_mismatch", "image_overflow"].includes(w.code)), JSON.stringify(contain.warnings));
+  const fitRegionW = Number(((regionGroup((await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", name: "wide", fit: "region" }] }] })).aiSvg, "header") ?? "").match(/<image[^>]*width="(\d+)"/) ?? [])[1]);
+  // With the 8px inset the 3:1 source is height-bound: (104-16) × 3 = 264, not 284.
+  check("fit:region keeps its 8px inset (height-bound 3:1 → 264 wide)", fitRegionW === Math.min(hdrArt.width - 16, (hdrArt.height - 16) * 3), String(fitRegionW));
+  let fitRejected = false;
+  try { await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", fit: "contain", width: 100 } as any] }] }); } catch { fitRejected = true; }
+  check("fit:contain + width is rejected (fit computes both)", fitRejected);
+  // #26 — a half-transparent PNG: flattened onto paper when asked, info-flagged when not.
+  const alphaPixels = new Uint8Array(20 * 10 * 4);
+  for (let i = 0; i < alphaPixels.length; i += 4) { alphaPixels[i] = 40; alphaPixels[i + 1] = 80; alphaPixels[i + 2] = 160; alphaPixels[i + 3] = i < alphaPixels.length / 2 ? 0 : 255; }
+  const alphaSrc = encodePng({ width: 20, height: 10, pixels: alphaPixels }).toString("base64");
+  const flat = await writeUnderlay(root, hdrPage, { status: "ready", regions: [{ region: "ainotes", images: [{ data: alphaSrc, format: "png", name: "sticker", width: 100, flatten: "paper", corner: "bottom-right" }] }] });
+  check("flatten:paper info-flags image_flattened", flat.warningDetails.some((w) => w.code === "image_flattened" && w.severity === "info"), JSON.stringify(flat.warningDetails));
+  const flatFile = (await fs.readdir(path.join(root, hdrPage, "media", "ai"))).find((f) => f.startsWith("sticker"))!;
+  const flatPng = decodePng(await fs.readFile(path.join(root, hdrPage, "media", "ai", flatFile)));
+  let opaque = true; let paperish = false;
+  for (let i = 3; i < flatPng.pixels.length; i += 4) if (flatPng.pixels[i] !== 255) opaque = false;
+  if (flatPng.pixels[0] > 240 && flatPng.pixels[1] > 240 && flatPng.pixels[2] > 240) paperish = true;
+  check("the written file is fully opaque, transparent pixels now paper-coloured", opaque && paperish, `alpha ok=${opaque} first px=${[flatPng.pixels[0], flatPng.pixels[1], flatPng.pixels[2]]}`);
+  check("flattened output does not also warn image_has_alpha", !flat.warningDetails.some((w) => w.code === "image_has_alpha"), JSON.stringify(flat.warnings));
+  const notFlat = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "ainotes", images: [{ data: alphaSrc, format: "png", name: "sticker", width: 100, corner: "bottom-right" }] }] });
+  check("an unflattened transparent PNG is info-flagged image_has_alpha", notFlat.warningDetails.some((w) => w.code === "image_has_alpha" && w.severity === "info"), JSON.stringify(notFlat.warnings));
+  check("an opaque PNG is not flagged image_has_alpha", !contain.warningDetails.some((w) => w.code === "image_has_alpha"), JSON.stringify(contain.warnings));
+  // #27 — text running under a centred sticker competes; a footer-anchored one doesn't.
+  const compete = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "ainotes", images: [{ data: wideSrc, format: "png", name: "big", width: 240 }], lines: Array.from({ length: 8 }, (_, i) => ({ text: `Note line ${i} with a few words in it`, wrap: false })) }] });
+  check("text under a centred image warns image_competes_with_text (once per image)", compete.warningDetails.filter((w) => w.code === "image_competes_with_text").length === 1, JSON.stringify(compete.warnings));
+  const footer = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "ainotes", images: [{ data: wideSrc, format: "png", name: "small", width: 90, corner: "bottom-right" }], lines: [{ text: "Short note" }, { text: "Second line" }] }] });
+  check("text-first + bottom-right supporting sticker does not compete", !footer.warningDetails.some((w) => w.code === "image_competes_with_text"), JSON.stringify(footer.warnings));
+  // #25 — a header filled with text but no art leaves the printed box empty: info.
+  const textOnlyHdr = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", lines: [{ text: "Thursday, August 20" }] }] });
+  check("header text with no image info-flags art_slot_unfilled", textOnlyHdr.warningDetails.some((w) => w.code === "art_slot_unfilled" && w.severity === "info"), JSON.stringify(textOnlyHdr.warnings));
+  check("a header with a banner does not flag art_slot_unfilled", !contain.warningDetails.some((w) => w.code === "art_slot_unfilled"));
+  check("a region with no art slot never flags art_slot_unfilled", !footer.warningDetails.some((w) => w.code === "art_slot_unfilled"));
+
   console.log("\nwrite_underlay images via local file `path` (no base64 through context)");
   const srcPng = path.join(os.tmpdir(), "onionskin-smoke-src.png");
   await fs.writeFile(srcPng, Buffer.from(PNG_1x1, "base64"));

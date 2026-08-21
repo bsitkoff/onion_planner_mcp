@@ -469,12 +469,24 @@ const imageSchema = z.object({
         "`fit: \"region\"` sizes inside.",
     ),
   fit: z
-    .literal("region")
+    .enum(["contain", "region"])
     .optional()
     .describe(
-      "Size the display box to fit inside the region's own box (aspect-preserving contain, " +
-        "inset by `margin`) instead of computing `width`/`height` yourself from read_page " +
-        "geometry. Mutually exclusive with `width`/`height` — omit both when set.",
+      "Size the display box from the region's own image box (the art slot when it has one) " +
+        "instead of computing `width`/`height` yourself. \"contain\" — THE DEFAULT CHOICE FOR " +
+        "DECORATIVE ART: native aspect, contained, no margin, whitespace inside the box is " +
+        "fine, never stretched/cropped, no size-floor warning. \"region\" — the same contain " +
+        "inset by `margin` (8). Never invent an aspect gate; if the art is the wrong shape " +
+        "for the box, contain it and let it not fill. Mutually exclusive with `width`/`height`.",
+    ),
+  flatten: z
+    .literal("paper")
+    .optional()
+    .describe(
+      "Composite a transparent PNG onto the page's paper colour before writing — the " +
+        "\"finished sticker on paper\" look. Use for generated watercolour/hand-drawn stickers " +
+        "and banners whose transparency (or baked-in checkerboard) would otherwise read as " +
+        "unfinished on device. Writes an opaque PNG; no-op for JPEG.",
     ),
   maxDimension: z
     .number()
@@ -518,10 +530,10 @@ const imageSchema = z.object({
   message: '`chromaColor` is required when knockout is "chroma".',
 }).refine((i) => i.knockout === "chroma" || (i.chromaColor === undefined && i.tolerance === undefined), {
   message: '`chromaColor`/`tolerance` only apply when knockout is "chroma".',
-}).refine((i) => i.fit !== "region" || (i.width === undefined && i.height === undefined), {
-  message: '`fit: "region"` computes width/height itself — omit both.',
-}).refine((i) => i.fit === "region" || i.width !== undefined, {
-  message: "`width` is required unless `fit` is \"region\".",
+}).refine((i) => i.fit === undefined || (i.width === undefined && i.height === undefined), {
+  message: '`fit` computes width/height itself — omit both.',
+}).refine((i) => i.fit !== undefined || i.width !== undefined, {
+  message: "`width` is required unless `fit` is set.",
 });
 
 server.tool(

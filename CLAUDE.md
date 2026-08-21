@@ -153,7 +153,13 @@ server has no network/generation. The app's renderer resolves `<image href>` onl
 **page-relative file path** (no data-URIs), so `page.ts:resolveImages` validates the bytes
 (magic vs `format`, 2MB cap), writes them to the page's **`media/ai/`** folder, and rewrites
 the `<image href="media/ai/…">` into the region group; `svg.ts:imageDims` reads intrinsic size
-(aspect-fills an omitted height). Placement is region-local via `corner`/`x`/`y`. When a
+(aspect-fills an omitted height). Placement is region-local via `corner`/`x`/`y`; sizing is
+best left to `fit: "contain"` (native aspect inside the image box, no margin, never flagged
+too-small — #47; `"region"` = the same with an 8px inset). `flatten: "paper"` composites a
+PNG's alpha onto the template's paper colour before the write (#26); an unflattened PNG with
+alpha is info-flagged `image_has_alpha`. Text whose band runs under a placed image warns
+`image_competes_with_text` (#27); a region with a printed art box that gets text but no image
+info-flags `art_slot_unfilled` (#25). When a
 region prints an illustration placeholder — the header's right-side banner box, tagged
 `<rect data-region="art-header" data-fill="ai">` since app catalogue `14-art-header-region`
 (onionskin#224), or an untagged dashed `stroke-dasharray` rect on pages frozen from the older

@@ -385,17 +385,48 @@ sending, or set `images[].maxDimension`). `notes` is
 `fill: ink` (handwriting) — at most a *tiny* corner mark there, never a sticker over the writing
 area.
 
+**Placement default: contain at native aspect, whitespace OK, never stretch or crop (#47).**
+The renderer scales an `<image>` to its *exact* box (no `preserveAspectRatio`), so the only
+way to distort art is to hand it a box of the wrong shape. The two warning-free paths:
+
+- **`fit: "contain"`** — the one to reach for. The server sizes the box from the region's image
+  box (the art slot when it has one) at the source's own proportions, no margin, no size-floor
+  warning. A 3:1 banner in a 300×104 slot comes out 300×100; a square sticker in it comes out
+  104×104. If the art is the "wrong" shape for the box, it is contained and *does not fill* —
+  that is the intended result. **Never invent an aspect gate** and reject valid art.
+- **`width` only, no `height`** — the server derives the height from the source aspect.
+
+The only thing to avoid is `width` + `height` that fight the source (`image_aspect_mismatch`,
+"will render STRETCHED"). `fit: "region"` is the same contain with an 8px inset.
+
 **A header banner goes in the header's art slot — let the server place it.** The daily
-templates print a dashed rounded box on the right of the `header` band as the banner-art
-drop-zone; `read_page` surfaces it as the region's **`artSlot`** ({x,y,width,height}, or null
-on templates with no such box — agenda/monthly/todo/reflection/blank). You don't compute
-coordinates for it: give the `header` region an `images` entry and the server places it *in the
-art slot* — `corner`/`fit: "region"` and the `imageFloor` all target the slot, not the full
-band. So `fit: "region"` fills the box (covering the dashed placeholder — otherwise it renders
-as an orphaned empty box under your banner), and a plain `width` with no `x`/`y` centers it in
-the slot. Don't invent an aspect requirement or stretch art to fill the band: omit `height` to
-keep native proportions — whitespace inside the slot is fine. The date/title text still lands
-in the full header band, clear of the art slot.
+templates print a rounded box on the right of the `header` band as the banner-art drop-zone
+(tagged `art-header` on the current catalogue; an untagged dashed rect on older pages);
+`read_page` surfaces it as the region's **`artSlot`** ({x,y,width,height}, or null on templates
+with no such box — agenda/monthly/todo/reflection/blank). You don't compute coordinates for it:
+give the `header` region an `images` entry and the server places it *in the art slot* —
+`corner`/`fit` and the `imageFloor` all target the slot, not the full band. Two compositions
+that work (#25, #28):
+
+- **Banner + date text.** `fit: "contain"` on the art, and the date as a `lines[]` entry (the
+  date text lands in the band, clear of the slot — see the header recipe under *Composer
+  parity*). Leaving the slot empty while writing text prints an orphaned dashed box under your
+  copy — the server info-flags `art_slot_unfilled`.
+- **One integrated date sticker.** When the art already carries the day/date (the strongest
+  planner look — a finished sticker, not text-plus-decoration), put it in the slot with
+  `fit: "contain"` and **write no separate date line** (`lines: []`). Don't mix both: a date
+  sticker next to a date string reads as fragmented.
+
+Decorative PNGs with transparency: pass **`flatten: "paper"`** when you want a finished opaque
+sticker (the common case); leave it off only when the paper is meant to show through. An
+unflattened PNG with real alpha is info-flagged `image_has_alpha`. A *baked-in* checkerboard is
+pixels, not alpha — it needs `knockout` first (below), then flatten.
+
+**`ainotes` is text-first (#27).** The prose starts at the top; a supporting sticker (a habit
+tracker, a small illustration) is a footer — `corner: "bottom-right"` (or `"bottom-left"`),
+sized so it doesn't rise into the paragraph. A sticker can fit the box geometrically and still
+steal the eye; the server warns `image_competes_with_text` when a line's band runs under an
+image — treat it as "move the sticker down, or shorten the note", not noise.
 
 **Filenames must resolve — a dangling `href` renders blank.** The server writes each image to
 `media/ai/<stem>.<ext>` (the `stem` is `images[].name` if you pass one, else a content hash) and
@@ -429,10 +460,10 @@ the server own the filename, not to guess a stem.
 `convert_to_webp`/`get_generated_webp_images` — onionskin rejects webp (that path is for
 WordPress). More detail in the project memory (`onionskin-image-gen-pipeline`).
 
-Two more knobs cut hand-computed sizing out of the loop: `images[].fit:"region"` sizes the
-display box to fit inside the region's own box (aspect-preserving contain, inset by `margin`)
-instead of you computing a `width` from `read_page` geometry — omit `width`/`height` entirely
-when you set it. `images[].maxDimension` downscales an over-large PNG source (re-encoded, not
+Two more knobs cut hand-computed sizing out of the loop: `images[].fit` (`"contain"` — native
+aspect inside the region's image box, no margin, the default choice; `"region"` — the same
+with an 8px inset) sizes the display box for you instead of you computing a `width` from
+`read_page` geometry — omit `width`/`height` entirely when you set it. `images[].maxDimension` downscales an over-large PNG source (re-encoded, not
 just resized on disk) so it clears the 1536px guideline / 2MB cap instead of you resizing it
 by hand first — PNG only; a JPEG over the limit still needs downscaling before sending.
 

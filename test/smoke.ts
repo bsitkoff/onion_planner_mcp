@@ -20,6 +20,8 @@ import {
   listPages,
   listPageRows,
   readUnderlayVoice,
+  readUnderlayHabits,
+  writeUnderlayHabits,
   LibraryMissingError,
 } from "../src/library.js";
 import {
@@ -32,7 +34,7 @@ import {
   writeChapterTheme,
   fetchImageToTemp,
 } from "../src/page.js";
-import { resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages } from "../src/svg.js";
+import { resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages, REGION_DEFAULTS } from "../src/svg.js";
 import {
   hexToHsl,
   contrastRatioHex,
@@ -41,7 +43,7 @@ import {
   monthlyInks,
   PALETTE_CHARACTERS,
 } from "../src/color.js";
-import { inspectTemplate, parseRegions, PAPER_COLOR } from "../src/template.js";
+import { inspectTemplate, parseRegions, PAPER_COLOR, FILL_BY_NAME } from "../src/template.js";
 import { decodePng, encodePng, chromaKeyPixels } from "../src/png.js";
 
 // Gold is retired — the default (no theme override) resolves to the chapter's own ink
@@ -154,13 +156,15 @@ async function main() {
   check("schedule region parsed with ruled lines", (schedule?.ruledLines.length ?? 0) >= 8, String(schedule?.ruledLines.length));
   check("ainotes region parsed (no-ruled box)", !!ainotes && ainotes.ruledLines.length === 0, String(ainotes?.ruledLines.length));
   check("todo region parsed", !!todo);
-  // imageFloor: ainotes' own intent mentions "a habit sticker" — the interactive floor
-  // (245×245) applies regardless of the box size; todo's intent doesn't, so it gets the
-  // default 35%-of-box heuristic instead.
+  // imageFloor: the region whose intent mentions a habit (the `habits` region on catalogue
+  // ≥ 15-habits-region; `ainotes`' "a habit sticker" before it) gets the interactive floor
+  // (245×245) regardless of box size; todo's intent doesn't, so it gets the default
+  // 35%-of-box heuristic instead. Derived from the parsed intent, not a template-id list.
+  const habitIntentRegion = read.regions.find((r) => /\bhabit\b/i.test(r.intent ?? ""));
   check(
-    "ainotes' intent marks it interactive -> a 245×245 imageFloor",
-    ainotes?.imageFloor?.interactive === true && ainotes.imageFloor.width === 245 && ainotes.imageFloor.height === 245,
-    JSON.stringify(ainotes?.imageFloor),
+    "a region whose intent mentions a habit is interactive -> a 245×245 imageFloor",
+    habitIntentRegion?.imageFloor?.interactive === true && habitIntentRegion.imageFloor.width === 245 && habitIntentRegion.imageFloor.height === 245,
+    JSON.stringify({ region: habitIntentRegion?.name, floor: habitIntentRegion?.imageFloor }),
   );
   check(
     "todo's intent (task checkbox rows, not an image) -> the default 35%-of-box floor",
@@ -1389,22 +1393,172 @@ async function main() {
     JSON.stringify(scheduleAfterLabel?.labelFilled),
   );
 
-  console.log("\nprinted-checkbox templates warn on a redundant checkbox marker");
+  console.log("\n#44: no shipped template prints checkboxes — a marker never warns printed_checkboxes");
   const todoPage = "Shared/Daily/todo-day";
   await createPage(root, { chapter: "Daily", name: "todo-day", title: "Lists", template: "todo-minimal" });
   const todoRead = await readPage(root, todoPage);
   const listRegion = todoRead.regions.find((r) => r.name.startsWith("list")) ?? todoRead.regions.find((r) => r.name === "todo");
   check("todo template exposes a list region", !!listRegion, JSON.stringify(todoRead.regions.map((r) => r.name)));
-  const doubleBox = await writeUnderlay(root, todoPage, {
+  // Verified against the catalogue itself, not a template-id list: no to-do/list region of
+  // any shipped template draws a checkbox square (a small <rect> beside its rules).
+  const catalogue = (await fs.readdir(path.join(root, "Templates"), { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
+  let printedBoxTemplates: string[] = [];
+  for (const id of catalogue) {
+    const svgText = await fs.readFile(path.join(root, "Templates", id, "template.svg"), "utf8");
+    for (const r of parseRegions(svgText, id)) {
+      if (r.name !== "todo" && !r.name.startsWith("list")) continue;
+      const grp = svgText.match(new RegExp(`<g\\b[^>]*id="${r.id}"[\\s\\S]*?</g>`))?.[0] ?? "";
+      const smallRects = [...grp.matchAll(/<rect\b[^>]*width="(\d+(?:\.\d+)?)"[^>]*height="(\d+(?:\.\d+)?)"/g)].filter((m) => Number(m[1]) <= 30 && Number(m[2]) <= 30);
+      if (smallRects.length > 0) printedBoxTemplates.push(`${id}/${r.name}`);
+    }
+  }
+  check("catalogue audit: no shipped to-do/list region prints checkbox squares", printedBoxTemplates.length === 0, JSON.stringify(printedBoxTemplates));
+  const markerOnTodo = await writeUnderlay(root, todoPage, {
     status: "ready", dryRun: true,
     regions: [{ region: listRegion!.name, lines: [{ text: "Buy stamps", marker: "checkbox" }] }],
   });
-  check("checkbox marker on a printed-box template warns printed_checkboxes", doubleBox.warningDetails.some((w) => w.code === "printed_checkboxes"), JSON.stringify(doubleBox.warningDetails));
-  const textOnly = await writeUnderlay(root, todoPage, {
+  check("a checkbox marker on todo-minimal draws a box and does not warn", !markerOnTodo.warningDetails.some((w) => w.code === "printed_checkboxes") && /<rect\b[^>]*rx="2"/.test(regionGroup(markerOnTodo.aiSvg, listRegion!.name) ?? ""), JSON.stringify(markerOnTodo.warningDetails));
+  const cozyTodo = parseRegions(cozyScheduleTemplateSvg, "daily-cozy");
+  const cozyMarker = composeAiSvg([1024, 1366], [{ region: "todo", lines: [{ text: "Buy stamps", marker: "checkbox" }] }], cozyTodo, undefined, "daily-cozy");
+  check("a checkbox marker on daily-cozy (formerly flagged) no longer warns", !cozyMarker.warningDetails.some((w) => w.code === "printed_checkboxes"), JSON.stringify(cozyMarker.warnings));
+
+  console.log("\n#33 align; #42 positioned <tspan>; #29 typography warnings");
+  const alignRead = await readPage(root, daily);
+  const anRegion = alignRead.regions.find((r) => r.name === "ainotes")!;
+  const aligned = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    regions: [{ region: listRegion!.name, lines: [{ text: "Buy stamps" }] }],
+    regions: [{ region: "ainotes", lines: [
+      { text: "Centered", align: "center", wrap: false },
+      { text: "Flush right", align: "right", wrap: false },
+      { text: "Plain left", wrap: false },
+      { text: "Marked", align: "right", marker: "checkbox", wrap: false },
+    ] }],
   });
-  check("text-only lines on the same template do not warn", !textOnly.warningDetails.some((w) => w.code === "printed_checkboxes"), JSON.stringify(textOnly.warningDetails));
+  const alignGroup = regionGroup(aligned.aiSvg, "ainotes") ?? "";
+  const centerEl = alignGroup.match(/<text[^>]*>Centered<\/text>/)?.[0] ?? "";
+  const rightEl = alignGroup.match(/<text[^>]*>Flush right<\/text>/)?.[0] ?? "";
+  const leftEl = alignGroup.match(/<text[^>]*>Plain left<\/text>/)?.[0] ?? "";
+  check("align center emits text-anchor=middle at the box centre", centerEl.includes('text-anchor="middle"') && centerEl.includes(`x="${Math.round(anRegion.width! / 2)}"`), centerEl);
+  check("align right emits text-anchor=end at the right inset", rightEl.includes('text-anchor="end"') && Number(rightEl.match(/ x="(\d+)"/)?.[1]) === anRegion.width! - 24, rightEl);
+  check("a left line carries no text-anchor (unchanged output)", !leftEl.includes("text-anchor"), leftEl);
+  check("a marker on an aligned line is skipped with an info warning", aligned.warningDetails.some((w) => w.code === "align_marker_ignored" && w.severity === "info"), JSON.stringify(aligned.warnings));
+  check("aligned short lines do not trip text_overflow", !aligned.warningDetails.some((w) => w.code === "text_overflow"), JSON.stringify(aligned.warnings));
+  const wideRight = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: "A right-aligned line far too long for this two-hundred-and-eighty-nine pixel box", align: "right", wrap: false }] }],
+  });
+  check("a right-aligned overlong line warns text_overflow (spills left)", wideRight.warningDetails.some((w) => w.code === "text_overflow"), JSON.stringify(wideRight.warnings));
+  const wrapCenter = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: "A centred paragraph that is long enough to wrap onto several lines inside the notes box", align: "center" }] }],
+  });
+  const wrapCenterEls = [...(regionGroup(wrapCenter.aiSvg, "ainotes") ?? "").matchAll(/<text[^>]*text-anchor="middle"[^>]*>/g)];
+  check("wrapped continuations of a centred line share the anchor", wrapCenterEls.length > 1, String(wrapCenterEls.length));
+  const alignedHeading = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: "Tomorrow", heading: true, align: "center" }, { text: "Pack bag" }] }],
+  });
+  check("an aligned heading composes (pill or anchored label)", (regionGroup(alignedHeading.aiSvg, "ainotes") ?? "").includes(">Tomorrow</text>"), JSON.stringify(alignedHeading.warnings));
+  const unbounded = composeAiSvg([1024, 1366], [{ region: "ruled", lines: [{ text: "x", align: "right" }] }], parseRegions('<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><g id="region-ruled" data-region="ruled" transform="translate(0,0)"><line x1="0" y1="40" x2="200" y2="40"/></g></svg>'));
+  check("align on a region with no width degrades to left with an info warning", unbounded.warningDetails.some((w) => w.code === "align_unbounded_region") && !unbounded.svg.includes("text-anchor"), JSON.stringify(unbounded.warnings));
+  // #42 — positioned <tspan> is accepted; styled / bare tspans warn.
+  const tspanOk = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", svg: '<text x="24" y="30" font-family="Mulish" font-size="15" fill="#3b7bad">First line<tspan x="24" dy="20">second line</tspan><tspan x="24" dy="20">third</tspan></text>' }],
+  });
+  check("positioned <tspan x/dy> passes the raw-svg validator clean", !tspanOk.warningDetails.some((w) => w.code.startsWith("raw_svg_")), JSON.stringify(tspanOk.warnings));
+  const tspanStyled = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", svg: '<text x="24" y="30">A<tspan x="24" dy="20" fill="#ff0000" font-weight="800">B</tspan></text>' }],
+  });
+  check("a tspan with fill/font-weight warns raw_svg_tspan_attrs (naming them)", tspanStyled.warningDetails.some((w) => w.code === "raw_svg_tspan_attrs" && w.message.includes("fill") && w.message.includes("font-weight")), JSON.stringify(tspanStyled.warnings));
+  const tspanBare = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="100" y="100">A<tspan>B</tspan></text></svg>',
+  });
+  check("a bare <tspan> (top-level raw svg) is info-flagged as unpositioned, not unsupported", tspanBare.warningDetails.some((w) => w.code === "raw_svg_tspan_unpositioned" && w.severity === "info") && !tspanBare.warningDetails.some((w) => w.code === "raw_svg_unsupported_element"), JSON.stringify(tspanBare.warningDetails));
+  // #29 — body text ≥13px, handwriting faces reserved for the user's ink.
+  const typo = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [
+      { region: "todo", lines: [{ text: "tiny", size: 11 }, { text: "scrawl", font: "Caveat" }, { text: "Label", heading: true, size: 11, font: "Caveat" }] },
+      { region: "header", lines: [{ text: "Thursday", font: "Caveat" }] },
+    ],
+  });
+  check("body text under 13px warns text_too_small", typo.warningDetails.filter((w) => w.code === "text_too_small").length === 1, JSON.stringify(typo.warnings));
+  check("Caveat body copy in todo is info-flagged handwriting_body_font (once per region)", typo.warningDetails.filter((w) => w.code === "handwriting_body_font").length === 1 && typo.warningDetails.find((w) => w.code === "handwriting_body_font")?.region === "todo", JSON.stringify(typo.warnings));
+  check("a heading, and Caveat in the header, are exempt", !typo.warningDetails.some((w) => w.code === "handwriting_body_font" && w.region === "header"), JSON.stringify(typo.warnings));
+  const cleanTypo = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "todo", lines: [{ text: "Buy stamps", marker: "checkbox" }] }],
+  });
+  check("default Mulish 15 body text trips neither typography warning", !cleanTypo.warningDetails.some((w) => w.code === "text_too_small" || w.code === "handwriting_body_font"), JSON.stringify(cleanTypo.warnings));
+
+  console.log("\n#50 habits (settings.json ↔ vector block); #49 accent + plain labels; #48 header art clearance");
+  check("no underlayHabits → null", (await readUnderlayHabits(root)) === null);
+  await fs.writeFile(settingsPath, JSON.stringify({ underlayVoice: { name: "B" }, pencil: { smoothing: 0.6 } }));
+  const habitsWritten = await writeUnderlayHabits(root, ["PT", " Water ", "", "Read"]);
+  check("set_habits trims/drops blanks and returns the list", JSON.stringify(habitsWritten) === JSON.stringify(["PT", "Water", "Read"]), JSON.stringify(habitsWritten));
+  const settingsAfter = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+  check("other settings keys survive the habits write", settingsAfter.underlayVoice?.name === "B" && settingsAfter.pencil?.smoothing === 0.6, JSON.stringify(settingsAfter));
+  check("read_page surfaces underlayHabits", JSON.stringify((await readPage(root, daily)).underlayHabits) === JSON.stringify(["PT", "Water", "Read"]));
+  // A BYO template with a `habits` region + label-habits slot (no catalogue template ships one yet).
+  const habitsTpl = parseRegions('<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><g id="region-habits" data-region="habits" data-fill="shared" transform="translate(100,900)"><rect x="0" y="0" width="280" height="50" fill="none"/><rect x="0" y="-40" width="100" height="30" data-region="label-habits" stroke-dasharray="3 5"/></g></svg>');
+  const habitsOut = composeAiSvg([1024, 1366], [{ region: "habits", habits: ["PT", "Water", "Read"] }], habitsTpl);
+  const habitsGroup = regionGroup(habitsOut.svg, "habits") ?? "";
+  const habitBoxes = [...habitsGroup.matchAll(/<rect x="6" y="(\d+)" width="13" height="13" rx="2"/g)].map((m) => Number(m[1]));
+  check("habits block draws a 13px rx2 square per habit at x=6 (composer geometry)", habitBoxes.length === 2, JSON.stringify(habitBoxes));
+  check("habit rows start at baseline 18 and pitch 21 (boxes at y=5, 26)", habitBoxes[0] === 5 && habitBoxes[1] === 26, JSON.stringify(habitBoxes));
+  check("habit names are Mulish 14 at x=26", /<text x="26" y="18" font-family="Mulish" font-size="14"[^>]*>PT<\/text>/.test(habitsGroup), habitsGroup.slice(0, 300));
+  check("a 50px-tall box fits 2 of 3 habits and warns habits_overflow", habitsOut.warningDetails.some((w) => w.code === "habits_overflow" && w.message.includes("1 of 3")), JSON.stringify(habitsOut.warnings));
+  check("the label-habits slot is titled HABITS in the composer's plain style", /<text x="2" y="-24" font-family="Mulish" font-size="12" font-weight="700"[^>]*>HABITS<\/text>/.test(habitsGroup), habitsGroup.slice(0, 400));
+  check("habits: true is rejected by composeAiSvg (must be resolved by write_underlay)", (() => { try { composeAiSvg([1024, 1366], [{ region: "habits", habits: true }], habitsTpl); return false; } catch { return true; } })());
+  let habitsAndLines = false;
+  try { composeAiSvg([1024, 1366], [{ region: "habits", habits: ["PT"], lines: [{ text: "x" }] }], habitsTpl); } catch { habitsAndLines = true; }
+  check("habits is mutually exclusive with lines", habitsAndLines);
+  // write_underlay resolves `habits: true` from settings.json — the daily page has no habits
+  // region, so drive a todo region (info-flagged habits_region_name) to exercise the path.
+  const habitsLive = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", habits: true }] });
+  check("write_underlay resolves habits:true from settings.json (3 rows drawn)", (regionGroup(habitsLive.aiSvg, "todo") ?? "").split("<rect").length - 1 === 3, JSON.stringify(habitsLive.warnings));
+  check("a habits block outside a `habits` region is info-flagged habits_region_name", habitsLive.warningDetails.some((w) => w.code === "habits_region_name" && w.severity === "info"));
+  await writeUnderlayHabits(root, []);
+  check("set_habits [] removes the key", !("underlayHabits" in JSON.parse(await fs.readFile(settingsPath, "utf8"))));
+  let habitsMissing = false;
+  try { await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "todo", habits: true }] }); } catch (e: any) { habitsMissing = /set_habits/.test(e.message); }
+  check("habits:true with no configured habits is a clear error naming set_habits", habitsMissing);
+  await fs.writeFile(settingsPath, "{ not json");
+  let garbledRefused = false;
+  try { await writeUnderlayHabits(root, ["PT"]); } catch { garbledRefused = true; }
+  check("set_habits refuses to overwrite a garbled settings.json", garbledRefused);
+  await fs.rm(settingsPath, { force: true });
+  // #49 — accent is image-only; the 2026-06 family has real defaults; plain label style.
+  const accentText = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "accent", lines: [{ text: "no text here" }] }] });
+  check("text in the accent pocket warns accent_text", accentText.warningDetails.some((w) => w.code === "accent_text"), JSON.stringify(accentText.warnings));
+  check("accent / list-1 / morning / last have explicit REGION_DEFAULTS (no fallback typography)", ["accent", "list-1", "morning", "last", "habits", "photos"].every((n) => n in REGION_DEFAULTS));
+  check("accent derives fill ai; habits derives shared (FILL_BY_NAME)", FILL_BY_NAME.accent === "ai" && FILL_BY_NAME.habits === "shared");
+  const plainLabel = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", label: "Schedule", labelStyle: "plain", lines: [{ text: "x", row: 1 }] }] });
+  const plainGroup = regionGroup(plainLabel.aiSvg, "schedule") ?? "";
+  const schedSlot = schedule!.labelSlot!;
+  check("labelStyle plain writes uppercase Mulish 12/700 at the slot origin (composer sectionLabel)", plainGroup.includes(`<text x="${schedSlot.x + 2}" y="${schedSlot.y + Math.min(schedSlot.height - 4, 16)}" font-family="Mulish" font-size="12" font-weight="700"`) && plainGroup.includes(">SCHEDULE</text>") && !/<rect[^>]*rx="6"/.test(plainGroup), plainGroup.slice(0, 300));
+  console.log("\n#43: minting a YYYY-MM chapter stamps year/month (no title); order is chronological");
+  await createPage(root, { chapter: "2026-09", name: "2026-09-15", template: "daily-minimal" });
+  const m43FolderFile = path.join(root, "Shared", "2026-09", ".folder.json");
+  let m43Folder = JSON.parse(await fs.readFile(m43FolderFile, "utf8"));
+  check("a freshly minted month chapter carries year + month", m43Folder.year === 2026 && m43Folder.month === 9, JSON.stringify(m43Folder));
+  check("no placeholder title is written (the app fills \"September 2026\")", !("title" in m43Folder), JSON.stringify(m43Folder));
+  await createPage(root, { chapter: "2026-09", name: "2026-09-03", template: "daily-minimal" });
+  await createPage(root, { chapter: "2026-09", name: "sketch-sept", template: "blank-minimal" });
+  await createPage(root, { chapter: "2026-09", name: "2026-09-08", template: "daily-minimal" });
+  m43Folder = JSON.parse(await fs.readFile(m43FolderFile, "utf8"));
+  check("a back-filled earlier day is inserted before later days, not appended", JSON.stringify(m43Folder.order) === JSON.stringify(["2026-09-03", "2026-09-08", "2026-09-15", "sketch-sept"]), JSON.stringify(m43Folder.order));
+  // An existing config is merged into, never clobbered, and a present pair is kept.
+  await fs.writeFile(m43FolderFile, JSON.stringify({ year: 2026, month: 9, title: "September 2026", theme: { accent: "#7B5EA7" }, order: ["2026-09-03"] }));
+  await createPage(root, { chapter: "2026-09", name: "2026-09-01", template: "daily-minimal" });
+  m43Folder = JSON.parse(await fs.readFile(m43FolderFile, "utf8"));
+  check("existing .folder.json keys (title, theme) survive a create", m43Folder.title === "September 2026" && m43Folder.theme?.accent === "#7B5EA7" && m43Folder.year === 2026, JSON.stringify(m43Folder));
+  check("the new day lands first in chronological order", m43Folder.order[0] === "2026-09-01", JSON.stringify(m43Folder.order));
+  const m43DailyFolder = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
+  check("a non-month chapter is unchanged: title = chapter name, no year/month", m43DailyFolder.title === "Daily" && !("year" in m43DailyFolder), JSON.stringify(m43DailyFolder));
 
   console.log("\nread_ink strips bulky data-stroke streams by default");
   const inkSvgDoc =
@@ -1529,6 +1683,64 @@ async function main() {
   // A properly supplied structured image does NOT warn (no false positive).
   const okHref = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "real", width: 40 }] }] });
   check("a resolved structured image does not warn image_href_missing", !okHref.warningDetails.some((w) => w.code === "image_href_missing"), JSON.stringify(okHref.warningDetails));
+
+  console.log("\n#47 fit:\"contain\"; #26 flatten:\"paper\" + image_has_alpha; #27 image_competes_with_text; #25 art_slot_unfilled");
+  const hdrRegions = (await readPage(root, hdrPage)).regions;
+  const hdrArt = hdrRegions.find((r) => r.name === "header")!.artSlot!;
+  const widePixels = new Uint8Array(60 * 20 * 4).fill(200);
+  for (let i = 3; i < widePixels.length; i += 4) widePixels[i] = 255; // opaque
+  const wideSrc = encodePng({ width: 60, height: 20, pixels: widePixels }).toString("base64");
+  const contain = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", name: "wide", fit: "contain" }] }] });
+  const containImg = (regionGroup(contain.aiSvg, "header") ?? "").match(/<image[^>]*>/)?.[0] ?? "";
+  const cW = Number(containImg.match(/width="(\d+)"/)?.[1]);
+  const cH = Number(containImg.match(/height="(\d+)"/)?.[1]);
+  const cX = Number(containImg.match(/ x="(-?\d+)"/)?.[1]);
+  check("fit:contain sizes a 3:1 source to the art slot's full width at native aspect (300×100)", cW === hdrArt.width && cH === Math.round(hdrArt.width / 3), containImg);
+  check("fit:contain centres the box in the art slot (no margin)", cX === hdrArt.x, containImg);
+  check("fit:contain emits no size-floor / aspect / overflow warning (the good case)", !contain.warningDetails.some((w) => ["image_small_for_region", "image_aspect_mismatch", "image_overflow"].includes(w.code)), JSON.stringify(contain.warnings));
+  const fitRegionW = Number(((regionGroup((await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", name: "wide", fit: "region" }] }] })).aiSvg, "header") ?? "").match(/<image[^>]*width="(\d+)"/) ?? [])[1]);
+  // With the 8px inset the 3:1 source is height-bound: (104-16) × 3 = 264, not 284.
+  check("fit:region keeps its 8px inset (height-bound 3:1 → 264 wide)", fitRegionW === Math.min(hdrArt.width - 16, (hdrArt.height - 16) * 3), String(fitRegionW));
+  let fitRejected = false;
+  try { await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", fit: "contain", width: 100 } as any] }] }); } catch { fitRejected = true; }
+  check("fit:contain + width is rejected (fit computes both)", fitRejected);
+  // #26 — a half-transparent PNG: flattened onto paper when asked, info-flagged when not.
+  const alphaPixels = new Uint8Array(20 * 10 * 4);
+  for (let i = 0; i < alphaPixels.length; i += 4) { alphaPixels[i] = 40; alphaPixels[i + 1] = 80; alphaPixels[i + 2] = 160; alphaPixels[i + 3] = i < alphaPixels.length / 2 ? 0 : 255; }
+  const alphaSrc = encodePng({ width: 20, height: 10, pixels: alphaPixels }).toString("base64");
+  const flat = await writeUnderlay(root, hdrPage, { status: "ready", regions: [{ region: "ainotes", images: [{ data: alphaSrc, format: "png", name: "sticker", width: 100, flatten: "paper", corner: "bottom-right" }] }] });
+  check("flatten:paper info-flags image_flattened", flat.warningDetails.some((w) => w.code === "image_flattened" && w.severity === "info"), JSON.stringify(flat.warningDetails));
+  const flatFile = (await fs.readdir(path.join(root, hdrPage, "media", "ai"))).find((f) => f.startsWith("sticker"))!;
+  const flatPng = decodePng(await fs.readFile(path.join(root, hdrPage, "media", "ai", flatFile)));
+  let opaque = true; let paperish = false;
+  for (let i = 3; i < flatPng.pixels.length; i += 4) if (flatPng.pixels[i] !== 255) opaque = false;
+  if (flatPng.pixels[0] > 240 && flatPng.pixels[1] > 240 && flatPng.pixels[2] > 240) paperish = true;
+  check("the written file is fully opaque, transparent pixels now paper-coloured", opaque && paperish, `alpha ok=${opaque} first px=${[flatPng.pixels[0], flatPng.pixels[1], flatPng.pixels[2]]}`);
+  check("flattened output does not also warn image_has_alpha", !flat.warningDetails.some((w) => w.code === "image_has_alpha"), JSON.stringify(flat.warnings));
+  const notFlat = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "ainotes", images: [{ data: alphaSrc, format: "png", name: "sticker", width: 100, corner: "bottom-right" }] }] });
+  check("an unflattened transparent PNG is info-flagged image_has_alpha", notFlat.warningDetails.some((w) => w.code === "image_has_alpha" && w.severity === "info"), JSON.stringify(notFlat.warnings));
+  check("an opaque PNG is not flagged image_has_alpha", !contain.warningDetails.some((w) => w.code === "image_has_alpha"), JSON.stringify(contain.warnings));
+  // #27 — text running under a centred sticker competes; a footer-anchored one doesn't.
+  const compete = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "ainotes", images: [{ data: wideSrc, format: "png", name: "big", width: 240 }], lines: Array.from({ length: 8 }, (_, i) => ({ text: `Note line ${i} with a few words in it`, wrap: false })) }] });
+  check("text under a centred image warns image_competes_with_text (once per image)", compete.warningDetails.filter((w) => w.code === "image_competes_with_text").length === 1, JSON.stringify(compete.warnings));
+  const footer = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "ainotes", images: [{ data: wideSrc, format: "png", name: "small", width: 90, corner: "bottom-right" }], lines: [{ text: "Short note" }, { text: "Second line" }] }] });
+  check("text-first + bottom-right supporting sticker does not compete", !footer.warningDetails.some((w) => w.code === "image_competes_with_text"), JSON.stringify(footer.warnings));
+  // #25 — a header filled with text but no art leaves the printed box empty: info.
+  const textOnlyHdr = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", lines: [{ text: "Thursday, August 20" }] }] });
+  check("header text with no image info-flags art_slot_unfilled", textOnlyHdr.warningDetails.some((w) => w.code === "art_slot_unfilled" && w.severity === "info"), JSON.stringify(textOnlyHdr.warnings));
+  check("a header with a banner does not flag art_slot_unfilled", !contain.warningDetails.some((w) => w.code === "art_slot_unfilled"));
+  check("a region with no art slot never flags art_slot_unfilled", !footer.warningDetails.some((w) => w.code === "art_slot_unfilled"));
+  // #48 — header text wraps clear of the art slot when a banner fills it.
+  const hdrRead = await readPage(root, hdrPage);
+  const hdrSlot = hdrRead.regions.find((r) => r.name === "header")!.artSlot!;
+  const longDate = "Thursday, August 20 — a long header line that would otherwise run right under the banner art on the right, and keeps going with an eyebrow-length story about the day so the wrap width difference shows";
+  const hdrWithArt = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: wideSrc, format: "png", fit: "contain" }], lines: [{ text: longDate, wrap: true }] }] });
+  const hdrTexts = [...(regionGroup(hdrWithArt.aiSvg, "header") ?? "").matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  check("header text wraps to clear the filled art slot (several segments, none competing)", hdrTexts.length > 1 && !hdrWithArt.warningDetails.some((w) => w.code === "image_competes_with_text"), JSON.stringify({ hdrTexts, warnings: hdrWithArt.warnings, slotX: hdrSlot.x }));
+  const hdrNoArt = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", lines: [{ text: longDate, wrap: true }] }] });
+  const hdrNoArtTexts = [...(regionGroup(hdrNoArt.aiSvg, "header") ?? "").matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  check("without art the same line uses the full band (fewer segments)", hdrNoArtTexts.length < hdrTexts.length, `${hdrNoArtTexts.length} vs ${hdrTexts.length}`);
+
 
   console.log("\nwrite_underlay images via local file `path` (no base64 through context)");
   const srcPng = path.join(os.tmpdir(), "onionskin-smoke-src.png");
@@ -1704,12 +1916,12 @@ async function main() {
     floating.warningDetails.some((w) => w.code === "image_small_for_region" && w.severity === "info"), JSON.stringify(floating.warningDetails));
   check("the same tiny image corner-placed stays quiet (deliberate accent)",
     !cleanImg.warningDetails.some((w) => w.code === "image_small_for_region"), JSON.stringify(cleanImg.warningDetails));
-  // ainotes' box is 289×422 — the old 35%-of-box heuristic (~101×148) would NOT have
-  // flagged a 150×150 centered image, but its intent ("a habit sticker") now carries the
-  // declared 245×245 interactive floor, which does.
+  // The habit-intent region's box (289×240+ on the current catalogue) — the old 35%-of-box
+  // heuristic would NOT have flagged a 150×150 centered image, but its intent carries the
+  // declared 245×245 interactive floor, which does. (Region derived from intent — see above.)
   const habitSized = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    regions: [{ region: "ainotes", images: [{ data: PNG_1x1, format: "png", name: "habit", width: 150, height: 150, corner: "center" }] }],
+    regions: [{ region: habitIntentRegion!.name, images: [{ data: PNG_1x1, format: "png", name: "habit", width: 150, height: 150, corner: "center" }] }],
   });
   check(
     "a habit-tracker-sized image below the 245px interactive floor still warns, even though it clears the old 35%-of-box heuristic",

@@ -217,6 +217,58 @@ past the grid, which would otherwise fold onto the last rule), and `text_below_r
 line whose baseline falls below the region box). Treat any of these as "re-layout", not noise —
 an unattended write has no human to notice the pile-up.
 
+### Composer parity: habits, section titles, the header (#48, #49, #50)
+
+The app's on-device composer is the *other* author of `ai.svg`; where it has a fixed look,
+match it so a device-authored day and an MCP-authored day read the same.
+
+- **Habits** are a vector block, never a raster sticker. The list lives in the library's
+  `settings.json → underlayHabits` (see `get_library` / `read_page`; set it with
+  `set_habits`). Draw it with `{ region: "habits", habits: true }` — one 13px square + the
+  name per row (Mulish 14, 21px pitch), titled "HABITS" through the region's `label-habits`
+  slot when the template prints one. It belongs in a region named `habits` (the composer
+  renders habits only there); on a template without one, `habits_region_name` info-flags the
+  detour. Never infer habits from to-dos or merge them into the to-do list.
+- **Section titles** go into the printed `label-*` slot (`labelSlot` on `read_page`). The
+  region's `label` already targets the slot; `labelStyle: "plain"` draws it exactly as the
+  composer does (uppercase Mulish 12/700, accent, no pill). Mind the slot names on the todo
+  template: columns are `list-1/2/3`, slots are `label-list1/2/3` (no hyphen) — `read_page`
+  resolves each region's own slot, so never derive one name from the other.
+- **The `accent` pocket** (every template) is one small sticker or tiny drawing — never text
+  (`accent_text` warns), and fine to leave empty.
+- **Header recipe** (the composer's geometry): date as `EEEE, MMMM d` at size 38 / weight 700
+  (28 on a header under 80px tall), then an optional uppercased one-line "story eyebrow" at
+  size 14 / weight 700 in the accent above it; art fills the `art-header` slot with
+  `fit: "contain"`. When art is present the server clamps header text to clear the slot by
+  12px, so the date never runs under the banner. Or skip the text entirely for a one-piece
+  date sticker (above).
+
+### Font roles (#29)
+
+AI underlay copy is **clean UI type**; the handwriting faces belong to the user's ink layer.
+The defaults already do this — change them deliberately, not by habit:
+
+| Role | Face | Notes |
+|---|---|---|
+| Body copy — schedule, to-dos, `focus`, list items | **Mulish** 15 / 600 | the per-region default |
+| `ainotes` prose | **Newsreader** 15 / 500 | the serif AI voice |
+| Hour gutter / monospace data | IBM Plex Mono | printed by cozy/colorful templates |
+| Headings / banner labels | Mulish (or the theme's heading face) | 700–800 |
+| `Caveat` / `Fredoka` | **opt-in only** — `fontPersonality: "handwritten"` or a per-line `font` | reads as handwriting; body copy set in it is info-flagged `handwriting_body_font` |
+
+**Never below 13px** for body text (`text_too_small` warns; headings are exempt). The font set
+is closed — `Mulish`, `Newsreader`, `IBM Plex Mono`, `Caveat`, `Fredoka`, `Phosphor` — so a
+"Shantell Sans affirmation" isn't available; use Newsreader in `ainotes` for warmth instead.
+
+### Alignment (#33)
+
+A line's `align: "left" | "center" | "right"` anchors it against the region box from the
+template geometry — you never measure text. `center` emits `text-anchor="middle"` on the box's
+horizontal centre, `right` emits `text-anchor="end"` at the right inset; wrapped continuations
+share the anchor and a `heading` pill shifts with it. A leading `marker`/`icon` is only drawn
+on a left-aligned line (`align_marker_ignored`, info). Typical uses: a right-aligned date in the
+header, a centred label under a sticker, a right-aligned total.
+
 ## Use the placement the server already does for you
 
 - **Schedule by clock time, not coordinates.** Give each line a `time: "HH:MM"`; the server
@@ -288,33 +340,39 @@ silently dropped on device, so `write_underlay` warns `raw_svg_unsupported_eleme
 
 | Accepted | Rejected (warns) |
 |---|---|
-| `svg` `g` `rect` `line` `path` `text` `image` `circle` `ellipse` `polyline` `polygon` | everything else — notably `tspan`, `foreignObject`, `use`, `defs`, `style`, `clipPath`, `mask`, `filter`, `textPath` |
+| `svg` `g` `rect` `line` `path` `text` `tspan` `image` `circle` `ellipse` `polyline` `polygon` | everything else — notably `foreignObject`, `use`, `defs`, `style`, `clipPath`, `mask`, `filter`, `textPath` |
 
-**Attributes** — the split that costs the most trial-and-error is *what inherits*. The
-renderer resolves style per leaf element, not by cascading from ancestors:
+**Attributes — what inherits.** Since app build 121 the renderer cascades these five from
+a wrapping `<g>` (a value on the `<text>` wins): `font-family`, `font-size`, `font-weight`,
+`text-anchor`, `fill` ([onionskin#211](https://github.com/bsitkoff/onionskin/issues/211),
+fixed). Older builds dropped `text-anchor`/`font-weight` set only on the `<g>` (a centred
+block silently rendered left-aligned), so per-`<text>` attributes remain the safest form —
+and are what the structured `align` option emits.
 
-| Attribute | On `<text>` | On a wrapping `<g>` |
-|---|---|---|
-| `fill`, `fill-opacity`, `font-family`, `font-size` | works | **inherits** |
-| `text-anchor` (`middle` / `end`) | works | **dropped** — put it on each `<text>` |
-| `font-weight` (`400`–`800`) | works | **dropped** — put it on each `<text>` |
+**`<tspan>` — one multi-line `<text>` object.** Since build 121
+([onionskin#212](https://github.com/bsitkoff/onionskin/issues/212)) a `<tspan>` carrying
+`x`, `y` or `dy` starts a new line *inside one `<text>`*, and the whole block is **one**
+selectable/movable object in the app's underlay editor:
 
-The two "dropped" rows are app bug
-[onionskin#211](https://github.com/bsitkoff/onionskin/issues/211), still open as of
-2026-07-24 — a `text-anchor` set only on the `<g>` silently renders left-aligned, which can
-push centered content off-page. Set both per `<text>` until that lands.
+```xml
+<text x="24" y="30" font-family="Mulish" font-size="15" fill="#3B7BAD">First line
+  <tspan x="24" dy="20">second line</tspan>
+  <tspan x="24" dy="20">third</tspan></text>
+```
 
-Two more things worth knowing before you design around them:
+Two app-side limits, both surfaced by the validator:
 
-- **`<tspan>` is not a positioned element.** Multi-line text is authored as *stacked
-  `<text>` elements*, one per line — which is exactly what the structured `lines` input
-  (and its `wrap`) already emits. The validator rejects `<tspan>` outright.
-- **`<g>` is file-level grouping only — not a selectable object.** Wrapping several lines in
-  a `<g>` does *not* make them one movable unit in the app's editor: `AIEditModel`
-  hit-tests and selects at the leaf level (text or image), descending through groups. There
-  is currently no way to author one multi-line text object
-  ([onionskin#212](https://github.com/bsitkoff/onionskin/issues/212)).
-- `xml:space="preserve"` passes the validator but has no effect on the renderer.
+- **No per-line styling.** A tspan's `font-*`, `fill`, `text-anchor`, `dx`, `rotate` are
+  ignored — the `<text>`'s own attributes apply to every line (`raw_svg_tspan_attrs`).
+- **A bare `<tspan>` (no `x`/`y`/`dy`) is not a line break.** Its characters flatten into
+  the parent run with one inserted space (`raw_svg_tspan_unpositioned`, info).
+- Pages rendered by app builds **older than 121** flatten positioned tspans into one
+  space-joined line — no runtime gymnastics here, just know it.
+- A hand-edit in the app's "Edit underlay" collapses the runs to flat embedded-`\n` text.
+
+The structured `lines` input still emits stacked `<text>` per line (one per wrapped segment),
+which renders identically on every build; reach for tspans only when you want the block to be
+one object in the editor. `xml:space="preserve"` passes the validator but has no effect.
 
 ## Images (stickers / art)
 
@@ -353,17 +411,48 @@ sending, or set `images[].maxDimension`). `notes` is
 `fill: ink` (handwriting) — at most a *tiny* corner mark there, never a sticker over the writing
 area.
 
+**Placement default: contain at native aspect, whitespace OK, never stretch or crop (#47).**
+The renderer scales an `<image>` to its *exact* box (no `preserveAspectRatio`), so the only
+way to distort art is to hand it a box of the wrong shape. The two warning-free paths:
+
+- **`fit: "contain"`** — the one to reach for. The server sizes the box from the region's image
+  box (the art slot when it has one) at the source's own proportions, no margin, no size-floor
+  warning. A 3:1 banner in a 300×104 slot comes out 300×100; a square sticker in it comes out
+  104×104. If the art is the "wrong" shape for the box, it is contained and *does not fill* —
+  that is the intended result. **Never invent an aspect gate** and reject valid art.
+- **`width` only, no `height`** — the server derives the height from the source aspect.
+
+The only thing to avoid is `width` + `height` that fight the source (`image_aspect_mismatch`,
+"will render STRETCHED"). `fit: "region"` is the same contain with an 8px inset.
+
 **A header banner goes in the header's art slot — let the server place it.** The daily
-templates print a dashed rounded box on the right of the `header` band as the banner-art
-drop-zone; `read_page` surfaces it as the region's **`artSlot`** ({x,y,width,height}, or null
-on templates with no such box — agenda/monthly/todo/reflection/blank). You don't compute
-coordinates for it: give the `header` region an `images` entry and the server places it *in the
-art slot* — `corner`/`fit: "region"` and the `imageFloor` all target the slot, not the full
-band. So `fit: "region"` fills the box (covering the dashed placeholder — otherwise it renders
-as an orphaned empty box under your banner), and a plain `width` with no `x`/`y` centers it in
-the slot. Don't invent an aspect requirement or stretch art to fill the band: omit `height` to
-keep native proportions — whitespace inside the slot is fine. The date/title text still lands
-in the full header band, clear of the art slot.
+templates print a rounded box on the right of the `header` band as the banner-art drop-zone
+(tagged `art-header` on the current catalogue; an untagged dashed rect on older pages);
+`read_page` surfaces it as the region's **`artSlot`** ({x,y,width,height}, or null on templates
+with no such box — agenda/monthly/todo/reflection/blank). You don't compute coordinates for it:
+give the `header` region an `images` entry and the server places it *in the art slot* —
+`corner`/`fit` and the `imageFloor` all target the slot, not the full band. Two compositions
+that work (#25, #28):
+
+- **Banner + date text.** `fit: "contain"` on the art, and the date as a `lines[]` entry (the
+  date text lands in the band, clear of the slot — see the header recipe under *Composer
+  parity*). Leaving the slot empty while writing text prints an orphaned dashed box under your
+  copy — the server info-flags `art_slot_unfilled`.
+- **One integrated date sticker.** When the art already carries the day/date (the strongest
+  planner look — a finished sticker, not text-plus-decoration), put it in the slot with
+  `fit: "contain"` and **write no separate date line** (`lines: []`). Don't mix both: a date
+  sticker next to a date string reads as fragmented.
+
+Decorative PNGs with transparency: pass **`flatten: "paper"`** when you want a finished opaque
+sticker (the common case); leave it off only when the paper is meant to show through. An
+unflattened PNG with real alpha is info-flagged `image_has_alpha`. A *baked-in* checkerboard is
+pixels, not alpha — it needs `knockout` first (below), then flatten.
+
+**`ainotes` is text-first (#27).** The prose starts at the top; a supporting sticker (a habit
+tracker, a small illustration) is a footer — `corner: "bottom-right"` (or `"bottom-left"`),
+sized so it doesn't rise into the paragraph. A sticker can fit the box geometrically and still
+steal the eye; the server warns `image_competes_with_text` when a line's band runs under an
+image — treat it as "move the sticker down, or shorten the note", not noise.
 
 **Filenames must resolve — a dangling `href` renders blank.** The server writes each image to
 `media/ai/<stem>.<ext>` (the `stem` is `images[].name` if you pass one, else a content hash) and
@@ -397,10 +486,10 @@ the server own the filename, not to guess a stem.
 `convert_to_webp`/`get_generated_webp_images` — onionskin rejects webp (that path is for
 WordPress). More detail in the project memory (`onionskin-image-gen-pipeline`).
 
-Two more knobs cut hand-computed sizing out of the loop: `images[].fit:"region"` sizes the
-display box to fit inside the region's own box (aspect-preserving contain, inset by `margin`)
-instead of you computing a `width` from `read_page` geometry — omit `width`/`height` entirely
-when you set it. `images[].maxDimension` downscales an over-large PNG source (re-encoded, not
+Two more knobs cut hand-computed sizing out of the loop: `images[].fit` (`"contain"` — native
+aspect inside the region's image box, no margin, the default choice; `"region"` — the same
+with an 8px inset) sizes the display box for you instead of you computing a `width` from
+`read_page` geometry — omit `width`/`height` entirely when you set it. `images[].maxDimension` downscales an over-large PNG source (re-encoded, not
 just resized on disk) so it clears the 1536px guideline / 2MB cap instead of you resizing it
 by hand first — PNG only; a JPEG over the limit still needs downscaling before sending.
 

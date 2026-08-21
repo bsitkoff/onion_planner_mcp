@@ -38,6 +38,10 @@ export const RAW_SVG_ALLOWED_ELEMENTS = new Set([
   "ellipse",
   "polyline",
   "polygon",
+  // Since app build 121 (onionskin#212): a <tspan> carrying x/y/dy starts a new line
+  // inside ONE <text> (one selectable object in the app's underlay editor). See
+  // `scanRawSvgTspans` for the two limits the app keeps.
+  "tspan",
 ]);
 
 /** Element names used in `svg` that fall outside the renderer's set (sorted, unique). */
@@ -49,6 +53,36 @@ export function scanRawSvgElements(svg: string): string[] {
   }
   return [...unsupported].sort();
 }
+
+/** The only <tspan> attributes the app honours (onionskin#212). */
+const TSPAN_POSITION_ATTRS = new Set(["x", "y", "dy"]);
+
+/**
+ * What raw svg does with `<tspan>` that the app will NOT honour (#42):
+ * - `styled`: attribute names (other than `x`/`y`/`dy`) found on any tspan — the app
+ *   ignores per-run `font-*`/`fill`/`text-anchor`/`dx`/`rotate`; a `<text>`'s own
+ *   attributes apply to every line.
+ * - `unpositioned`: tspans carrying none of `x`/`y`/`dy` — these are not lines; their
+ *   characters flatten into the parent run with a separating space (app issue #72).
+ */
+export function scanRawSvgTspans(svg: string): { styled: string[]; unpositioned: number } {
+  const styled = new Set<string>();
+  let unpositioned = 0;
+  for (const m of svg.matchAll(/<\s*tspan\b([^>]*)>/gi)) {
+    const attrs = [...m[1].matchAll(/([A-Za-z_:][A-Za-z0-9_:.-]*)\s*=/g)].map((a) => a[1]);
+    const positioned = attrs.some((a) => TSPAN_POSITION_ATTRS.has(a.toLowerCase()));
+    if (!positioned) unpositioned++;
+    for (const a of attrs) if (!TSPAN_POSITION_ATTRS.has(a.toLowerCase())) styled.add(a);
+  }
+  return { styled: [...styled].sort(), unpositioned };
+}
+
+/** Fonts that read as the user's handwriting layer, not AI body copy (#29). */
+const HANDWRITING_FONTS = new Set(["Caveat", "Fredoka"]);
+/** Regions whose body copy is planner content (schedule/to-do/notes), not decoration. */
+const BODY_COPY_REGION_RE = /^(schedule|agenda|todo|list-\d+|ainotes|focus|notes|last)$/;
+/** Minimum legible body size for AI underlay text (#29). */
+const MIN_BODY_TEXT_SIZE = 13;
 
 /**
  * True when raw svg contains an <image href="data:..."> — the app renderer resolves
@@ -375,7 +409,22 @@ interface RegionDefault {
    *  schedule needs a wider gutter so its text clears the printed hour labels. */
   xPad?: number;
 }
-const REGION_DEFAULTS: Record<string, RegionDefault> = {
+/**
+ * The closed in-app font set (the app bundles exactly these under
+ * `Onionskin/DesignSystem/Fonts/`; `Phosphor` is the retired icon face the renderer
+ * repaints as SF Symbols). `index.ts` builds the tool schema's enum from this and
+ * `test/parity.ts` diffs it against the app's bundled font files.
+ */
+export const FONT_FAMILIES = [
+  "Mulish",
+  "Newsreader",
+  "IBM Plex Mono",
+  "Caveat",
+  "Fredoka",
+  "Phosphor",
+] as const;
+
+export const REGION_DEFAULTS: Record<string, RegionDefault> = {
   ainotes: { font: "Newsreader", size: 16, weight: 500 }, // the serif AI-voice register
   header: { font: "Mulish", size: 20, weight: 700 },
   schedule: { font: "Mulish", size: 15, weight: 600, xPad: 52 },
@@ -384,6 +433,24 @@ const REGION_DEFAULTS: Record<string, RegionDefault> = {
   notes: { font: "Mulish", size: 14, weight: 600 },
   focus: { font: "Mulish", size: 15, weight: 600 },
   month: { font: "Mulish", size: 13, weight: 600 },
+  // The rest of the 2026-06 catalogue family (#49) — previously fell to FALLBACK_DEFAULT.
+  "list-1": { font: "Mulish", size: 15, weight: 600 }, // todo template's three columns
+  "list-2": { font: "Mulish", size: 15, weight: 600 },
+  "list-3": { font: "Mulish", size: 15, weight: 600 },
+  habits: { font: "Mulish", size: 14, weight: 500 }, // the composer's habits block (#50)
+  last: { font: "Newsreader", size: 15, weight: 500 }, // reflection's "from last session"
+  photos: { font: "Mulish", size: 13, weight: 600 }, // captions under photo slots
+  morning: { font: "Mulish", size: 15, weight: 600 }, // weekend day-parts
+  afternoon: { font: "Mulish", size: 15, weight: 600 },
+  evening: { font: "Mulish", size: 15, weight: 600 },
+  weekdays: { font: "Mulish", size: 13, weight: 800 }, // monthly's Sun–Sat header (printed)
+  page: { font: "Mulish", size: 14, weight: 600 }, // lined/dotted/blank surface (ink)
+  joys: { font: "Mulish", size: 14, weight: 600 }, // reflection prompts (ink)
+  concerns: { font: "Mulish", size: 14, weight: 600 },
+  memories: { font: "Mulish", size: 14, weight: 600 },
+  // `accent` is image-only (one sticker or tiny drawing, never text) — typography here is
+  // only so a stray line still renders; composeAiSvg warns `accent_text` for it.
+  accent: { font: "Mulish", size: 12, weight: 600 },
   // legacy region names (retired 2026-06) — kept so older pages still style correctly.
   quote: { font: "Newsreader", size: 16, weight: 500 },
   affirmation: { font: "Newsreader", size: 16, weight: 500 },
@@ -454,6 +521,15 @@ export interface LineInput {
   y?: number;
   /** Local x offset from the region's left edge. Defaults to 24. */
   x?: number;
+  /**
+   * Horizontal alignment within the region box (#33). `left` (default) starts the text
+   * at the inset `x`; `center` anchors it (`text-anchor="middle"`) on the box's
+   * horizontal centre; `right` anchors it (`text-anchor="end"`) at the box's right
+   * inset. Emitted per `<text>` (not on the wrapping `<g>`) so it renders on every
+   * app build; wrapped continuations share the anchor. A leading `marker`/`icon` is
+   * only drawn on a left-aligned line. Ignored in a region with no known width.
+   */
+  align?: "left" | "center" | "right";
   font?: string;
   size?: number;
   /** SVG font-weight (100–900). Defaults per region (600; 500 for the quote). */
@@ -559,9 +635,20 @@ export interface ImageInput {
    * contain, inset by `margin`) instead of a caller-computed `width`/`height` —
    * resolved in `page.ts:resolveImages` once the region's geometry and the
    * image's intrinsic dimensions are both known. Mutually exclusive with
-   * `width`/`height`.
+   * `width`/`height`. `"contain"` is the frictionless default for decorative art
+   * (#47): the same aspect-preserving contain against the image box (the art slot
+   * when the region has one) with **no** margin and no size-floor warning — native
+   * proportions, whitespace inside the box is expected, nothing is stretched or
+   * cropped. `"region"` is the older spelling with an 8px inset.
    */
-  fit?: "region";
+  fit?: "region" | "contain";
+  /**
+   * Composite a transparent PNG onto the page's paper colour before writing it
+   * (#26) — the "finished sticker on paper" look. A generated sticker's alpha (or a
+   * baked-in checkerboard) otherwise reads as unfinished scaffolding on device. The
+   * written file is an opaque PNG. No-op for JPEG (no alpha).
+   */
+  flatten?: "paper";
   /**
    * Downscale the source (PNG only) so neither dimension exceeds this, before
    * sizing/hashing/writing — resolved in `page.ts:resolveImages`. Use instead of
@@ -602,8 +689,25 @@ export interface RegionInput {
   label?: string;
   /** Override the label banner color (defaults to the theme's cycled banner color). */
   labelFill?: string;
-  /** Text lines (ruled/box regions). Mutually exclusive with `calendar`/`svg`. */
+  /**
+   * How the region title is drawn (#49). Default = the theme's heading style (a coloured
+   * pill on `banner` themes, label + rule on `underline`). `"plain"` matches the app's
+   * on-device composer exactly — Mulish 12 / 700 / uppercase in the theme accent, at the
+   * printed `label-*` slot's origin (`x+2`, `y+min(height−4,16)`), no pill, no rule.
+   */
+  labelStyle?: "theme" | "plain";
+  /** Text lines (ruled/box regions). Mutually exclusive with `calendar`/`svg`/`habits`. */
   lines?: LineInput[];
+  /**
+   * Render the composer-parity **habits** block (#50): one row per habit name — a 13px
+   * `rx 2` square at `x+6` and the name in Mulish 14 at `x+26`, first baseline `y+18`,
+   * 21px pitch, stopping at the region height (`habits_overflow` warns). `true` means
+   * "the library's `settings.json → underlayHabits`" — `page.ts` resolves it to the
+   * list before compose; `composeAiSvg` itself only accepts the resolved `string[]`.
+   * Meant for a region named `habits` (titled via its `label-habits` slot when present).
+   * Mutually exclusive with `lines`/`calendar`/`svg`.
+   */
+  habits?: string[] | true;
   /** Calendar grid (the month region). Mutually exclusive with `lines`/`svg`. */
   calendar?: CalendarSpec;
   /**
@@ -1263,14 +1367,6 @@ export interface ComposeResult {
 }
 
 /**
- * Templates that print their own to-do checkboxes (the locked visual rule in
- * `docs/SHARED-VISUAL-SPEC.md` §2): on these, an authored `marker: "checkbox"`
- * draws a second box beside the printed one. Matched on the template id — a
- * heuristic until printed-box detection reads the geometry itself.
- */
-const PRINTS_OWN_CHECKBOXES_RE = /^todo-|^daily(-weekend)?-(cozy|colorful)$/;
-
-/**
  * Compose a complete ai.svg document from structured region input, positioning
  * each line using the parsed region geometry. Throws if a region name is unknown.
  * Returns the SVG plus non-fatal `warnings` (estimated overflow, more lines than
@@ -1350,10 +1446,17 @@ export function composeAiSvg(
       input.lines !== undefined ? "lines" : null,
       input.calendar !== undefined ? "calendar" : null,
       input.svg !== undefined ? "svg" : null,
+      input.habits !== undefined ? "habits" : null,
     ].filter(Boolean);
+    if (input.habits === true) {
+      throw new Error(
+        `Region "${input.region}": \`habits: true\` must be resolved to the settings list ` +
+          `before compose (write_underlay does this; pass the names directly here).`,
+      );
+    }
     if (bodyKinds.length > 1) {
       throw new Error(
-        `Region "${input.region}": provide only one of \`lines\`, \`calendar\`, or ` +
+        `Region "${input.region}": provide only one of \`lines\`, \`calendar\`, \`habits\`, or ` +
           `\`svg\` (got ${bodyKinds.join(" + ")}).`,
       );
     }
@@ -1365,24 +1468,39 @@ export function composeAiSvg(
     // at it instead of the default margin position — banner style fills the slot's box
     // exactly; underline style just anchors its text off the slot's origin (it draws no
     // box of its own, so there's nothing to stretch).
-    if (input.label) {
+    // A habits region with a printed `label-habits` slot titles itself the way the
+    // on-device composer does ("Habits", plain) unless the caller passed a label (#50).
+    const effLabel =
+      input.label ?? (Array.isArray(input.habits) && region.labelSlot ? "Habits" : undefined);
+    const effLabelStyle = input.labelStyle ?? (input.label === undefined && effLabel ? "plain" : "theme");
+    if (effLabel) {
       const lsize = 15;
       const slot = region.labelSlot;
-      const lw = bannerLabelWidth(input.label, lsize);
+      const lw = bannerLabelWidth(effLabel, lsize);
       const labelFont = themeFontFor(theme, region.name, true) ?? "Mulish";
       // A printed slot sits inside the region's authored space, so it can't be
       // off-page by construction — only check the fallback margin placement.
       if (!slot && region.y - 12 - lsize < 0) {
         warn(
           "label_above_page",
-          `region "${region.name}": label "${truncate(input.label)}" may sit above the page top.`,
+          `region "${region.name}": label "${truncate(effLabel)}" may sit above the page top.`,
           "warning",
           region.name,
         );
       }
       const lx = slot ? slot.x : DEFAULT_X_PAD;
       const ly = slot ? slot.y + slot.height - Math.round(slot.height * 0.28) : -12;
-      if (theme.headingStyle === "banner") {
+      if (effLabelStyle === "plain") {
+        // Composer parity (`UnderlaySVGComposer.sectionLabel`): uppercase Mulish 12 / 700
+        // in the accent, anchored at the slot's origin — no pill, no rule.
+        const px = slot ? slot.x + 2 : DEFAULT_X_PAD;
+        const py = slot ? slot.y + (slot.height > 0 ? Math.min(slot.height - 4, 16) : 16) : -12;
+        const pfill = input.labelFill !== undefined ? floorTextFill(input.labelFill) : theme.accent;
+        parts.push(
+          `    <text x="${px}" y="${py}" font-family="Mulish" font-size="12" font-weight="700" ` +
+            `fill="${pfill}">${escapeXml(effLabel.toUpperCase())}</text>`,
+        );
+      } else if (theme.headingStyle === "banner") {
         const padX = BANNER_PAD_X;
         const bh = slot ? slot.height : Math.round(lsize * 1.15) + 6;
         const by = slot ? slot.y : ly - Math.round(lsize * 0.82) - 3;
@@ -1395,13 +1513,13 @@ export function composeAiSvg(
         );
         parts.push(
           `    <text x="${lx + padX}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
-            `font-weight="800" letter-spacing="0.1em" fill="${labelText}">${escapeXml(input.label)}</text>`,
+            `font-weight="800" letter-spacing="0.1em" fill="${labelText}">${escapeXml(effLabel)}</text>`,
         );
       } else {
         const lfill = input.labelFill !== undefined ? floorTextFill(input.labelFill) : theme.text;
         parts.push(
           `    <text x="${lx}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
-            `font-weight="800" letter-spacing="0.1em" fill="${lfill}">${escapeXml(input.label)}</text>`,
+            `font-weight="800" letter-spacing="0.1em" fill="${lfill}">${escapeXml(effLabel)}</text>`,
         );
         parts.push(
           `    <line x1="${lx}" y1="${ly + 4}" x2="${lx + lw + 18}" y2="${ly + 4}" ` +
@@ -1409,10 +1527,13 @@ export function composeAiSvg(
         );
       }
     }
-    // Images paint first (background); text/calendar lands on top.
+    // Images paint first (background); text/calendar lands on top. Their region-local
+    // rects are kept so the text pass can flag a line that runs under one (#27).
+    const imageRects: Array<Bbox & { flagged: boolean }> = [];
     for (const img of input.images ?? []) {
       if (!img.href || !img.width || !img.height) continue;
       const { x, y } = placeImage(region, img);
+      imageRects.push({ x, y, w: img.width, h: img.height, flagged: false });
       const op = img.opacity !== undefined ? ` opacity="${img.opacity}"` : "";
       parts.push(
         `    <image href="${escapeXml(img.href)}" x="${x}" y="${y}" ` +
@@ -1438,7 +1559,9 @@ export function composeAiSvg(
       const centered =
         img.x === undefined && img.y === undefined && (img.corner === undefined || img.corner === "center");
       const floor = imageSizeFloor(region);
-      if (centered && floor && img.width < floor.width && img.height < floor.height) {
+      // A `fit` image was sized against the box on purpose (native aspect, contained) —
+      // that's the good case, never "too small" (#47).
+      if (centered && img.fit === undefined && floor && img.width < floor.width && img.height < floor.height) {
         const guidance = floor.interactive
           ? `content the user interacts with (a habit tracker) needs real size (~${INTERACTIVE_IMAGE_FLOOR}px tall to pencil-check)`
           : "size it toward the box, or corner-place it if it's meant as a small accent";
@@ -1489,6 +1612,19 @@ export function composeAiSvg(
         }
       }
     }
+    // The template prints an art placeholder here and this write fills the region with
+    // text but no image — the dashed box ships empty under/next to the copy (#25). Info:
+    // an orchestrator that meant "no banner today" can ignore it.
+    if (region.artSlot && imageRects.length === 0 && (input.lines?.length ?? 0) > 0) {
+      warn(
+        "art_slot_unfilled",
+        `region "${region.name}": the template prints a ${region.artSlot.width}×${region.artSlot.height} ` +
+          `art box here and nothing fills it — the dashed placeholder will show. Give this ` +
+          `region an \`images\` entry (fit:"contain") or accept the empty box.`,
+        "info",
+        region.name,
+      );
+    }
     // Whether the `showHours` gutter actually reached the page. `showHours` on its own is
     // a legitimate write, so it has to count toward "drew something" below — but only when
     // labels were really emitted; a showHours that no-op'd (no ruled rows, no resolvable
@@ -1498,6 +1634,26 @@ export function composeAiSvg(
       // Raw fragment, emitted verbatim inside the region group (escape hatch).
       const frag = input.svg.trim();
       if (frag) {
+        const tspans = scanRawSvgTspans(frag);
+        if (tspans.styled.length > 0) {
+          warn(
+            "raw_svg_tspan_attrs",
+            `region "${region.name}": <tspan> carries ${tspans.styled.join(", ")} — the app ` +
+              `honours only x/y/dy on a tspan; per-line font/fill/anchor is ignored (the ` +
+              `<text>'s own attributes apply to every line).`,
+            "warning",
+            region.name,
+          );
+        }
+        if (tspans.unpositioned > 0) {
+          warn(
+            "raw_svg_tspan_unpositioned",
+            `region "${region.name}": ${tspans.unpositioned} <tspan> without x/y/dy — not a ` +
+              `line break; its text flattens into the parent run with a space.`,
+            "info",
+            region.name,
+          );
+        }
         const unsupported = scanRawSvgElements(frag);
         if (unsupported.length > 0) {
           warn(
@@ -1509,6 +1665,47 @@ export function composeAiSvg(
           );
         }
         parts.push(`    ${frag}`);
+      }
+    } else if (Array.isArray(input.habits)) {
+      // Composer-parity habits block (#50; `UnderlaySVGComposer.habitsGroup`): one row per
+      // habit, a square checkbox + the name, region-local. Geometry mirrors the app so a
+      // page authored here and one authored on device look the same.
+      const hSize = 14;
+      const hLineH = Math.round(hSize * 1.5); // 21
+      const hBox = Math.round(hSize * 0.9); // 13
+      const hLabelX = 6 + hBox + 7; // 26
+      let hy = 18;
+      let drawn = 0;
+      for (const name of input.habits) {
+        if (region.height !== null && hy > region.height) break;
+        parts.push(
+          `    <rect x="6" y="${hy - hBox}" width="${hBox}" height="${hBox}" rx="2" ` +
+            `fill="none" stroke="${theme.text}" stroke-width="1"/>`,
+        );
+        parts.push(
+          `    <text x="${hLabelX}" y="${hy}" font-family="Mulish" font-size="${hSize}" ` +
+            `font-weight="500" fill="${theme.text}">${escapeXml(name)}</text>`,
+        );
+        hy += hLineH;
+        drawn++;
+      }
+      if (drawn < input.habits.length) {
+        warn(
+          "habits_overflow",
+          `region "${region.name}": ${input.habits.length - drawn} of ${input.habits.length} ` +
+            `habits don't fit the ${region.height}px box — only the first ${drawn} drawn.`,
+          "warning",
+          region.name,
+        );
+      }
+      if (region.name !== "habits") {
+        warn(
+          "habits_region_name",
+          `region "${region.name}": the habits block is meant for a region named "habits" ` +
+            `(the on-device composer only renders habits there) — drawn here as asked.`,
+          "info",
+          region.name,
+        );
       }
     } else if (input.calendar) {
       parts.push(
@@ -1539,23 +1736,9 @@ export function composeAiSvg(
           );
         }
       }
-      // The locked visual rule: where the template prints its own checkboxes, the
-      // author writes text only — a `marker: "checkbox"` would draw a second box.
-      if (
-        templateName &&
-        PRINTS_OWN_CHECKBOXES_RE.test(templateName) &&
-        (region.name === "todo" || region.name.startsWith("list")) &&
-        lines.some((l) => l.marker === "checkbox")
-      ) {
-        warn(
-          "printed_checkboxes",
-          `region "${region.name}": template "${templateName}" prints its own ` +
-            `checkboxes — write text only (drop \`marker: "checkbox"\`) to avoid ` +
-            `double boxes.`,
-          "warning",
-          region.name,
-        );
-      }
+      // (No shipped template prints its own checkboxes — re-verified 2026-08-20 against
+      // catalogue 14, #44 — so the old `printed_checkboxes` warning, keyed on template id,
+      // is retired: authors always draw `marker: "checkbox"` on to-do lines.)
       // Body text uses the theme's ink; the ainotes box uses its serif colour
       // (quote/affirmation are legacy aliases for it).
       const baseFill =
@@ -1610,9 +1793,53 @@ export function composeAiSvg(
       const flowBases = flowBaselines(region, lines, def, theme);
       // baseline y -> the text of the `lines[]` entry that owns it (row_collision, #30).
       const baselineOwners = new Map<number, string>();
+      let handwritingWarned = false;
+      // `accent` is the catalogue's universal decorative pocket — "one sticker or tiny
+      // drawing, never text, ok to leave empty" (#49).
+      if (region.name === "accent" && lines.length > 0) {
+        warn(
+          "accent_text",
+          `region "accent": ${lines.length} text line(s) given — the accent pocket is for one ` +
+            `small sticker/drawing, never text (drawn anyway; consider an \`images\` entry).`,
+          "warning",
+          region.name,
+        );
+      }
+      // Header composition parity (#48): when art fills the header's slot, the date /
+      // eyebrow text must clear it — the composer reserves the slot plus 12px.
+      const artClearX =
+        region.artSlot && imageRects.length > 0 ? region.artSlot.x - 12 : null;
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
         const font = line.font ?? themeFontFor(theme, region.name, !!line.heading) ?? def.font;
+        // #29: AI body copy is clean UI type — ≥13px, and not a handwriting face (Caveat/
+        // Fredoka read as the user's ink layer). Both are advisory; an explicit per-line
+        // `font`/`size` or `fontPersonality: "handwritten"` still wins.
+        if (!line.heading && size < MIN_BODY_TEXT_SIZE) {
+          warn(
+            "text_too_small",
+            `region "${region.name}": line "${truncate(line.text)}" is ${size}px — body text ` +
+              `below ${MIN_BODY_TEXT_SIZE}px is hard to read on the iPad; use ≥${MIN_BODY_TEXT_SIZE}.`,
+            "warning",
+            region.name,
+          );
+        }
+        if (
+          !line.heading &&
+          !handwritingWarned &&
+          HANDWRITING_FONTS.has(font) &&
+          BODY_COPY_REGION_RE.test(region.name)
+        ) {
+          handwritingWarned = true;
+          warn(
+            "handwriting_body_font",
+            `region "${region.name}": body copy is set in ${font}, which reads as the user's ` +
+              `handwriting layer — AI planner content is clearest in Mulish (the default). ` +
+              `Pass \`fontPersonality: "clean"\` or a per-line \`font\` if this wasn't intended.`,
+            "info",
+            region.name,
+          );
+        }
         const weight = line.weight ?? def.weight;
         const fill = line.fill !== undefined ? floorTextFill(line.fill) : baseFill;
         // Inset at least past the template's printed hour-label gutter (#44).
@@ -1824,6 +2051,29 @@ export function composeAiSvg(
           }
         }
 
+        // Horizontal alignment (#33): resolved against the region box, emitted as
+        // `text-anchor` per <text> so the renderer measures — this server never does.
+        const xPadR = def.xPad ?? DEFAULT_X_PAD;
+        let align: "left" | "center" | "right" = line.align ?? "left";
+        if (align !== "left" && region.width === null) {
+          warn(
+            "align_unbounded_region",
+            `region "${region.name}": line "${truncate(line.text)}" asks for align "${align}" ` +
+              `but the region has no known width — drawn left-aligned.`,
+            "info",
+            region.name,
+          );
+          align = "left";
+        }
+        const anchorX =
+          align === "center"
+            ? Math.round(region.width! / 2)
+            : align === "right"
+              ? region.width! - xPadR
+              : x;
+        const anchorAttr =
+          align === "center" ? ' text-anchor="middle"' : align === "right" ? ' text-anchor="end"' : "";
+
         // A section heading. `banner` themes draw a coloured pill + white label
         // (cycling banner colours so sections read distinctly); `underline` themes
         // draw a coloured label + hairline rule (quieter). No marker/wrap — a label.
@@ -1832,26 +2082,28 @@ export function composeAiSvg(
           if (theme.headingStyle === "banner") {
             const labelW = bannerLabelWidth(line.text, size);
             const padX = BANNER_PAD_X;
+            const pillW = labelW + padX * 2;
+            const px = align === "center" ? anchorX - Math.round(pillW / 2) : align === "right" ? anchorX - pillW : x;
             const bh = Math.round(size * 1.15) + 6;
             const by = y - Math.round(size * 0.82) - 3;
             const color = line.fill ?? theme.banners[bannerIdx % theme.banners.length];
             bannerIdx++;
             const headText = pillLabelColor(color, line.fill !== undefined, region.name);
             parts.push(
-              `    <rect x="${x}" y="${by}" width="${labelW + padX * 2}" height="${bh}" ` +
+              `    <rect x="${px}" y="${by}" width="${pillW}" height="${bh}" ` +
                 `rx="6" fill="${color}"/>`,
             );
             parts.push(
-              `    <text x="${x + padX}" y="${y}" font-family="${escapeXml(font)}" ` +
+              `    <text x="${px + padX}" y="${y}" font-family="${escapeXml(font)}" ` +
                 `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em" ` +
                 `fill="${headText}">${escapeXml(line.text)}</text>`,
             );
           } else {
             const hfill = line.fill !== undefined ? floorTextFill(line.fill) : theme.text;
             parts.push(
-              `    <text x="${x}" y="${y}" font-family="${escapeXml(font)}" ` +
-                `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em" ` +
-                `fill="${hfill}">${escapeXml(line.text)}</text>`,
+              `    <text x="${anchorX}" y="${y}" font-family="${escapeXml(font)}" ` +
+                `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em"` +
+                `${anchorAttr} fill="${hfill}">${escapeXml(line.text)}</text>`,
             );
             if (region.width !== null) {
               const rx2 = region.width - (def.xPad ?? DEFAULT_X_PAD);
@@ -1867,7 +2119,17 @@ export function composeAiSvg(
           return;
         }
 
-        if (line.marker) {
+        if ((line.marker || line.icon) && align !== "left") {
+          // A leading mark is measured from the text's START, which an anchored line
+          // doesn't know without font metrics — keep the server out of that business.
+          warn(
+            "align_marker_ignored",
+            `region "${region.name}": line "${truncate(line.text)}" has a ${line.marker ? "marker" : "icon"} ` +
+              `and align "${align}" — the mark is only drawn on left-aligned lines; skipped.`,
+            "info",
+            region.name,
+          );
+        } else if (line.marker) {
           const m = markerFragment(line.marker, x, y, size, line.fill ?? theme.accent);
           parts.push(`    ${m.svg}`);
           x += m.advance;
@@ -1886,19 +2148,52 @@ export function composeAiSvg(
             effLine.row === undefined &&
             effLine.y === undefined &&
             line.time === undefined);
-        const maxWidth = region.width !== null ? region.width - x : null;
+        // Available width is box-relative: from the inset to the right edge when
+        // left-aligned; symmetric about the centre; from the left inset to the anchor
+        // when right-aligned.
+        const rightEdge = artClearX !== null ? Math.min(region.width ?? artClearX, artClearX) : region.width;
+        const maxWidth =
+          rightEdge === null
+            ? null
+            : align === "center"
+              ? rightEdge - 2 * xPadR
+              : align === "right"
+                ? anchorX - xPadR
+                : rightEdge - x;
         const segments =
           effWrap && maxWidth !== null && maxWidth > 0
             ? wrapText(line.text, font, size, maxWidth)
             : [line.text];
         const subPitch = Math.round(size * 1.3);
+        const textX = align === "left" ? x : anchorX;
         segments.forEach((seg, si) => {
           const sy = y + si * subPitch;
           parts.push(
-            `    <text x="${x}" y="${sy}" font-family="${escapeXml(font)}" ` +
-              `font-size="${size}" font-weight="${weight}" fill="${fill}">${escapeXml(seg)}</text>`,
+            `    <text x="${textX}" y="${sy}" font-family="${escapeXml(font)}" ` +
+              `font-size="${size}" font-weight="${weight}"${anchorAttr} fill="${fill}">${escapeXml(seg)}</text>`,
           );
         });
+
+        // Text running under a placed image reads as competition, not composition
+        // (#27) — a sticker can fit the box geometrically and still sit on the prose.
+        // Flag each image once, against the line's estimated band.
+        if (imageRects.length > 0) {
+          const bandW = segments.reduce((m, s) => Math.max(m, estimateTextWidth(s, font, size)), 0);
+          const bandX = align === "center" ? anchorX - bandW / 2 : align === "right" ? anchorX - bandW : textX;
+          const band: Bbox = { x: bandX, y: y - size, w: bandW, h: size * 0.3 + (segments.length - 1) * subPitch + size };
+          for (const r of imageRects) {
+            if (r.flagged || !bboxesOverlap(band, r)) continue;
+            r.flagged = true;
+            warn(
+              "image_competes_with_text",
+              `region "${region.name}": line "${truncate(line.text)}" runs under the ` +
+                `${r.w}×${r.h} image at (${r.x},${r.y}) — keep text first and anchor a ` +
+                `supporting sticker in a free corner (e.g. corner:"bottom-right").`,
+              "warning",
+              region.name,
+            );
+          }
+        }
 
         // A single-segment line whose baseline (+ descender) sits below the region box
         // is drawn into whatever lies underneath — 40 flow lines into a 422px box used to
@@ -1919,13 +2214,17 @@ export function composeAiSvg(
 
         if (region.width !== null) {
           if (!effWrap) {
-            // Warn if the (unwrapped) text likely runs past the right edge.
-            const end = x + estimateTextWidth(line.text, font, size);
-            if (end > region.width) {
+            // Warn if the (unwrapped) text likely runs past an edge — measured from the
+            // anchor: a centred run spills both ways, a right-anchored run spills left.
+            const w = estimateTextWidth(line.text, font, size);
+            const start = align === "center" ? anchorX - w / 2 : align === "right" ? anchorX - w : x;
+            const end = start + w;
+            if (end > region.width || start < 0) {
               warn(
                 "text_overflow",
                 `region "${region.name}": line "${truncate(line.text)}" ` +
-                  `(~${end}px) may overflow the ${region.width}px region width.`,
+                  `(~${Math.round(w)}px${align !== "left" ? `, ${align}-aligned` : ""}) may ` +
+                  `overflow the ${region.width}px region width.`,
                 "warning",
                 region.name,
               );
@@ -1971,6 +2270,7 @@ export function composeAiSvg(
       !input.label &&
       (input.images?.length ?? 0) === 0 &&
       input.calendar === undefined &&
+      input.habits === undefined &&
       (input.svg === undefined || input.svg.trim() === "") &&
       (input.lines?.length ?? 0) === 0 &&
       !hourLabelsDrawn;

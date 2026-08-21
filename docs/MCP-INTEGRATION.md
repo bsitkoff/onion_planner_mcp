@@ -52,7 +52,7 @@ That `Documents/` directory is the **library root**. Layout:
 
 ```
 Documents/                         ← library root
-├─ settings.json                   ← global settings (read-only for you)
+├─ settings.json                   ← global settings (read `underlayVoice`; `underlayHabits` is the ONE key you may write)
 ├─ Templates/                      ← catalogue of templates (read-only; create_page source)
 │  ├─ templates.json               ← id/name/category/style/files per template
 │  └─ daily-minimal/template.svg   ← one folder per template id
@@ -109,7 +109,7 @@ portrait points). All your geometry is in this space.
 <svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg">
   <g id="region-schedule" data-region="schedule" transform="translate(56,250)">
     <rect x="0" y="0" width="540" height="870" fill="none"/>
-    <!-- ruled hour lines + labels … -->
+    <!-- ruled hour lines (+ a printed hour gutter on the cozy/colorful styles) … -->
   </g>
   <g id="region-ainotes" data-region="ainotes" data-fill="ai" transform="translate(678,734)">…</g>
   <g id="region-todo"        data-region="todo"        transform="translate(636,520)">…</g>

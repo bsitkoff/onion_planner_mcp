@@ -46,23 +46,31 @@
 ## 1. Schedule (agenda)
 
 - Text: **Mulish 15 / weight 600 / the resolved theme colour** (default: the chapter's own ink palette, lifted — gold retired).
-- **Resolved — no template prints hour labels.** Verified across the catalogue (e.g.
-  `daily-minimal` exposes `region-schedule` as ruled rows only, no `HH:00` gutter). So the
-  schedule reads as a **sequential agenda**: place items by `row` (snap to a ruled line), or by
-  clock `time` anchored via the region's `startHour` + `rowsPerHour` when the caller wants clock
-  alignment. There is no printed hour gutter to clear, so the `52px` schedule inset now acts as a
-  plain left margin (kept for breathing room; reduce to the `24px` default if a flush look is
-  wanted — cosmetic, safe either way).
+- **Re-verified 2026-08-20 against catalogue `14-art-header-region` (supersedes the 2026-06
+  "no template prints hour labels" claim — issue #44): hour labels are per *style*.** The
+  `*-minimal` schedule/agenda print ruled rows only (rules from region-local x=0, no gutter).
+  `daily-cozy`, `daily-colorful`, `agenda-cozy`, `agenda-colorful` print an **IBM Plex Mono 14 /
+  500 hour gutter** at region-local x<34; their rules start at x=34. The region reports where
+  its rules start as `gutterX` (`read_page`), and every default-placed line or block insets to
+  `max(xPad, gutterX)` — the `52px` schedule `xPad` already clears the 34px gutter, so on all
+  shipped templates the inset is effectively a margin; an explicit `x` is the caller's call.
+  Placement is agenda-style either way: by `row` (snap to a ruled line) or by clock `time`
+  anchored via the region's `startHour` + `rowsPerHour` (a sub-hour time interpolates between
+  rules — `13:30` is row 6.5).
 - Baseline: drop to `ruledLine + 0.40 × row-pitch` below the ruled line it lands on.
 
 ## 2. To-do list
 
 - Text: **Mulish 15 / 600 / the resolved theme colour**.
-- **Resolved — most templates print their own checkbox squares.** Verified: `todo-*` print a
-  full column of `26×26` boxes; `daily-cozy` / `daily-colorful` print ~7 in their to-do region;
-  `daily-minimal` prints none (ruled rows only). **Rule: inspect the template.** If it prints
-  boxes, the author writes **text only**, aligned to the ruled rows — do *not* also draw a marker
-  (that yields double boxes). If it prints none, the author may draw `marker: "checkbox"`.
+- **Re-verified 2026-08-20 against catalogue `14-art-header-region` (supersedes the 2026-06
+  "most templates print their own checkbox squares" claim — issue #44): no shipped template
+  prints checkbox squares.** Every to-do/list region (`todo`, `list-1/2/3`, on `todo-*` and the
+  dailies alike) is a bounding rect plus, on cozy/colorful, a panel/label-chip decoration; their
+  `data-intent` delegates box-drawing to the author. **Rule: the author draws
+  `marker: "checkbox"` on every to-do line** (the pre-#44 `printed_checkboxes` warning, which
+  told authors to write text-only on `todo-*`/cozy/colorful, is retired). A BYO template that
+  *does* print boxes should say so in its `data-intent`; inspect `printedText`/the template
+  before writing into one.
 - Checkbox marker (when author-drawn): square, side `round(0.85 × size)`, stroke
   `max(1, round(size/12))`, corner `rx 2`, `fill none`, themed stroke; box top = `baseline −
   side`; text starts at `box + round(0.4 × size)` past the left inset.
@@ -160,10 +168,12 @@ tint) instead of a solid fill — the only element in this file to use `fill-opa
 **`chromeAccent`** (the chapter's accent colour — a no-text fill, so it rides through raw),
 falling back to `theme.accent`, overridable per-block via `blockFill`. The label text sits
 vertically centred inside the block at `y1 + height − round(height × 0.28)` — the same centring
-ratio as §5's label-slot text. Left inset = the region's `xPad` (the schedule's gutter for its
-printed hour labels); right edge = `region.width − DEFAULT_X_PAD`, the *standard* margin — not
-the region's (often wider) `xPad` again, which would double-charge the left gutter on a side
-that has no hour labels to clear. A label too long to fit the block's width on one line wraps
+ratio as §5's label-slot text. Left inset = `max(xPad, gutterX)` — the region's `xPad`, never
+left of where its rules start (the printed hour gutter on cozy/colorful, §1); right edge =
+`region.width − DEFAULT_X_PAD`, the *standard* margin — not the region's (often wider) `xPad`
+again, which would double-charge the left gutter on a side that has no hour labels to clear.
+A block's start/end rows are **fractional** (`13:30–14:30` starts halfway down the 1 PM
+interval) — #32. A label too long to fit the block's width on one line wraps
 (reusing the same wrap heuristic as `ainotes`/`todo`), stacking centred within the block's
 height; if the wrapped lines still don't fit the block's height it warns
 `washi_block_label_overflow` rather than silently overrunning. A span partly outside the
@@ -180,10 +190,11 @@ where no block can fit, falls back to a plain time line (info `washi_block_zero_
    (≥4.5:1 on paper), pre-lightened underlay (lifted from the chapter's own ink palette, clamped
    at the floor), no reserved colours. Default palette source is the chapter's `paletteCharacter`.
    (§0)
-2. **Schedule:** no template prints hour labels → agenda placement (`row`, or `time` via
-   `startHour`/`rowsPerHour`); the 52px inset is now just a margin. (§1)
-3. **To-do:** most templates print their own checkboxes → author writes **text only** there;
-   draw a marker only when the template prints none. (§2)
+2. **Schedule:** hour labels are per style — minimal prints none, cozy/colorful print a 34px
+   gutter (`gutterX`); default inset is `max(xPad, gutterX)`. Agenda placement (`row`, or `time`
+   via `startHour`/`rowsPerHour`, sub-hour times interpolated). Re-verified 2026-08-20. (§1)
+3. **To-do:** no shipped template prints checkboxes → the author always draws
+   `marker: "checkbox"`. Re-verified 2026-08-20. (§2)
 4. **Note band:** wrap **on** for `ainotes` (free-text AI box); geometry from the region rect. (§3)
 5. **Monthly:** templates print no day numbers → author draws numbers + `data-date` rects;
    marker = a themed dot (+ optional label). (§4)

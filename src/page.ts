@@ -9,10 +9,11 @@ import {
   parseViewBox,
   inspectTemplate,
   PAPER_COLOR,
+  paperColorOf,
   type Region,
   type TemplateInfo,
 } from "./template.js";
-import { readUnderlayVoice, type UnderlayVoice } from "./library.js";
+import { readUnderlayVoice, readUnderlayHabits, type UnderlayVoice } from "./library.js";
 import {
   composeAiSvg,
   mergeRegions,
@@ -23,6 +24,7 @@ import {
   imageBox,
   scanRawSvgElements,
   scanRawSvgDataUriImages,
+  scanRawSvgTspans,
   extractRegionGroups,
   type RegionInput,
   type ImageInput,
@@ -270,7 +272,7 @@ async function sweepStaleTmp(absFile: string): Promise<void> {
 }
 
 /** Write a file atomically: temp sibling + rename, so no reader sees a partial file. */
-async function atomicWrite(absFile: string, content: string | Uint8Array): Promise<void> {
+export async function atomicWrite(absFile: string, content: string | Uint8Array): Promise<void> {
   await sweepStaleTmp(absFile);
   const tmp = `${absFile}.tmp-${process.pid}-${tmpCounter++}`;
   await fs.writeFile(tmp, content); // string defaults to utf8; Uint8Array writes bytes
@@ -544,6 +546,7 @@ async function resolveImages(
   geometry: Region[],
   dryRun: boolean,
   deps: ResolveImagesDeps = {},
+  paperColor: string = PAPER_COLOR,
 ): Promise<{ warnings: string[]; warningDetails: WarningDetail[] }> {
   const warnings: string[] = [];
   const warningDetails: WarningDetail[] = [];
@@ -557,11 +560,11 @@ async function resolveImages(
       if ((img.data === undefined) === (img.path === undefined)) {
         throw new Error(`image in region "${region.region}" needs exactly one of \`data\` (base64) or \`path\`.`);
       }
-      if (img.fit === "region") {
+      if (img.fit !== undefined) {
         if (img.width !== undefined || img.height !== undefined) {
           throw new Error(
-            `image in region "${region.region}": fit:"region" computes width/height from the ` +
-              "region's own box — don't also pass `width`/`height`.",
+            `image in region "${region.region}": fit:"${img.fit}" computes width/height from the ` +
+              "region's own image box — don't also pass `width`/`height`.",
           );
         }
       } else if (img.width === undefined || img.width <= 0) {
@@ -650,27 +653,76 @@ async function resolveImages(
       // A source still over the cap after its downscale throws here, exactly as before.
       if (deferSizeChecks) checkImageSize(buf, region.region, warnings, warningDetails);
 
+      // Transparency (#26). `flatten: "paper"` composites a PNG's alpha onto the page's
+      // paper colour so a generated sticker lands as finished art, not scaffolding. When
+      // NOT flattened, a PNG that carries real alpha is info-flagged once — fine when the
+      // paper is meant to show through, a trap when the model baked in a checkerboard.
+      // Decoding is bounded (≤ ALPHA_SCAN_MAX_PIXELS) so the scan never dominates a write.
+      if (format === "png") {
+        const px = dims.width * dims.height;
+        if (img.flatten === "paper") {
+          if (px > MAX_DECODE_PIXELS) {
+            throw new Error(
+              `image in region "${region.region}" is ${dims.width}×${dims.height} — over the ` +
+                `${MAX_DECODE_PIXELS}-pixel ceiling for flatten:"paper". Downscale it first (maxDimension).`,
+            );
+          }
+          let decoded;
+          try {
+            decoded = decodePng(buf);
+          } catch (e) {
+            throw new Error(`image in region "${region.region}": ${(e as Error).message}`);
+          }
+          if (pngHasAlpha(decoded)) {
+            buf = encodePng(flattenOntoColor(decoded, paperColor));
+            const message =
+              `region "${region.region}": image flattened onto the paper colour ${paperColor} ` +
+              `(opaque PNG written).`;
+            warnings.push(message);
+            warningDetails.push({ code: "image_flattened", severity: "info", region: region.region, message });
+          }
+        } else if (px <= ALPHA_SCAN_MAX_PIXELS) {
+          let hasAlpha = false;
+          try {
+            hasAlpha = pngHasAlpha(decodePng(buf));
+          } catch {
+            /* imageDims already validated the magic; an undecodable PNG just skips the scan */
+          }
+          if (hasAlpha) {
+            const message =
+              `region "${region.region}": PNG has transparency — fine if the paper is meant to ` +
+              `show through; for a finished opaque sticker pass flatten:"paper" (a baked-in ` +
+              `checkerboard needs knockout first — see docs/AUTHORING.md).`;
+            warnings.push(message);
+            warningDetails.push({ code: "image_has_alpha", severity: "info", region: region.region, message });
+          }
+        }
+      }
+
       let width: number;
       let height: number;
-      if (img.fit === "region") {
+      if (img.fit !== undefined) {
         const geo = geometryByName.get(region.region);
-        if (!geo || geo.width === null || geo.height === null) {
+        // Fit into the region's image box — the art slot (e.g. the header's banner box)
+        // when present, else the full region box (#45). A region whose only known box IS
+        // its art slot still fits (the guard reads the image box, not the region rect).
+        const fitBox = geo ? imageBox(geo) : null;
+        const bw = fitBox?.width ?? null;
+        const bh = fitBox?.height ?? null;
+        if (bw === null || bh === null || bw <= 0 || bh <= 0) {
           throw new Error(
-            `image in region "${region.region}": fit:"region" needs a region with a known box ` +
+            `image in region "${region.region}": fit:"${img.fit}" needs a region with a known box ` +
               `— no box geometry found for "${region.region}".`,
           );
         }
-        // Fit into the region's image box — the art slot (e.g. the header's banner box)
-        // when present, else the full region box (#45).
-        const fitBox = imageBox(geo);
-        const bw = fitBox.width ?? geo.width;
-        const bh = fitBox.height ?? geo.height;
-        const margin = img.margin ?? 8;
+        // "contain" = native aspect inside the box, whitespace OK, no inset (#47);
+        // "region" keeps its 8px inset.
+        const margin = img.margin ?? (img.fit === "contain" ? 0 : 8);
         const boxW = bw - margin * 2;
         const boxH = bh - margin * 2;
         if (boxW <= 0 || boxH <= 0) {
           throw new Error(
-            `image in region "${region.region}": fit:"region" box is too small for margin ` +
+            `image in region "${region.region}": fit:"${img.fit}" box is too small for margin ` +
               `${margin} (image box is ${bw}×${bh}).`,
           );
         }
@@ -728,6 +780,35 @@ async function resolveImages(
     }
   }
   return { warnings, warningDetails };
+}
+
+/** Upper bound on the pixels we'll decode just to *look* for alpha (info warning). */
+const ALPHA_SCAN_MAX_PIXELS = 4_000_000;
+
+/** True when any pixel is less than fully opaque. */
+function pngHasAlpha(img: { pixels: Uint8Array }): boolean {
+  const p = img.pixels;
+  for (let i = 3; i < p.length; i += 4) if (p[i] !== 255) return true;
+  return false;
+}
+
+/** Composite RGBA pixels onto an opaque hex colour (straight alpha, "over"). */
+function flattenOntoColor(
+  img: { width: number; height: number; pixels: Uint8Array },
+  hex: string,
+): { width: number; height: number; pixels: Uint8Array } {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  const bg = m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 254, 251];
+  const src = img.pixels;
+  const out = new Uint8Array(src.length);
+  for (let i = 0; i < src.length; i += 4) {
+    const a = src[i + 3] / 255;
+    out[i] = Math.round(src[i] * a + bg[0] * (1 - a));
+    out[i + 1] = Math.round(src[i + 1] * a + bg[1] * (1 - a));
+    out[i + 2] = Math.round(src[i + 2] * a + bg[2] * (1 - a));
+    out[i + 3] = 255;
+  }
+  return { width: img.width, height: img.height, pixels: out };
 }
 
 /** Delete any file in `media/ai/` not referenced by an href in the final ai.svg. */
@@ -857,6 +938,12 @@ export interface PageRead {
    * never writes settings.json.
    */
   underlayVoice: UnderlayVoice | null;
+  /**
+   * `settings.json → underlayHabits` — the habit names the on-device composer draws into
+   * a `habits` region; null when unset. Author the same list with a region entry
+   * `{ region: "habits", habits: true }` (#50). Written only via `set_habits`.
+   */
+  underlayHabits: string[] | null;
   templateSvg?: string;
 }
 
@@ -885,6 +972,7 @@ export async function readPage(
     ...(resolved.washiTint ? { washiTint: resolved.washiTint } : {}),
   };
   const underlayVoice = await readUnderlayVoice(root);
+  const underlayHabits = await readUnderlayHabits(root);
   // labelFilled: cross-reference each region's labelSlot geometry (template-only)
   // against what the current ai.svg actually drew for that region — geometry alone
   // can't tell you whether the AI filled the slot or the template just prints one.
@@ -914,6 +1002,7 @@ export async function readPage(
     theme,
     underlay,
     underlayVoice,
+    underlayHabits,
     ...(includeTemplate && templateSvg ? { templateSvg } : {}),
   };
 }
@@ -1013,6 +1102,25 @@ function rawSvgWarnings(svg: string, size: [number, number]): {
     );
   }
 
+  const tspans = scanRawSvgTspans(svg);
+  if (tspans.styled.length > 0) {
+    warn(
+      "raw_svg_tspan_attrs",
+      `raw svg <tspan> carries ${tspans.styled.join(", ")} — the app honours only x/y/dy on ` +
+        `a tspan; per-line font/fill/anchor is ignored (the <text>'s own attributes apply ` +
+        `to every line).`,
+    );
+  }
+  if (tspans.unpositioned > 0) {
+    warningDetails.push({
+      code: "raw_svg_tspan_unpositioned",
+      severity: "info",
+      message:
+        `raw svg has ${tspans.unpositioned} <tspan> without x/y/dy — not a line break; its ` +
+        `text flattens into the parent run with a space.`,
+    });
+  }
+
   const vb = parseViewBox(svg);
   if (vb && (vb[0] !== size[0] || vb[1] !== size[1])) {
     warn(
@@ -1105,7 +1213,28 @@ export async function writeUnderlay(
     // and fills each image's href, ahead of composeAiSvg.
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
-    const imageResult = await resolveImages(abs, opts.regions, regions, opts.dryRun ?? false, deps);
+    // `habits: true` → the library's `settings.json → underlayHabits` (#50), resolved here
+    // so composeAiSvg stays pure. No configured habits is a caller error, not an empty block.
+    for (const r of opts.regions) {
+      if (r.habits === true) {
+        const list = await readUnderlayHabits(root);
+        if (!list) {
+          throw new Error(
+            `Region "${r.region}": \`habits: true\` but settings.json has no underlayHabits — ` +
+              `set them with set_habits first, or pass the names as \`habits: ["…"]\`.`,
+          );
+        }
+        r.habits = list;
+      }
+    }
+    const imageResult = await resolveImages(
+      abs,
+      opts.regions,
+      regions,
+      opts.dryRun ?? false,
+      deps,
+      templateSvg ? paperColorOf(templateSvg) : PAPER_COLOR,
+    );
     const size = pageSize(manifest, templateSvg);
     const themeInput = await resolveThemeInput(abs, templateSvg, opts);
     const composed = composeAiSvg(size, opts.regions, regions, themeInput, manifest.template);
@@ -1474,15 +1603,44 @@ export async function createPage(
     throw e;
   }
 
-  // Append to the chapter's page order. The page already exists at this point, so a
-  // corrupt .folder.json downgrades to a warning — not an error for a created page.
+  // Register the page in the chapter's `.folder.json`. The page already exists at this
+  // point, so a corrupt .folder.json downgrades to a warning — not an error for a created
+  // page. Merge into an existing config; never clobber keys we don't own.
   const warnings: string[] = [];
   try {
     const folderFile = path.join(chapterAbs, ".folder.json");
     const existing = await readIfExists(folderFile);
-    const folder = existing ? (JSON.parse(existing) as any) : { title: chapterName };
+    const folder = existing ? (JSON.parse(existing) as any) : {};
+    // A chapter named like a calendar month (`YYYY-MM`) IS a month chapter only if its
+    // config carries `year` + `month` — month-ness is metadata, never the folder name
+    // (app FORMAT.md §4, onionskin#215 / #43). When this server mints such a chapter
+    // (create-on-write reaching next month before the app has), stamp the pair. Leave
+    // `title` alone: a non-empty title blocks the app from filling "August 2026".
+    const monthMatch = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(chapterName);
+    if (monthMatch) {
+      if (typeof folder.year !== "number") folder.year = Number(monthMatch[1]);
+      if (typeof folder.month !== "number") folder.month = Number(monthMatch[2]);
+    } else if (!existing) {
+      folder.title = chapterName;
+    }
     folder.order = Array.isArray(folder.order) ? folder.order : [];
-    if (!folder.order.includes(opts.name)) folder.order.push(opts.name);
+    if (!folder.order.includes(opts.name)) {
+      // Insert chronologically among dated siblings rather than appending: a calendar
+      // chapter reads oldest-first, and a back-filled earlier day must not land after
+      // later ones. Non-date names keep their positions; a page with no date, or a
+      // chapter with no dated sibling yet, appends.
+      const dateOf = (n: string) => (/^\d{4}-\d{2}-\d{2}$/.test(n) ? n : null);
+      const mine = dateOf(opts.name);
+      let at = folder.order.length;
+      if (mine !== null) {
+        const firstLater = folder.order.findIndex((n: string) => {
+          const d = dateOf(n);
+          return d !== null && d > mine;
+        });
+        if (firstLater !== -1) at = firstLater;
+      }
+      folder.order.splice(at, 0, opts.name);
+    }
     await atomicWrite(folderFile, JSON.stringify(folder, null, 2) + "\n");
   } catch (e: any) {
     warnings.push(

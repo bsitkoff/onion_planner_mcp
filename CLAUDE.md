@@ -76,11 +76,12 @@ to exercise the MCP transport itself.
 | `src/color.ts` | Pure colour helpers (hex↔HSL, hex↔OKLab) + `harmony` palette derivation from the template's sampled colours, with a lightness floor on derived text so it reads on cream. The underlay lift (`liftForUnderlay = 0.14`) steps **OKLCH lightness** (perceptual); `monthlyInks` holds the 12 confirmed per-month palettes. No deps. |
 | `src/page.ts` | Read a page, **atomic** ai.svg + `media/ai/` image writes (`resolveImages`/`gcOrphanMedia`), manifest status flips, `create_page`. |
 
-The 10 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`, `read_ink`,
+The 11 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`, `read_ink`,
 `write_underlay`, `set_underlay_status`, `clear_underlay`, `create_page`, `set_chapter_theme`,
-`fetch_image`. Only five mutate the library (`write_underlay`, `set_underlay_status`,
-`clear_underlay`, `create_page`, and `set_chapter_theme` — which writes only the chapter's
-`.folder.json → theme` block); `read_ink` is read-only (the user's handwriting layer — read it before composing
+`set_habits`, `fetch_image`. Only six mutate the library (`write_underlay`, `set_underlay_status`,
+`clear_underlay`, `create_page`, `set_chapter_theme` — which writes only the chapter's
+`.folder.json → theme` block — and `set_habits`, which writes only the root `settings.json →
+underlayHabits` key, read-modify-write, every other key preserved, refusing a garbled file); `read_ink` is read-only (the user's handwriting layer — read it before composing
 so you place AI content *around* a `shared` region's handwriting; bulky per-stroke `data-stroke`
 streams are stripped unless `includeStrokeData` is set; refuses when the chapter marks its ink
 private via `permissions.inkReadable: false`, reflection chapters private by default) and `fetch_image` only writes a
@@ -153,7 +154,13 @@ server has no network/generation. The app's renderer resolves `<image href>` onl
 **page-relative file path** (no data-URIs), so `page.ts:resolveImages` validates the bytes
 (magic vs `format`, 2MB cap), writes them to the page's **`media/ai/`** folder, and rewrites
 the `<image href="media/ai/…">` into the region group; `svg.ts:imageDims` reads intrinsic size
-(aspect-fills an omitted height). Placement is region-local via `corner`/`x`/`y`. When a
+(aspect-fills an omitted height). Placement is region-local via `corner`/`x`/`y`; sizing is
+best left to `fit: "contain"` (native aspect inside the image box, no margin, never flagged
+too-small — #47; `"region"` = the same with an 8px inset). `flatten: "paper"` composites a
+PNG's alpha onto the template's paper colour before the write (#26); an unflattened PNG with
+alpha is info-flagged `image_has_alpha`. Text whose band runs under a placed image warns
+`image_competes_with_text` (#27); a region with a printed art box that gets text but no image
+info-flags `art_slot_unfilled` (#25). When a
 region prints an illustration placeholder — the header's right-side banner box, tagged
 `<rect data-region="art-header" data-fill="ai">` since app catalogue `14-art-header-region`
 (onionskin#224), or an untagged dashed `stroke-dasharray` rect on pages frozen from the older
@@ -196,7 +203,8 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
   and the page's **`media/ai/`** subfolder (AI-owned images — written + garbage-collected
   here); on create, the new page's own files + the chapter `.folder.json` order; and via
   `set_chapter_theme`, the chapter `.folder.json → theme` block (only the passed keys, order +
-  other fields preserved). Never touch
+  other fields preserved); and via `set_habits`, the root `settings.json → underlayHabits` key
+  only (the app's `UNDERLAY-AUTOFILL.md` names it MCP read/writable). Never touch
   `ink.svg`, `stickers.svg`, `template.svg`, the rest of `media/`, or anything under `Private/`.
 - All writes go through `resolvePageRel` (enforces `Shared/` containment) and `atomicWrite`
   (temp + rename).
@@ -240,9 +248,17 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
 - **The app renderer is a custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit):
   it handles `svg, g, rect, line, path, text, image, circle, ellipse, polyline, polygon`
   (`RAW_SVG_ALLOWED_ELEMENTS` in `src/svg.ts` is the source of truth) and silently drops
-  anything else — notably `<tspan>`, which is why multi-line text is stacked `<text>`.
-  `text-anchor`/`font-weight` do **not** inherit from a wrapping `<g>` (app
-  [#211](https://github.com/bsitkoff/onionskin/issues/211)) — set them per `<text>`.
+  anything else. Since app build 121 (onionskin#212) a `<tspan>` carrying `x`/`y`/`dy` starts a
+  new line inside one `<text>` (no per-run font/fill — a bare tspan still flattens into the
+  parent run with a space); the raw-svg validator accepts `tspan` and warns
+  `raw_svg_tspan_attrs` / `raw_svg_tspan_unpositioned` for those two limits (#42), while
+  structured output keeps emitting stacked `<text>` per line (renders on every build).
+  Structured lines take `align: left|center|right` (#33), emitted as `text-anchor` per
+  `<text>`. Body copy under 13px warns `text_too_small`; Caveat/Fredoka body copy in a
+  planner region is info-flagged `handwriting_body_font` (#29). `font-family`,
+  `font-size`, `font-weight`, `text-anchor` and `fill` now **inherit from a wrapping `<g>`**
+  (onionskin#211 fixed; a value on the `<text>` wins) — older builds dropped the anchor/weight,
+  so per-`<text>` attributes remain the safest form.
   `<image href>` resolves **only as a page-relative file path** (no data-URIs) and the
   **AI layer needs a non-nil `imageProvider`** (an app change) for images to appear at all.
   When emitting raw `svg`, stay within that element set.

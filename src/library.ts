@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveRoot, sharedDir, normalizeChapter, resolvePageRel } from "./paths.js";
-import { type AiStatus, type Manifest, readIfExists } from "./page.js";
+import { type AiStatus, type Manifest, readIfExists, atomicWrite } from "./page.js";
 
 /**
  * The library's `settings.json → underlayVoice` (the app's `FORMAT.md §4` contract) —
@@ -38,6 +38,57 @@ export async function readUnderlayVoice(root: string): Promise<UnderlayVoice | n
   } catch {
     return null;
   }
+}
+
+/**
+ * Read `settings.json → underlayHabits` — the daily habit names the on-device composer
+ * renders as its `habits` block (app `UNDERLAY-AUTOFILL.md` / #170 P1; MCP issue #50).
+ * `[String]`, the explicit synced source (root `settings.json` rides iCloud). null when
+ * the file is absent/garbled or the key is missing/empty — "no habits block".
+ */
+export async function readUnderlayHabits(root: string): Promise<string[] | null> {
+  const raw = await readIfExists(path.join(root, "settings.json"));
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw)?.underlayHabits;
+    if (!Array.isArray(v)) return null;
+    const names = v.filter((h): h is string => typeof h === "string" && h.trim() !== "").map((h) => h.trim());
+    return names.length > 0 ? names : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write `settings.json → underlayHabits` (the ONE settings key this server writes — the
+ * contract says it is MCP read/writable). Read-modify-write: every other key is preserved
+ * byte-for-meaning; an absent file is created with just this key. Refuses to clobber a
+ * garbled file (the app rewrites settings wholesale and an unparseable one would be lost
+ * either way — but not by us). An empty list removes the key (= no habits block).
+ */
+export async function writeUnderlayHabits(root: string, habits: string[]): Promise<string[]> {
+  const file = path.join(root, "settings.json");
+  const raw = await readIfExists(file);
+  let settings: Record<string, unknown> = {};
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("not an object");
+      }
+      settings = parsed;
+    } catch {
+      throw new Error(
+        `settings.json at ${file} is not valid JSON — refusing to overwrite it. Fix or remove ` +
+          `the file (the app re-creates a default one) and retry.`,
+      );
+    }
+  }
+  const names = habits.map((h) => h.trim()).filter((h) => h !== "");
+  if (names.length > 0) settings.underlayHabits = names;
+  else delete settings.underlayHabits;
+  await atomicWrite(file, JSON.stringify(settings, null, 2) + "\n");
+  return names;
 }
 
 /** Thrown when the iCloud library / Shared folder isn't present yet. */

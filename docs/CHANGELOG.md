@@ -7,6 +7,104 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Feature: composer parity — habits block + `set_habits`, region vocab, plain labels, header clearance, parity guard — 2026-08-21
+
+[#50](https://github.com/bsitkoff/onion_planner_mcp/issues/50),
+[#49](https://github.com/bsitkoff/onion_planner_mcp/issues/49),
+[#48](https://github.com/bsitkoff/onion_planner_mcp/issues/48),
+[#41](https://github.com/bsitkoff/onion_planner_mcp/issues/41),
+[#51](https://github.com/bsitkoff/onion_planner_mcp/issues/51). Habit trackers were hand-placed
+raster stickers (broken hrefs, black boxes), the universal `accent` region and the rest of the
+2026-06 family fell to fallback typography, section titles didn't match the device composer,
+header text could run under the banner, and the hand-mirrored app tables had no drift check.
+
+- **`set_habits`** (11th tool) writes `settings.json → underlayHabits` — the one settings key
+  this server writes (read-modify-write, other keys preserved, garbled file refused);
+  `get_library`/`read_page` surface it. **`regions[].habits: true | string[]`** draws the
+  composer's vector block (13px `rx 2` square at x+6, Mulish 14 at x+26, baseline 18, pitch 21,
+  `habits_overflow`), self-titled "HABITS" through a `label-habits` slot. The catalogue
+  `habits` region itself ships from the app side (onionskin#225).
+- **Region vocab:** `accent` (+ `accent_text` warning), `habits`, `list-1/2/3`, `last`,
+  `photos`, `morning/afternoon/evening`, `weekdays`, `page`, `joys/concerns/memories` added to
+  `REGION_DEFAULTS`; `accent`/`habits` to `FILL_BY_NAME`.
+- **`labelStyle: "plain"`** — the composer's `sectionLabel` look (uppercase Mulish 12/700 in the
+  accent at the slot origin). **Header clearance:** with art in the slot, header text wraps to
+  `artSlot.x − 12`.
+- **`test/parity.ts`** (run by `npm run smoke`, skips without `../onionskin`): Phosphor
+  codepoints vs `Phosphor.swift`, catalogue regions/fills vs `FILL_BY_NAME`/`REGION_DEFAULTS`,
+  `RAW_SVG_ALLOWED_ELEMENTS` vs `SVGParser.swift`, `FONT_FAMILIES` (now exported from `svg.ts`,
+  the source of `FONT_ENUM`) vs the bundled `.ttf`s.
+
+## Feature: `fit:"contain"`, `flatten:"paper"`, and composition warnings for images — 2026-08-20
+
+[#47](https://github.com/bsitkoff/onion_planner_mcp/issues/47),
+[#26](https://github.com/bsitkoff/onion_planner_mcp/issues/26),
+[#27](https://github.com/bsitkoff/onion_planner_mcp/issues/27),
+[#25](https://github.com/bsitkoff/onion_planner_mcp/issues/25),
+[#28](https://github.com/bsitkoff/onion_planner_mcp/issues/28). Orchestrators invented aspect
+gates and stretched art because "contain at native aspect, whitespace OK" wasn't a first-class
+knob; transparent stickers rendered as scaffolding; a sticker could sit on the prose with no
+signal; and a header written with text only left the printed art box orphaned.
+
+- **`images[].fit: "contain"`** — aspect-preserving contain against the region's image box (the
+  art slot when present), no margin, never flagged `image_small_for_region`. `"region"` keeps its
+  8px inset. The fit guard now reads the image box, so a region whose only known box is its art
+  slot still fits.
+- **`images[].flatten: "paper"`** composites a PNG's alpha onto the template's paper colour
+  (`paperColorOf`) before the `media/ai/` write (info `image_flattened`); an unflattened PNG with
+  real alpha is info-flagged **`image_has_alpha`** (decode bounded at 4M px).
+- **`image_competes_with_text`** — a line's estimated band runs under a placed image in the same
+  region (once per image). **`art_slot_unfilled`** (info) — a region with a printed art box got
+  text but no image. `AUTHORING.md` gains the contain-by-default rule, the two header
+  compositions (banner + date / one integrated date sticker), and the `ainotes` text-first +
+  footer-sticker pattern.
+
+## Feature: `align` on structured lines, positioned `<tspan>` accepted, typography warnings — 2026-08-20
+
+[#33](https://github.com/bsitkoff/onion_planner_mcp/issues/33),
+[#42](https://github.com/bsitkoff/onion_planner_mcp/issues/42),
+[#29](https://github.com/bsitkoff/onion_planner_mcp/issues/29). Centred/right-aligned text was
+unreachable through the structured API (only raw svg with hand-measured x), the validator still
+rejected the `<tspan x/y/dy>` the app has rendered since build 121, and nothing flagged 11px
+body copy or Caveat-set to-dos.
+
+- **`lines[].align: "left" | "center" | "right"`** — resolved against the region box and emitted
+  as `text-anchor="middle"|"end"` **per `<text>`** (renders on every app build); wrapped
+  continuations share the anchor, a banner heading's pill shifts with it, `text_overflow`
+  measures from the anchor. A marker/icon on an aligned line is skipped (`align_marker_ignored`,
+  info); a region with no width degrades to left (`align_unbounded_region`, info).
+- **`tspan` joins `RAW_SVG_ALLOWED_ELEMENTS`**; `scanRawSvgTspans` warns `raw_svg_tspan_attrs`
+  for per-run attributes the app ignores (anything but `x`/`y`/`dy`) and info-flags
+  `raw_svg_tspan_unpositioned` for a bare tspan (flattens with a space). Both raw-svg sites.
+- **`text_too_small`** (body `size < 13`) and **`handwriting_body_font`** (info, once per region:
+  Caveat/Fredoka body copy in a planner region — opt out with `fontPersonality: "clean"` or a
+  per-line `font`). `AUTHORING.md` gains "Font roles" + "Alignment"; the raw-SVG section is
+  rewritten to the shipped tspan / inheritance contract. Shantell Sans (asked for in #29) is not
+  in the closed font set and isn't added.
+
+## Fix: minted month chapters carry `year`/`month`; spec re-verified (hour gutter, no printed checkboxes) — 2026-08-20
+
+[#43](https://github.com/bsitkoff/onion_planner_mcp/issues/43),
+[#44](https://github.com/bsitkoff/onion_planner_mcp/issues/44). On Aug 1 create-on-write reached
+`Shared/2026-08` before the app had, leaving a `.folder.json` with no `year`/`month` — month-ness
+is metadata, never the folder name, so the app saw a plain chapter (no overview, no day
+materialization). And `SHARED-VISUAL-SPEC.md` §1/§2 still carried 2026-06 "Verified" claims that
+the catalogue had since inverted.
+
+- **`createPage` stamps `year` + `month`** when it mints a `YYYY-MM` chapter, merging into any
+  existing config (other keys preserved) and writing **no placeholder `title`** — a non-empty
+  title blocks the app from filling "September 2026". Non-month chapters are unchanged.
+- **`order` is inserted chronologically** among `YYYY-MM-DD` siblings (a back-filled earlier day
+  no longer lands after later ones); non-date names keep their positions.
+- **Spec re-verified 2026-08-20 against catalogue 14:** hour labels are per style (cozy/colorful
+  schedule + agenda print a 34px IBM Plex Mono gutter; minimal none) and **no shipped template
+  prints checkbox squares** — so the template-id-keyed `printed_checkboxes` warning
+  (`PRINTS_OWN_CHECKBOXES_RE`) is retired: authors always draw `marker: "checkbox"`. A smoke
+  check now audits the catalogue for printed boxes instead of trusting a list. The same facts are
+  corrected in `ON-DEVICE-UNDERLAY.md` and `MCP-INTEGRATION.md`; CLAUDE.md's renderer gotcha is
+  trued up to the app's shipped `<tspan x/y/dy>` support and `<g>`-inherited
+  `text-anchor`/`font-weight` (onionskin#211/#212).
+
 ## Fix: sub-hour times interpolate, row pile-ups warn, tagged `art-header` + hour gutter — 2026-08-20
 
 [#32](https://github.com/bsitkoff/onion_planner_mcp/issues/32),

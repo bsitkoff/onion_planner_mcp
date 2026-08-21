@@ -7,6 +7,8 @@ import {
   listChapters,
   listPageRows,
   readUnderlayVoice,
+  readUnderlayHabits,
+  writeUnderlayHabits,
   LibraryMissingError,
 } from "./library.js";
 import {
@@ -19,7 +21,7 @@ import {
   writeChapterTheme,
   fetchImageToTemp,
 } from "./page.js";
-import { PHOSPHOR_CODEPOINTS } from "./svg.js";
+import { PHOSPHOR_CODEPOINTS, FONT_FAMILIES } from "./svg.js";
 import { PALETTE_CHARACTERS } from "./color.js";
 
 const PALETTE_CHARACTER_IDS = Object.keys(PALETTE_CHARACTERS) as [string, ...string[]];
@@ -61,7 +63,8 @@ server.tool(
       const root = await requireLibrary();
       const chapters = await listChapters(root);
       const underlayVoice = await readUnderlayVoice(root);
-      return json({ root, exists: true, sharedChapters: chapters, underlayVoice });
+      const underlayHabits = await readUnderlayHabits(root);
+      return json({ root, exists: true, sharedChapters: chapters, underlayVoice, underlayHabits });
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {
         return {
@@ -69,6 +72,33 @@ server.tool(
           isError: true as const,
         };
       }
+      return { ...text(`Error: ${e.message}`), isError: true as const };
+    }
+  },
+);
+
+// --- set_habits ---
+server.tool(
+  "set_habits",
+  "Set the library's daily habit list — `settings.json → underlayHabits`, the explicit " +
+    "synced source both the app's on-device composer and this server's `habits` region " +
+    "block read (one square checkbox per habit; never inferred from reminders, never merged " +
+    "into to-dos). Read-modify-write of that ONE key; every other settings key is preserved. " +
+    "An empty list removes the key (no habits block). The file rides iCloud, so the iPad " +
+    "picks the change up on its next sync.",
+  {
+    habits: z
+      .array(z.string().min(1))
+      .max(20)
+      .describe('Habit names in display order, e.g. ["PT", "Water", "Read"]. [] clears them.'),
+  },
+  { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  async ({ habits }) => {
+    try {
+      const root = await requireLibrary();
+      const written = await writeUnderlayHabits(root, habits);
+      return json({ ok: true, underlayHabits: written.length > 0 ? written : null });
+    } catch (e: any) {
       return { ...text(`Error: ${e.message}`), isError: true as const };
     }
   },
@@ -250,14 +280,7 @@ const HEX_COLOR = z
   .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "must be a hex colour like #7B5EA7");
 
 // The closed set of fonts that render in-app (see svg.ts REGION_DEFAULTS).
-const FONT_ENUM = z.enum([
-  "Mulish",
-  "Newsreader",
-  "IBM Plex Mono",
-  "Caveat",
-  "Fredoka",
-  "Phosphor",
-]);
+const FONT_ENUM = z.enum(FONT_FAMILIES);
 
 // The confirmed-codepoint subset (see svg.ts PHOSPHOR_CODEPOINTS) — an icon name
 // outside this set is rejected here rather than silently rendering nothing.
@@ -320,6 +343,15 @@ const lineSchema = z.object({
     .optional()
     .describe("Explicit baseline y, local to the region's top-left. Overrides `row`."),
   x: z.number().optional().describe("Local x offset from the region's left edge. Default 24."),
+  align: z
+    .enum(["left", "center", "right"])
+    .optional()
+    .describe(
+      "Horizontal alignment within the region box: 'left' (default) starts at the inset; " +
+        "'center' anchors on the box's horizontal centre; 'right' anchors at the right " +
+        "inset — resolved from the template geometry, so you never measure text. Wrapped " +
+        "continuations share the anchor; a leading marker/icon is only drawn when left-aligned.",
+    ),
   font: FONT_ENUM.optional().describe(
     "Font family. Defaults per region (Mulish; Newsreader for the serif ainotes block).",
   ),
@@ -460,12 +492,24 @@ const imageSchema = z.object({
         "`fit: \"region\"` sizes inside.",
     ),
   fit: z
-    .literal("region")
+    .enum(["contain", "region"])
     .optional()
     .describe(
-      "Size the display box to fit inside the region's own box (aspect-preserving contain, " +
-        "inset by `margin`) instead of computing `width`/`height` yourself from read_page " +
-        "geometry. Mutually exclusive with `width`/`height` — omit both when set.",
+      "Size the display box from the region's own image box (the art slot when it has one) " +
+        "instead of computing `width`/`height` yourself. \"contain\" — THE DEFAULT CHOICE FOR " +
+        "DECORATIVE ART: native aspect, contained, no margin, whitespace inside the box is " +
+        "fine, never stretched/cropped, no size-floor warning. \"region\" — the same contain " +
+        "inset by `margin` (8). Never invent an aspect gate; if the art is the wrong shape " +
+        "for the box, contain it and let it not fill. Mutually exclusive with `width`/`height`.",
+    ),
+  flatten: z
+    .literal("paper")
+    .optional()
+    .describe(
+      "Composite a transparent PNG onto the page's paper colour before writing — the " +
+        "\"finished sticker on paper\" look. Use for generated watercolour/hand-drawn stickers " +
+        "and banners whose transparency (or baked-in checkerboard) would otherwise read as " +
+        "unfinished on device. Writes an opaque PNG; no-op for JPEG.",
     ),
   maxDimension: z
     .number()
@@ -509,10 +553,10 @@ const imageSchema = z.object({
   message: '`chromaColor` is required when knockout is "chroma".',
 }).refine((i) => i.knockout === "chroma" || (i.chromaColor === undefined && i.tolerance === undefined), {
   message: '`chromaColor`/`tolerance` only apply when knockout is "chroma".',
-}).refine((i) => i.fit !== "region" || (i.width === undefined && i.height === undefined), {
-  message: '`fit: "region"` computes width/height itself — omit both.',
-}).refine((i) => i.fit === "region" || i.width !== undefined, {
-  message: "`width` is required unless `fit` is \"region\".",
+}).refine((i) => i.fit === undefined || (i.width === undefined && i.height === undefined), {
+  message: '`fit` computes width/height itself — omit both.',
+}).refine((i) => i.fit !== undefined || i.width !== undefined, {
+  message: "`width` is required unless `fit` is set.",
 });
 
 server.tool(
@@ -548,10 +592,34 @@ server.tool(
               "pill on a banner theme (the label text is picked to read on it, and warns if " +
               "nothing clears 4.5:1); auto-darkened as the label text on an underline theme.",
           ),
+          labelStyle: z
+            .enum(["theme", "plain"])
+            .optional()
+            .describe(
+              "How the region title is drawn. 'theme' (default): the theme's heading style " +
+                "(pill or label+rule). 'plain': exactly what the app's on-device composer " +
+                "writes into a printed `label-*` slot — uppercase Mulish 12/700 in the accent, " +
+                "no pill — for visual parity with device-authored pages. Note the slot names: " +
+                "the todo template's columns are `list-1/2/3` but their slots are " +
+                "`label-list1/2/3` (no hyphen) — read_page's `labelSlot` already resolves this.",
+            ),
           lines: z
             .array(lineSchema)
             .optional()
-            .describe("Text lines to place in this region. Mutually exclusive with `calendar`/`svg`."),
+            .describe("Text lines to place in this region. Mutually exclusive with `calendar`/`svg`/`habits`."),
+          habits: z
+            .union([z.literal(true), z.array(z.string().min(1))])
+            .optional()
+            .describe(
+              "Draw the composer-parity HABITS block: one row per habit name — a 13px square " +
+                "checkbox + the name (Mulish 14), 21px pitch, titled 'Habits' via the region's " +
+                "`label-habits` slot when the template prints one. `true` = use the library's " +
+                "`settings.json → underlayHabits` (see get_library/read_page; set with " +
+                "set_habits); or pass the names. Meant for a region named `habits` (an " +
+                "imported/BYO template, or the catalogue once it ships one) — the same vector " +
+                "block the app draws on device, so NOT a raster sticker. Mutually exclusive " +
+                "with `lines`/`calendar`/`svg`.",
+            ),
           calendar: calendarSchema
             .optional()
             .describe(

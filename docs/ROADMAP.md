@@ -106,8 +106,10 @@ instead of memorizing "don't double-write the date" in skill prose —
   What unblocking needs is the **legacy codepoint** for each new glyph, not just its SF Symbol
   name — the MCP addresses a glyph by codepoint, and the app's `legacyScalar` is `private`.
   (The app's exhaustive switches do force a codepoint to *exist* for any new case; nothing
-  forces it to be published or to match our mirror — see
-  [#41](https://github.com/bsitkoff/onion_planner_mcp/issues/41).)
+  forces it to be published — but since 2026-08-21 `npm run smoke` runs `test/parity.ts`, which
+  diffs our mirror against `Phosphor.swift` and lists unmirrored app glyphs, so the five landing
+  would surface in CI — [#41](https://github.com/bsitkoff/onion_planner_mcp/issues/41) /
+  [#51](https://github.com/bsitkoff/onion_planner_mcp/issues/51), shipped.)
   [#11](https://github.com/bsitkoff/onion_planner_mcp/issues/11)
 - **Full-text / handwriting search** (`textContains` on `list_pages`) — needs the app-side
   OCR data source; the where-does-recognized-text-live decision is recorded in the issue.

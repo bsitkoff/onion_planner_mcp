@@ -38,6 +38,7 @@ lighter than the user's ink and contrast-floored) — gold is retired.
 | `clear_underlay` | write | Reset ai.svg to empty + status `empty`. |
 | `create_page` | write | New shared page from a sibling's template, or from the `Templates/` catalogue by id. |
 | `set_chapter_theme` | write | Set a chapter's default theme (`.folder.json → theme`): `paletteCharacter`, explicit `accent`, `customInk1/2`, `harmony`/`varietyDial`/`fontPersonality`, `displayName`. Only the passed keys change; page order is preserved. `write_underlay` applies it as the default, `read_page` surfaces it. |
+| `set_habits` | write | Set the library's daily habit list (`settings.json → underlayHabits` — the one settings key this server writes; every other key preserved). Both the app's on-device composer and a `{ region: "habits", habits: true }` entry draw it as a vector checkbox block. `[]` clears. |
 | `fetch_image` | helper | Download an HTTPS PNG/JPEG to an `onionskin-fetch/` folder under the **OS temp dir** (`$TMPDIR` on macOS — not `/tmp`) and return a local path for `images[].path`; optional background removal requires `rembg`. |
 
 ### Typical flow
@@ -65,7 +66,8 @@ write_underlay         → place text by region/row; server computes coordinates
 }
 ```
 
-`row` aligns to the region's ruled lines (from `read_page`). Use `y`/`x` for explicit
+`row` aligns to the region's ruled lines (from `read_page`); `align` (`left`/`center`/`right`)
+anchors a line against the region box. Use `y`/`x` for explicit
 placement, `marker` (`checkbox`/`bullet`) for a leading mark, and `time` to place
 a schedule line by the clock (anchored by the template's `data-start-hour`, or a per-call
 `startHour` override). For hand-placed content in a single region, give it a raw

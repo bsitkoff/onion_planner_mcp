@@ -156,13 +156,15 @@ async function main() {
   check("schedule region parsed with ruled lines", (schedule?.ruledLines.length ?? 0) >= 8, String(schedule?.ruledLines.length));
   check("ainotes region parsed (no-ruled box)", !!ainotes && ainotes.ruledLines.length === 0, String(ainotes?.ruledLines.length));
   check("todo region parsed", !!todo);
-  // imageFloor: ainotes' own intent mentions "a habit sticker" — the interactive floor
-  // (245×245) applies regardless of the box size; todo's intent doesn't, so it gets the
-  // default 35%-of-box heuristic instead.
+  // imageFloor: the region whose intent mentions a habit (the `habits` region on catalogue
+  // ≥ 15-habits-region; `ainotes`' "a habit sticker" before it) gets the interactive floor
+  // (245×245) regardless of box size; todo's intent doesn't, so it gets the default
+  // 35%-of-box heuristic instead. Derived from the parsed intent, not a template-id list.
+  const habitIntentRegion = read.regions.find((r) => /\bhabit\b/i.test(r.intent ?? ""));
   check(
-    "ainotes' intent marks it interactive -> a 245×245 imageFloor",
-    ainotes?.imageFloor?.interactive === true && ainotes.imageFloor.width === 245 && ainotes.imageFloor.height === 245,
-    JSON.stringify(ainotes?.imageFloor),
+    "a region whose intent mentions a habit is interactive -> a 245×245 imageFloor",
+    habitIntentRegion?.imageFloor?.interactive === true && habitIntentRegion.imageFloor.width === 245 && habitIntentRegion.imageFloor.height === 245,
+    JSON.stringify({ region: habitIntentRegion?.name, floor: habitIntentRegion?.imageFloor }),
   );
   check(
     "todo's intent (task checkbox rows, not an image) -> the default 35%-of-box floor",
@@ -1914,12 +1916,12 @@ async function main() {
     floating.warningDetails.some((w) => w.code === "image_small_for_region" && w.severity === "info"), JSON.stringify(floating.warningDetails));
   check("the same tiny image corner-placed stays quiet (deliberate accent)",
     !cleanImg.warningDetails.some((w) => w.code === "image_small_for_region"), JSON.stringify(cleanImg.warningDetails));
-  // ainotes' box is 289×422 — the old 35%-of-box heuristic (~101×148) would NOT have
-  // flagged a 150×150 centered image, but its intent ("a habit sticker") now carries the
-  // declared 245×245 interactive floor, which does.
+  // The habit-intent region's box (289×240+ on the current catalogue) — the old 35%-of-box
+  // heuristic would NOT have flagged a 150×150 centered image, but its intent carries the
+  // declared 245×245 interactive floor, which does. (Region derived from intent — see above.)
   const habitSized = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
-    regions: [{ region: "ainotes", images: [{ data: PNG_1x1, format: "png", name: "habit", width: 150, height: 150, corner: "center" }] }],
+    regions: [{ region: habitIntentRegion!.name, images: [{ data: PNG_1x1, format: "png", name: "habit", width: 150, height: 150, corner: "center" }] }],
   });
   check(
     "a habit-tracker-sized image below the 245px interactive floor still warns, even though it clears the old 35%-of-box heuristic",

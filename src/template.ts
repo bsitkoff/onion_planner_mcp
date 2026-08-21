@@ -61,6 +61,15 @@ export interface Region {
    */
   labelSlot: { x: number; y: number; width: number; height: number } | null;
   /**
+   * The template's printed dashed *illustration* rect nested in this region's own <g>
+   * (a rounded `stroke-dasharray` placeholder carrying no `data-region`) — the intended
+   * drop-zone for AI banner art (e.g. the header's right-side banner box). Region-local
+   * coords, same convention as `labelSlot`. null when the region prints no art
+   * placeholder. When present, image sizing / placement / floors target this slot
+   * instead of the full region box; text placement still uses the full box. See #45.
+   */
+  artSlot: { x: number; y: number; width: number; height: number } | null;
+  /**
    * Text the template itself already prints inside this region's `<g>` (a section
    * label like "Schedule", chrome like "TODAY"/"DATE", a weekday header, hour-line
    * numbers) — in document order. Empty when the template prints nothing here. Lets
@@ -356,6 +365,24 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
           height: num(labelRect["@_height"]) ?? 0,
         }
       : null;
+    // A dashed rect with no `data-region` (distinct from the box and any label slot) is
+    // the region's illustration placeholder — the AI banner-art drop-zone (#45).
+    // Detected by its `stroke-dasharray` so it's never confused with the region's box.
+    const artRect = rects.find(
+      (r) =>
+        r !== labelRect &&
+        r !== rect &&
+        typeof r["@_stroke-dasharray"] === "string" &&
+        r["@_stroke-dasharray"].trim() !== "",
+    );
+    const artSlot = artRect
+      ? {
+          x: num(artRect["@_x"]) ?? 0,
+          y: num(artRect["@_y"]) ?? 0,
+          width: num(artRect["@_width"]) ?? 0,
+          height: num(artRect["@_height"]) ?? 0,
+        }
+      : null;
 
     const lines: any[] = Array.isArray(g.line) ? g.line : g.line ? [g.line] : [];
     const ruledLines: number[] = [];
@@ -405,6 +432,7 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
       ruledLines,
       colLines,
       labelSlot,
+      artSlot,
       printedText,
     });
   }

@@ -180,6 +180,17 @@ async function main() {
   // header's dashed art-banner rect has no data-region, so it's NOT a label slot.
   const header = read.regions.find((r) => r.name === "header");
   check("header's decorative dashed rect (no data-region) is not read as a label slot", header?.labelSlot === null, JSON.stringify(header?.labelSlot));
+  // #45: the dashed illustration rect IS surfaced as `artSlot` — the intended image
+  // drop-zone — so image sizing/floors target it, not the full header band.
+  check("header exposes its dashed illustration rect as artSlot", !!header?.artSlot && header.artSlot.width === 300 && header.artSlot.height === 104, JSON.stringify(header?.artSlot));
+  check("header artSlot is offset to the right of the header box (x=612, y=6)", header?.artSlot?.x === 612 && header?.artSlot?.y === 6, JSON.stringify(header?.artSlot));
+  // The floor scales off the art slot (35% of 300×104), NOT the full 912×116 band — so a
+  // right-sized ~300px banner is no longer flagged too-small.
+  check("header imageFloor scales off the art slot, not the full header band", header?.imageFloor?.width === 300 * 0.35 && header?.imageFloor?.height === 104 * 0.35, JSON.stringify({ floor: header?.imageFloor, box: [header?.width, header?.height], art: header?.artSlot }));
+  // A header with no illustration rect (agenda/monthly/todo/reflection/blank) → artSlot null.
+  const agendaHeaderSvg = await fs.readFile(path.join(root, "Templates", "agenda-minimal", "template.svg"), "utf8");
+  const agendaHeader = parseRegions(agendaHeaderSvg, "agenda-minimal").find((r) => r.name === "header");
+  check("a header with no illustration rect has artSlot === null", agendaHeader?.artSlot === null, JSON.stringify(agendaHeader?.artSlot));
   // printedText: the template's own <text> content per region — lets an orchestrator
   // see that daily-minimal's header already prints "TODAY" chrome instead of relying
   // on memorized per-template knowledge (the #9 double-date-write bug).
@@ -1410,6 +1421,29 @@ async function main() {
   const travBase = travHref.replace(/^href="media\/ai\//, "").replace(/"$/, "");
   // Safe = stays under media/ai/: no slash in the filename, no leading dot (no `../`).
   check("sanitizes a traversal filename", travHref.startsWith('href="media/ai/') && !travBase.includes("/") && !travBase.startsWith("."), travHref);
+
+  // #45 header art slot end-to-end + #46 href validation.
+  console.log("\nheader image lands in the art slot (#45); dangling hrefs warn (#46)");
+  const hdrPage = "Shared/Daily/2026-06-28";
+  await createPage(root, { chapter: "Daily", name: "2026-06-28", title: "Header test", template: "daily-minimal" });
+  // A header image with no explicit x/y lands INSIDE the art slot (region-local x ≥ 612),
+  // covering the dashed placeholder instead of floating at header-left (issue #25).
+  await writeUnderlay(root, hdrPage, { status: "ready", regions: [{ region: "header", images: [{ data: PNG_1x1, format: "png", name: "banner", width: 120 }] }] });
+  const hdrAi = await fs.readFile(path.join(root, hdrPage, "ai.svg"), "utf8");
+  const hdrImg = regionGroup(hdrAi, "header") ?? "";
+  const hdrX = Number(hdrImg.match(/<image[^>]*\bx="(-?\d+)"/)?.[1] ?? "-1");
+  check("header image is placed within the art slot (x ≥ 612)", hdrX >= 612, `x=${hdrX} :: ${hdrImg.slice(0, 220)}`);
+  // fit:"region" on the header contains into the art slot (≤ 300 wide), not the full band.
+  const fitHdr = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: PNG_1x1, format: "png", name: "fit", fit: "region" }] }] });
+  const fitImg = regionGroup(fitHdr.aiSvg, "header") ?? "";
+  const fitW = Number(fitImg.match(/<image[^>]*\bwidth="(\d+)"/)?.[1] ?? "9999");
+  check("fit:\"region\" on the header contains into the art slot (width ≤ 300)", fitW <= 300, `w=${fitW} :: ${fitImg.slice(0, 220)}`);
+  // #46: a raw-svg <image href> to a media/ai file that was never written must warn.
+  const ghost = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "ainotes", svg: '<image href="media/ai/ghost.png" x="0" y="0" width="40" height="40"/>' }] });
+  check("dangling <image href> warns image_href_missing", ghost.warningDetails.some((w) => w.code === "image_href_missing"), JSON.stringify(ghost.warningDetails));
+  // A properly supplied structured image does NOT warn (no false positive).
+  const okHref = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, format: "png", name: "real", width: 40 }] }] });
+  check("a resolved structured image does not warn image_href_missing", !okHref.warningDetails.some((w) => w.code === "image_href_missing"), JSON.stringify(okHref.warningDetails));
 
   console.log("\nwrite_underlay images via local file `path` (no base64 through context)");
   const srcPng = path.join(os.tmpdir(), "onionskin-smoke-src.png");

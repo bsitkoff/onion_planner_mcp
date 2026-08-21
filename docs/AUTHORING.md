@@ -344,6 +344,27 @@ sending, or set `images[].maxDimension`). `notes` is
 `fill: ink` (handwriting) — at most a *tiny* corner mark there, never a sticker over the writing
 area.
 
+**A header banner goes in the header's art slot — let the server place it.** The daily
+templates print a dashed rounded box on the right of the `header` band as the banner-art
+drop-zone; `read_page` surfaces it as the region's **`artSlot`** ({x,y,width,height}, or null
+on templates with no such box — agenda/monthly/todo/reflection/blank). You don't compute
+coordinates for it: give the `header` region an `images` entry and the server places it *in the
+art slot* — `corner`/`fit: "region"` and the `imageFloor` all target the slot, not the full
+band. So `fit: "region"` fills the box (covering the dashed placeholder — otherwise it renders
+as an orphaned empty box under your banner), and a plain `width` with no `x`/`y` centers it in
+the slot. Don't invent an aspect requirement or stretch art to fill the band: omit `height` to
+keep native proportions — whitespace inside the slot is fine. The date/title text still lands
+in the full header band, clear of the art slot.
+
+**Filenames must resolve — a dangling `href` renders blank.** The server writes each image to
+`media/ai/<stem>.<ext>` (the `stem` is `images[].name` if you pass one, else a content hash) and
+rewrites the `<image href>` for you — so with the structured `images` array you never author an
+href by hand. If you *do* hand-write an `<image href="media/ai/…">` in a raw region `svg`, or
+reuse a stale filename across an update, the server now warns **`image_href_missing`** when the
+final `ai.svg` references a `media/ai/` file that wasn't written this call and isn't on disk (it
+would render blank on device). The fix is always to supply the bytes through `images` and let
+the server own the filename, not to guess a stem.
+
 **The sourcing recipe (generate the image however you like, land it on the Mac, embed by path):**
 
 1. Generate a small square image with whatever image tool you use. Prompt for the planner

@@ -7,6 +7,36 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: header images size/place against the illustration sub-box, not the full band — 2026-08-20
+
+[#45](https://github.com/bsitkoff/onion_planner_mcp/issues/45). A daily `header` group ships a
+second, untagged dashed `<rect>` — the banner-art drop-zone (e.g. 300×104 at the band's right) —
+but `parseRegions` kept only the first non-`label-` rect and dropped it. So image floors and
+`fit: "region"` measured against the full 912×116 band: a correctly-sized ~300px banner was
+flagged `image_small_for_region`, `fit: "region"` spanned the date text, and the dashed box was
+left empty (the orphaned box in [#25](https://github.com/bsitkoff/onion_planner_mcp/issues/25)).
+
+- **`template.parseRegions` now surfaces `Region.artSlot`** — a dashed, `data-region`-less rect,
+  detected by its `stroke-dasharray` (distinct from the box and any `label-*` slot). null on
+  templates with no such placeholder (agenda/monthly/todo/reflection/blank headers).
+- **`svg.imageBox` makes the art slot the effective box for images** — `corner`/`fit: "region"`
+  placement and `imageSizeFloor` all target it, so a header banner lands in the box (covering the
+  placeholder) and a right-sized banner isn't flagged too-small. Text placement still uses the
+  full region box. `read_page` advertises `artSlot` + the slot-scaled `imageFloor`.
+- Needs [onionskin#224](https://github.com/bsitkoff/onionskin/issues/224) for the clean,
+  app-tagged art rect + composer/template reconciliation; this ships the interim heuristic.
+
+## Fix: a dangling `<image href>` now warns instead of rendering blank — 2026-08-20
+
+[#46](https://github.com/bsitkoff/onion_planner_mcp/issues/46). A raw-svg `<image href="media/ai/…">`
+pointing at a file that was never written (a stale filename, or bytes not supplied through
+`images`) passed through unchecked and rendered blank on device — the real "stale filenames"
+failure. `page.ts:validateImageHrefs` now scans the final `ai.svg` and warns
+**`image_href_missing`** for any `media/ai/` reference with no file written this call or on disk
+(covers the raw-svg and post-merge paths; structured images set their own href and never
+false-warn). Docs (`AUTHORING.md`) now spell out the `name`-stem contract: supply bytes through
+`images` and let the server own the filename.
+
 ## Fix: a `showHours`-only region no longer trips a false `empty_region` — 2026-07-24
 
 [#38](https://github.com/bsitkoff/onion_planner_mcp/issues/38). `showHours: true` on its own is

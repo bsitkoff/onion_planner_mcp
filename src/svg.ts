@@ -949,11 +949,25 @@ const INTERACTIVE_INTENT_RE = /\bhabit\b/i;
 export function imageSizeFloor(
   region: Region,
 ): { width: number; height: number; interactive: boolean } | null {
-  if (region.width === null || region.height === null) return null;
+  const box = imageBox(region);
+  if (box.width === null || box.height === null) return null;
   if (region.intent && INTERACTIVE_INTENT_RE.test(region.intent)) {
     return { width: INTERACTIVE_IMAGE_FLOOR, height: INTERACTIVE_IMAGE_FLOOR, interactive: true };
   }
-  return { width: region.width * 0.35, height: region.height * 0.35, interactive: false };
+  return { width: box.width * 0.35, height: box.height * 0.35, interactive: false };
+}
+
+/**
+ * The effective box for placing / sizing an *image* in a region: the region's `artSlot`
+ * (a printed illustration placeholder, e.g. the header's right-side banner box) when one
+ * exists, else the region's own box. Region-local coords. Only images target the art
+ * slot — text placement always uses the full region box. See #45.
+ */
+export function imageBox(
+  region: Region,
+): { x: number; y: number; width: number | null; height: number | null } {
+  if (region.artSlot) return { ...region.artSlot };
+  return { x: 0, y: 0, width: region.width, height: region.height };
 }
 
 /** An axis-aligned rectangle, for overlap tests. */
@@ -969,29 +983,35 @@ function bboxesOverlap(a: Bbox, b: Bbox): boolean {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
-/** Region-local placement of an image from its corner/margin (or explicit x/y). */
+/**
+ * Region-local placement of an image from its corner/margin (or explicit x/y). Corner
+ * placement resolves within the region's image box — the `artSlot` when present (so a
+ * header banner lands in its illustration box, covering the dashed placeholder), else
+ * the full region box. Explicit x/y stay verbatim region-local, unchanged. See #45.
+ */
 function placeImage(region: Region, img: ImageInput): { x: number; y: number } {
   if (img.x !== undefined || img.y !== undefined) {
     return { x: Math.round(img.x ?? 0), y: Math.round(img.y ?? 0) };
   }
+  const box = imageBox(region);
   const margin = img.margin ?? 8;
-  const W = region.width;
-  const H = region.height;
+  const W = box.width;
+  const H = box.height;
   const w = img.width ?? 0;
   const h = img.height ?? 0;
-  if (W === null || H === null) return { x: margin, y: margin }; // no box → top-left inset
+  if (W === null || H === null) return { x: box.x + margin, y: box.y + margin }; // no box → top-left inset
   switch (img.corner ?? "center") {
     case "top-left":
-      return { x: margin, y: margin };
+      return { x: box.x + margin, y: box.y + margin };
     case "top-right":
-      return { x: Math.round(W - w - margin), y: margin };
+      return { x: Math.round(box.x + W - w - margin), y: box.y + margin };
     case "bottom-left":
-      return { x: margin, y: Math.round(H - h - margin) };
+      return { x: box.x + margin, y: Math.round(box.y + H - h - margin) };
     case "bottom-right":
-      return { x: Math.round(W - w - margin), y: Math.round(H - h - margin) };
+      return { x: Math.round(box.x + W - w - margin), y: Math.round(box.y + H - h - margin) };
     case "center":
     default:
-      return { x: Math.round((W - w) / 2), y: Math.round((H - h) / 2) };
+      return { x: Math.round(box.x + (W - w) / 2), y: Math.round(box.y + (H - h) / 2) };
   }
 }
 

@@ -1540,6 +1540,21 @@ async function main() {
   const plainGroup = regionGroup(plainLabel.aiSvg, "schedule") ?? "";
   const schedSlot = schedule!.labelSlot!;
   check("labelStyle plain writes uppercase Mulish 12/700 at the slot origin (composer sectionLabel)", plainGroup.includes(`<text x="${schedSlot.x + 2}" y="${schedSlot.y + Math.min(schedSlot.height - 4, 16)}" font-family="Mulish" font-size="12" font-weight="700"`) && plainGroup.includes(">SCHEDULE</text>") && !/<rect[^>]*rx="6"/.test(plainGroup), plainGroup.slice(0, 300));
+  console.log("\npage-level delight nudges: header_unwritten / page_no_art");
+  const barePage = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [
+    { region: "schedule", lines: [{ text: "Standup", time: "09:00", endTime: "10:00" }] },
+    { region: "todo", lines: [{ text: "Buy stamps", marker: "checkbox" }] },
+  ] });
+  check("a multi-region page with no header written info-flags header_unwritten", barePage.warningDetails.some((w) => w.code === "header_unwritten" && w.severity === "info"), JSON.stringify(barePage.warnings));
+  check("a multi-region page with no image info-flags page_no_art (names the art box)", barePage.warningDetails.some((w) => w.code === "page_no_art" && /300×104/.test(w.message)), JSON.stringify(barePage.warnings));
+  const single = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "schedule", lines: [{ text: "Standup", time: "09:00", endTime: "10:00" }] }] });
+  check("a single-region (merge-style) write does not nag page_no_art", !single.warningDetails.some((w) => w.code === "page_no_art"), JSON.stringify(single.warnings));
+  const withArt = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [
+    { region: "header", lines: [{ text: "Friday, August 21" }], images: [{ data: encodePng({ width: 3, height: 1, pixels: new Uint8Array([200,200,200,255, 200,200,200,255, 200,200,200,255]) }).toString("base64"), format: "png", fit: "contain" }] },
+    { region: "todo", lines: [{ text: "Buy stamps", marker: "checkbox" }] },
+  ] });
+  check("header + banner written → neither nudge fires", !withArt.warningDetails.some((w) => w.code === "page_no_art" || w.code === "header_unwritten"), JSON.stringify(withArt.warnings));
+
   console.log("\n#43: minting a YYYY-MM chapter stamps year/month (no title); order is chronological");
   await createPage(root, { chapter: "2026-09", name: "2026-09-15", template: "daily-minimal" });
   const m43FolderFile = path.join(root, "Shared", "2026-09", ".folder.json");

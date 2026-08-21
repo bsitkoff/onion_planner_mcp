@@ -2286,6 +2286,37 @@ export function composeAiSvg(
     parts.push(`  </g>`);
   }
 
+  // Page-level composition nudges. A planner page is meant to be a small daily pleasure —
+  // the header banner and the accent doodle are *functional*, not optional polish — and an
+  // unattended orchestrator tends to "safely" edit them out (an invented aspect gate, a
+  // failed raster, a preservation instinct). Say so in the result, where it reads them.
+  const written = new Set(inputs.map((i) => i.region));
+  const headerRegion = regions.find((r) => r.name === "header" && r.fill !== "ink");
+  if (headerRegion && !written.has("header")) {
+    warn(
+      "header_unwritten",
+      `the template's "header" region (${headerRegion.artSlot ? "with a printed art box" : "date band"}) ` +
+        `was not written — the page has no date heading or banner. Give it the date ` +
+        `(or an integrated date sticker) and art in the art slot via images[].fit:"contain".`,
+      "info",
+      "header",
+    );
+  }
+  const anyImage = parts.some((p) => p.includes("<image "));
+  const artHome = regions.find((r) => r.artSlot) ?? regions.find((r) => r.name === "accent");
+  if (!anyImage && artHome && inputs.length > 1) {
+    warn(
+      "page_no_art",
+      `no image anywhere on the page, though the template offers ${
+        artHome.artSlot ? `a ${artHome.artSlot.width}×${artHome.artSlot.height} header art box` : "an accent pocket"
+      }${regions.some((r) => r.name === "accent") && artHome.artSlot ? " and an accent pocket" : ""} — ` +
+        `a page with no visual moment reads as machine output. Drop a banner/sticker in with ` +
+        `images[].fit:"contain" (never stretch, never invent an aspect gate — whitespace is fine), ` +
+        `or at least a small vector doodle in the accent pocket.`,
+      "info",
+    );
+  }
+
   parts.push(`</svg>`);
   return { svg: parts.join("\n") + "\n", warnings, warningDetails };
 }

@@ -100,6 +100,15 @@ whitespace and leave the ruled lines for ink. Note `read_ink` can **refuse** —
 its ink private (`permissions.inkReadable: false`; reflection chapters default private). That
 never blocks writing the underlay; just compose without peeking at the handwriting there.
 
+**1½. Delight is functional, not decoration.** This is a paper planner someone wants to open —
+the banner in the header's art box, a doodle or sticker in the `accent` pocket, a cheerful date
+sticker, a themed habits block are *the point*, not polish to trim when something goes wrong. An
+orchestrator's "safe" instinct (skip art after a failed generation, invent an aspect gate, write
+text only) produces exactly the bare machine page the user dislikes. If a raster fails: retry
+with `fit: "contain"` (it can't fail an aspect test — there is none), fall back to a small vector
+doodle in `accent`, but never ship no visual moment. The server info-flags `page_no_art` and
+`header_unwritten` when a multi-region write does.
+
 **2. Never let the page read as blank — a rule, not a preference.** A light day is honest —
 summer, a weekend, a quiet schedule — but an *empty page* looks broken, and real use showed
 sparse output is the single most common way an underlay disappoints. If the schedule is thin,

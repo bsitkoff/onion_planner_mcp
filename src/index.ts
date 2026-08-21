@@ -566,10 +566,17 @@ server.tool(
     "preferred) OR `svg` (a full <svg> document you composed yourself). A region may also " +
     "carry `images` (base64/path art the server writes to the page's media/ai/ folder and " +
     "references from ai.svg, optionally cut out via `knockout` — see docs/AUTHORING.md for " +
-    "the recipe). Sets status to 'ready' by default so the app will composite " +
-    "it. Use `merge` to update only the named regions and keep the rest of the page; use " +
-    "`dryRun` to preview the result + fit warnings without writing. Returns non-fatal " +
-    "`warnings` plus structured `warningDetails` for likely overflow. Refuses any page outside Shared/.",
+    "the recipe). THE PAGE IS A PAPER PLANNER THE USER LOOKS FORWARD TO: every daily page " +
+    "gets a visual moment — a banner in the header's art slot (images[].fit:\"contain\": native " +
+    "aspect, whitespace OK, never stretched; NEVER invent an aspect/size gate that rejects " +
+    "art), a small doodle or sticker in the `accent` pocket, a date heading or integrated date " +
+    "sticker — and the habits tracker is the vector `habits: true` block, not a raster. A " +
+    "failed image is a reason to try the contain fit or a vector doodle, never to ship a bare " +
+    "page; `page_no_art` / `header_unwritten` info warnings tell you when you did. Sets status " +
+    "to 'ready' by default so the app will composite it. Use `merge` to update only the named " +
+    "regions and keep the rest of the page; use `dryRun` to preview the result + fit warnings " +
+    "without writing. Returns non-fatal `warnings` plus structured `warningDetails` for likely " +
+    "overflow. Refuses any page outside Shared/.",
   {
     page: z.string().describe('Relative page path, e.g. "Shared/Daily/2026-02-06".'),
     regions: z

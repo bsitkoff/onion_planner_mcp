@@ -7,6 +7,19 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Polish: page-level delight nudges (`page_no_art`, `header_unwritten`) — 2026-08-21
+
+Real orchestrator friction (2026-08-21 morning run): both header-image attempts "failed the
+visual asset gate" — a gate the orchestrator invented — so the page shipped with no header
+region at all and no image anywhere; the habits tracker was text-only. The MCP rendered exactly
+what it was handed, which is the problem: nothing told the caller the page had lost its visual
+moment. `composeAiSvg` now info-flags **`header_unwritten`** (a non-ink `header` region the
+write didn't address) and **`page_no_art`** (a multi-region write with no `<image>` on a
+template that offers an art box or accent pocket), and `write_underlay`'s description states the
+contract up front: every daily page gets a banner (`fit:"contain"`, never an aspect gate), a
+doodle/sticker in `accent`, a date moment, and the vector `habits: true` block. AUTHORING.md
+gains principle 1½ ("Delight is functional").
+
 ## Feature: composer parity — habits block + `set_habits`, region vocab, plain labels, header clearance, parity guard — 2026-08-21
 
 [#50](https://github.com/bsitkoff/onion_planner_mcp/issues/50),

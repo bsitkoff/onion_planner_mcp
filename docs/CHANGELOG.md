@@ -7,6 +7,33 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: sub-hour times interpolate, row pile-ups warn, tagged `art-header` + hour gutter — 2026-08-20
+
+[#32](https://github.com/bsitkoff/onion_planner_mcp/issues/32),
+[#30](https://github.com/bsitkoff/onion_planner_mcp/issues/30),
+[#31](https://github.com/bsitkoff/onion_planner_mcp/issues/31),
+[#45](https://github.com/bsitkoff/onion_planner_mcp/issues/45),
+[#44](https://github.com/bsitkoff/onion_planner_mcp/issues/44) (code half). A `13:30` event drew on
+the 2 PM rule (`rowForTime` rounded to a whole row — `.5` rounds up), 30 `row`s into a 15-row grid
+piled 16 strings onto the last rule with `warnings: []`, 40 flow lines ran 500px past the `ainotes`
+box silently, and the docs promised a "more lines than ruled rows" warning that never existed.
+
+- **`rowForTime` is fractional; `ruledY` interpolates** between rules for both plain `time` lines
+  and washi blocks (a 13:30–14:30 block starts halfway down the 1 PM interval). Whole hours are
+  bit-identical to before; the one-interval minimum block height still applies (`r2 − r1 < 1`).
+- **New warnings:** `row_out_of_range` (names the clamp instead of folding silently),
+  `row_collision` (two different `lines[]` entries on one baseline — wrapped continuations of one
+  entry never count, headings exempt; #31's distinction), `text_below_region` (a single-segment
+  baseline + descender below the box; wrapped blocks were already covered).
+- **Tagged art slot (onionskin#224):** `parseRegions` prefers a nested
+  `<rect data-region="art-*">` as `Region.artSlot` (+ new `artSlotName`), falling back to the
+  untagged dashed rect the live library's frozen pages still print. The region's own box is now
+  the first rect with *no* `data-region` — no longer "the first rect", which would have made the
+  300px art rect the header's box had it ever been listed first.
+- **`Region.gutterX`** (where the horizontal rules start: 34 on the cozy/colorful schedule +
+  agenda, which print an IBM Plex Mono hour gutter; 0 on minimal) — default text/block x is
+  `max(xPad, gutterX)` so nothing overdraws the printed hour numbers. Explicit `x` still wins.
+
 ## Fix: header images size/place against the illustration sub-box, not the full band — 2026-08-20
 
 [#45](https://github.com/bsitkoff/onion_planner_mcp/issues/45). A daily `header` group ships a

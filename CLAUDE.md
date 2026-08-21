@@ -131,9 +131,14 @@ default is a chapter's own ink palette, not a constraint — and the orchestrato
 coordinates; they reference a region name and a row index from
 `read_page`. An unknown region name throws (listing the valid ones). Raw `svg` bypasses all
 of this — full control, no geometry help. `composeAiSvg` returns `{ svg, warnings }`; the
-warnings flag likely overflow (text past the region rect, more lines than ruled rows, a
-wrapped block that overruns its row, a `time` that can't be anchored) and surface in the
-`write_underlay` result — important because overnight/unattended writes have no human watching.
+warnings flag likely overflow (text past the region's right edge or below its box —
+`text_below_region`; a `row` beyond the ruled grid — `row_out_of_range`, instead of silently
+folding onto the last rule; two different `lines[]` entries on one baseline — `row_collision`,
+where wrapped continuations of one entry never count; a wrapped block that overruns its row; a
+`time` that can't be anchored) and surface in the `write_underlay` result — important because
+overnight/unattended writes have no human watching. A clock `time` resolves to a **fractional**
+row (`13:30` on a 1-row-per-hour grid is row 6.5, interpolated between the rules — #32), for
+both plain lines and washi blocks; the one-interval minimum block height still applies.
 
 Two `write_underlay` modifiers: **`merge`** patches only the named regions into the
 existing `ai.svg` (parsing its `<g data-region>` blocks, replacing matches, keeping the rest
@@ -149,12 +154,19 @@ server has no network/generation. The app's renderer resolves `<image href>` onl
 (magic vs `format`, 2MB cap), writes them to the page's **`media/ai/`** folder, and rewrites
 the `<image href="media/ai/…">` into the region group; `svg.ts:imageDims` reads intrinsic size
 (aspect-fills an omitted height). Placement is region-local via `corner`/`x`/`y`. When a
-region prints a dashed illustration placeholder (a rounded `stroke-dasharray` rect with no
-`data-region` — the header's right-side banner box), `template.parseRegions` exposes it as
-`Region.artSlot` and `svg.imageBox` makes it the effective box for image `corner`/`fit`
-placement **and** the `imageFloor` (so a right-sized header banner lands in the box, covering
-the placeholder, and isn't flagged too-small against the full band — #45). Text placement
-still uses the full region box. After each write, `gcOrphanMedia` deletes any `media/ai/*`
+region prints an illustration placeholder — the header's right-side banner box, tagged
+`<rect data-region="art-header" data-fill="ai">` since app catalogue `14-art-header-region`
+(onionskin#224), or an untagged dashed `stroke-dasharray` rect on pages frozen from the older
+catalogue (the live library: the app never migrates a page that already has an underlay) —
+`template.parseRegions` exposes it as `Region.artSlot` (+ `artSlotName`, the tag or null) and
+`svg.imageBox` makes it the effective box for image `corner`/`fit` placement **and** the
+`imageFloor` (so a right-sized header banner lands in the box, covering the placeholder, and
+isn't flagged too-small against the full band — #45). The region's own box is the first rect
+with **no** `data-region`, never "the first rect". `art-header` is addressed through its
+parent `header`, not as a region of its own. Text placement still uses the full region box.
+A ruled region also carries `gutterX` — where its rules start (34 on the cozy/colorful
+schedule/agenda, which print an hour-label gutter; 0 on minimal) — and default text/block x
+never sits left of it (#44). After each write, `gcOrphanMedia` deletes any `media/ai/*`
 the final (post-merge) ai.svg no longer references, and `validateImageHrefs` warns
 `image_href_missing` for any `<image href="media/ai/…">` in the final svg with no file written
 or on disk (a stale name, or a raw-svg href whose bytes weren't supplied — #46);

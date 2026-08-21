@@ -679,15 +679,34 @@ function bannerLabelWidth(text: string, size: number): number {
 const BANNER_PAD_X = 12;
 
 /**
- * Map a clock time ("HH:MM", 24-hour) to a ruled-row index, given the hour at
- * row 0 and how many rows cover an hour. Rounds to the nearest row. Throws on a
- * malformed time string. The caller clamps/validates the resulting row range.
+ * Map a clock time ("HH:MM", 24-hour) to a **fractional** ruled-row index, given the
+ * hour at row 0 and how many rows cover an hour — `13:30` on a 1-row-per-hour grid
+ * starting at 7 is row 6.5, halfway between the 1 PM and 2 PM rules (#32; it used to
+ * round to the nearest whole row, which drew a 1:30 event on the 2:00 line). Throws
+ * on a malformed time string. The caller clamps/validates the resulting row range
+ * and resolves the fraction to a y via `ruledY`.
  */
 function rowForTime(time: string, startHour: number, rowsPerHour: number): number {
   const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time.trim());
   if (!m) throw new Error(`time must be "HH:MM" (24-hour), got "${time}".`);
   const minutesFromStart = (Number(m[1]) * 60 + Number(m[2])) - startHour * 60;
-  return Math.round((minutesFromStart / 60) * rowsPerHour);
+  return (minutesFromStart / 60) * rowsPerHour;
+}
+
+/**
+ * Absolute y of a (possibly fractional) row index on a ruled region: the ruled line
+ * at `floor(row)` plus the fraction of the interval to the next line. Clamped to the
+ * grid, so callers warn about out-of-range rows themselves. A whole-number row is
+ * exactly its ruled line (bit-identical to the pre-#32 behaviour).
+ */
+function ruledY(region: Region, row: number): number {
+  const r = region.ruledLines;
+  const maxIdx = r.length - 1;
+  const c = Math.min(Math.max(0, row), maxIdx);
+  const i = Math.floor(c);
+  const frac = c - i;
+  if (frac === 0 || i >= maxIdx) return r[i];
+  return r[i] + frac * (r[i + 1] - r[i]);
 }
 
 /**
@@ -1589,12 +1608,15 @@ export function composeAiSvg(
       // above/between the ruled lines, leaving the lines free for the user's ink.
       // A line with an explicit `row` or `time` still snaps to the ruled grid.
       const flowBases = flowBaselines(region, lines, def, theme);
+      // baseline y -> the text of the `lines[]` entry that owns it (row_collision, #30).
+      const baselineOwners = new Map<number, string>();
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
         const font = line.font ?? themeFontFor(theme, region.name, !!line.heading) ?? def.font;
         const weight = line.weight ?? def.weight;
         const fill = line.fill !== undefined ? floorTextFill(line.fill) : baseFill;
-        let x = line.x ?? def.xPad ?? DEFAULT_X_PAD;
+        // Inset at least past the template's printed hour-label gutter (#44).
+        let x = line.x ?? Math.max(def.xPad ?? DEFAULT_X_PAD, region.gutterX ?? 0);
 
         // A washi-tape duration block: `time` + (`endTime`/`durationMin`) draws a
         // rounded, tinted rect spanning start->end rows instead of a single baseline —
@@ -1654,13 +1676,19 @@ export function composeAiSvg(
               region.name,
             );
           } else {
-            if (r2 <= r1) {
+            if (r2 - r1 < 1) {
               // Min block height is one schedule-line interval, read from the template's
               // ruled lines (2026-07-09 decisions; spec: design/UNDERLAY-VISUAL.md,
               // forthcoming) — a 20-min meeting on a 1-row-per-hour grid still draws a
               // visible tape, not a bare text line. Supersedes the old sub-hour
-              // plain-line fallback (#17).
+              // plain-line fallback (#17). Rows are fractional (#32), so "shorter than
+              // one interval" is `r2 - r1 < 1`, and a block that starts mid-interval
+              // near the grid's end shifts up rather than spilling past the last rule.
               r2 = r1 + 1;
+              if (r2 > maxIdx) {
+                r2 = maxIdx;
+                r1 = maxIdx - 1;
+              }
               warn(
                 "washi_block_min_height",
                 `region "${region.name}": block "${truncate(line.text)}" (${line.time}–${endTimeStr}) ` +
@@ -1669,9 +1697,10 @@ export function composeAiSvg(
                 region.name,
               );
             }
-            const y1 = Math.round(region.ruledLines[r1] - region.y);
-            const y2 = Math.round(region.ruledLines[r2] - region.y);
-            const bx = line.x ?? def.xPad ?? DEFAULT_X_PAD;
+            const y1 = Math.round(ruledY(region, r1) - region.y);
+            const y2 = Math.round(ruledY(region, r2) - region.y);
+            // Never start left of the template's printed hour-label gutter (#44).
+            const bx = line.x ?? Math.max(def.xPad ?? DEFAULT_X_PAD, region.gutterX ?? 0);
             // Right inset is the standard margin, not a second helping of the schedule's
             // wide LEFT gutter (reserved for the printed hour labels) — re-subtracting it
             // on the right left the tape ~half its column narrower than it needed to be.
@@ -1715,8 +1744,10 @@ export function composeAiSvg(
           );
         }
 
-        // Resolve a clock time to a ruled row (precedence: y > row > time).
+        // Resolve a clock time to a ruled row (precedence: y > row > time). The row is
+        // fractional for a sub-hour time (#32) — `ruledY` interpolates it below.
         let effLine = line;
+        let rowFromTime = false;
         if (line.time !== undefined && line.y === undefined && line.row === undefined) {
           if (region.ruledLines.length === 0) {
             warn(
@@ -1747,6 +1778,7 @@ export function composeAiSvg(
               );
             }
             effLine = { ...line, row: r };
+            rowFromTime = true;
           }
         }
 
@@ -1755,11 +1787,41 @@ export function composeAiSvg(
         if (effLine.y !== undefined) {
           y = effLine.y;
         } else if (effLine.row !== undefined && region.ruledLines.length > 0) {
-          const idx = Math.min(Math.max(0, Math.floor(effLine.row)), region.ruledLines.length - 1);
-          const localRuled = region.ruledLines[idx] - region.y;
+          const maxIdx = region.ruledLines.length - 1;
+          if (!rowFromTime && (effLine.row < 0 || effLine.row > maxIdx)) {
+            // Don't fold an out-of-range row onto the last rule silently — that's how
+            // 30 lines into a 15-row grid piled 16 strings onto one baseline (#30).
+            warn(
+              "row_out_of_range",
+              `region "${region.name}": line "${truncate(line.text)}" asks for row ` +
+                `${effLine.row} but the grid has rows 0–${maxIdx} — clamped to row ` +
+                `${Math.min(Math.max(0, effLine.row), maxIdx)}.`,
+              "warning",
+              region.name,
+            );
+          }
+          const localRuled = ruledY(region, effLine.row) - region.y;
           y = Math.round(localRuled + rowOffset(region));
         } else {
           y = Math.round(flowBases[i]);
+        }
+
+        // Two different `lines[]` entries on one baseline are a collision — unrelated
+        // strings stacked in the same visual slot (#30/#31). Wrapped continuations of a
+        // single entry are one item and never count; headings are labels and exempt.
+        if (!line.heading) {
+          const prior = baselineOwners.get(y);
+          if (prior !== undefined) {
+            warn(
+              "row_collision",
+              `region "${region.name}": line "${truncate(line.text)}" lands on the same ` +
+                `baseline (y=${y}) as "${truncate(prior)}" — two items in one slot.`,
+              "warning",
+              region.name,
+            );
+          } else {
+            baselineOwners.set(y, line.text);
+          }
         }
 
         // A section heading. `banner` themes draw a coloured pill + white label
@@ -1837,6 +1899,23 @@ export function composeAiSvg(
               `font-size="${size}" font-weight="${weight}" fill="${fill}">${escapeXml(seg)}</text>`,
           );
         });
+
+        // A single-segment line whose baseline (+ descender) sits below the region box
+        // is drawn into whatever lies underneath — 40 flow lines into a 422px box used to
+        // do this with `warnings: []` (#30). Wrapped blocks are covered below.
+        if (
+          segments.length === 1 &&
+          region.height !== null &&
+          y + Math.round(size * 0.3) > region.height
+        ) {
+          warn(
+            "text_below_region",
+            `region "${region.name}": line "${truncate(line.text)}" (baseline y=${y}) ` +
+              `falls below the ${region.height}px region box.`,
+            "warning",
+            region.name,
+          );
+        }
 
         if (region.width !== null) {
           if (!effWrap) {

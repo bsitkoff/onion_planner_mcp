@@ -70,6 +70,20 @@ export interface Region {
    */
   artSlot: { x: number; y: number; width: number; height: number } | null;
   /**
+   * The `data-region` name the template gives its art slot (e.g. `"art-header"`, app
+   * catalogue ≥ `14-art-header-region`), or null when the slot was detected from an
+   * untagged dashed rect (pages created from the older catalogue) or there is none.
+   * The slot is addressed through its parent region either way — it is not a region.
+   */
+  artSlotName: string | null;
+  /**
+   * Region-local x where the horizontal ruled lines start — the printed hour-label
+   * gutter on the cozy/colorful schedule + agenda templates (34), 0 on the minimal
+   * ones. Blocks and text inset to at least this x so they never overdraw the printed
+   * hour numbers (#44). null when the region has no horizontal rules.
+   */
+  gutterX: number | null;
+  /**
    * Text the template itself already prints inside this region's `<g>` (a section
    * label like "Schedule", chrome like "TODAY"/"DATE", a weekday header, hour-line
    * numbers) — in document order. Empty when the template prints nothing here. Lets
@@ -346,47 +360,50 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
     const name: string = g["@_data-region"] ?? id.replace(/^region-/, "");
 
     // A region's <g> may nest one or more other <rect>s (a decorative border, a dot
-    // pattern) plus a dashed <rect data-region="label-<name>"> sub-region (the printed
-    // label slot) alongside its own box rect. Disambiguate the label rect by its
-    // "label-" prefix rather than assuming it's absent/last — order isn't guaranteed
-    // across templates, and the box rect is whichever non-label rect comes first.
+    // pattern) plus tagged sub-boxes: a dashed <rect data-region="label-<name>"> (the
+    // printed section-label slot) and, on the daily headers, <rect data-region=
+    // "art-header"> (the banner-art drop-zone; app catalogue ≥ 14-art-header-region).
+    // The region's own box is the first rect carrying NO data-region — never infer it
+    // from document order, which isn't guaranteed across templates.
     const rects: any[] = Array.isArray(g.rect) ? g.rect : g.rect ? [g.rect] : [];
-    const labelRect = rects.find(
-      (r) => typeof r["@_data-region"] === "string" && r["@_data-region"].startsWith("label-"),
-    );
-    const rect = rects.find((r) => r !== labelRect) ?? null;
+    const tagOf = (r: any): string | null =>
+      typeof r["@_data-region"] === "string" ? r["@_data-region"] : null;
+    const labelRect = rects.find((r) => tagOf(r)?.startsWith("label-"));
+    const rect =
+      rects.find((r) => tagOf(r) === null) ??
+      rects.find((r) => r !== labelRect && !tagOf(r)?.startsWith("art-")) ??
+      null;
     const width = rect ? num(rect["@_width"]) : null;
     const height = rect ? num(rect["@_height"]) : null;
-    const labelSlot = labelRect
-      ? {
-          x: num(labelRect["@_x"]) ?? 0,
-          y: num(labelRect["@_y"]) ?? 0,
-          width: num(labelRect["@_width"]) ?? 0,
-          height: num(labelRect["@_height"]) ?? 0,
-        }
-      : null;
-    // A dashed rect with no `data-region` (distinct from the box and any label slot) is
-    // the region's illustration placeholder — the AI banner-art drop-zone (#45).
-    // Detected by its `stroke-dasharray` so it's never confused with the region's box.
-    const artRect = rects.find(
-      (r) =>
-        r !== labelRect &&
-        r !== rect &&
-        typeof r["@_stroke-dasharray"] === "string" &&
-        r["@_stroke-dasharray"].trim() !== "",
-    );
-    const artSlot = artRect
-      ? {
-          x: num(artRect["@_x"]) ?? 0,
-          y: num(artRect["@_y"]) ?? 0,
-          width: num(artRect["@_width"]) ?? 0,
-          height: num(artRect["@_height"]) ?? 0,
-        }
-      : null;
+    const box = (r: any) => ({
+      x: num(r["@_x"]) ?? 0,
+      y: num(r["@_y"]) ?? 0,
+      width: num(r["@_width"]) ?? 0,
+      height: num(r["@_height"]) ?? 0,
+    });
+    const labelSlot = labelRect ? box(labelRect) : null;
+    // The illustration placeholder — the AI banner-art drop-zone (#45). Preferred: the
+    // app-tagged `data-region="art-*"` rect (onionskin#224). Fallback for pages whose
+    // frozen template.svg predates the tag (the live library — the app never migrates a
+    // page that already carries an underlay): an untagged dashed rect that is neither the
+    // box nor the label slot, detected by its `stroke-dasharray`.
+    const artRect =
+      rects.find((r) => tagOf(r)?.startsWith("art-")) ??
+      rects.find(
+        (r) =>
+          r !== labelRect &&
+          r !== rect &&
+          tagOf(r) === null &&
+          typeof r["@_stroke-dasharray"] === "string" &&
+          r["@_stroke-dasharray"].trim() !== "",
+      );
+    const artSlot = artRect ? box(artRect) : null;
+    const artSlotName = artRect ? tagOf(artRect) : null;
 
     const lines: any[] = Array.isArray(g.line) ? g.line : g.line ? [g.line] : [];
     const ruledLines: number[] = [];
     const colLines: number[] = [];
+    let gutterX: number | null = null;
     for (const ln of lines) {
       const x1 = num(ln["@_x1"]);
       const y1 = num(ln["@_y1"]);
@@ -394,6 +411,8 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
       const y2 = num(ln["@_y2"]);
       if (y1 !== null && y2 !== null && Math.abs(y1 - y2) < 0.5) {
         ruledLines.push(y + y1); // horizontal rule -> absolute y
+        const start = Math.min(x1 ?? 0, x2 ?? x1 ?? 0);
+        gutterX = gutterX === null ? start : Math.min(gutterX, start);
       } else if (x1 !== null && x2 !== null && Math.abs(x1 - x2) < 0.5) {
         colLines.push(x + x1); // vertical rule -> absolute x
       }
@@ -433,6 +452,8 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
       colLines,
       labelSlot,
       artSlot,
+      artSlotName,
+      gutterX,
       printedText,
     });
   }

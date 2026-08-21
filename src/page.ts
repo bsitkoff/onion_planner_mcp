@@ -20,6 +20,7 @@ import {
   emptySvg,
   imageDims,
   imageSizeFloor,
+  imageBox,
   scanRawSvgElements,
   scanRawSvgDataUriImages,
   extractRegionGroups,
@@ -659,13 +660,18 @@ async function resolveImages(
               `— no box geometry found for "${region.region}".`,
           );
         }
+        // Fit into the region's image box — the art slot (e.g. the header's banner box)
+        // when present, else the full region box (#45).
+        const fitBox = imageBox(geo);
+        const bw = fitBox.width ?? geo.width;
+        const bh = fitBox.height ?? geo.height;
         const margin = img.margin ?? 8;
-        const boxW = geo.width - margin * 2;
-        const boxH = geo.height - margin * 2;
+        const boxW = bw - margin * 2;
+        const boxH = bh - margin * 2;
         if (boxW <= 0 || boxH <= 0) {
           throw new Error(
             `image in region "${region.region}": fit:"region" box is too small for margin ` +
-              `${margin} (region box is ${geo.width}×${geo.height}).`,
+              `${margin} (image box is ${bw}×${bh}).`,
           );
         }
         const scale = Math.min(boxW / dims.width, boxH / dims.height);
@@ -739,6 +745,38 @@ async function gcOrphanMedia(pageAbs: string, svg: string): Promise<void> {
       await fs.rm(path.join(mediaAiAbs, f), { force: true }).catch(() => {});
     }
   }
+}
+
+/**
+ * Every `<image href="media/ai/…">` in the final ai.svg must resolve to a file written
+ * this call or already on disk — otherwise the app renders it blank (the renderer only
+ * resolves a page-relative path). Catches a stale filename or a raw-svg `<image href>`
+ * whose bytes were never supplied through `images`. Warns per dangling reference. See #46.
+ */
+async function validateImageHrefs(
+  pageAbs: string,
+  svg: string,
+  resolvedFiles: Set<string>,
+): Promise<WarningDetail[]> {
+  const refs = new Set([...svg.matchAll(/href="media\/ai\/([^"]+)"/g)].map((m) => m[1]));
+  if (refs.size === 0) return [];
+  let onDisk = new Set<string>();
+  try {
+    onDisk = new Set(await fs.readdir(path.join(pageAbs, MEDIA_AI)));
+  } catch {
+    // no media/ai folder → nothing on disk; every ref is dangling
+  }
+  const details: WarningDetail[] = [];
+  for (const f of refs) {
+    if (!resolvedFiles.has(f) && !onDisk.has(f)) {
+      const message =
+        `ai.svg references media/ai/${f}, but no such image was written this call or found ` +
+        `on disk — it will render blank on device (a stale filename, or a raw-svg ` +
+        "`<image href>` whose bytes weren't supplied through `images`?).";
+      details.push({ code: "image_href_missing", severity: "warning", message });
+    }
+  }
+  return details;
 }
 
 async function readJson<T>(absFile: string): Promise<T> {
@@ -1089,6 +1127,20 @@ export async function writeUnderlay(
     }
   } else {
     throw new Error("writeUnderlay requires either `svg` or `regions`.");
+  }
+
+  // Every media/ai href in the final svg must resolve to a real file (#46) — a dangling
+  // ref (stale name, or a raw-svg href with no supplied bytes) renders blank on device.
+  const resolvedFiles = new Set<string>();
+  for (const r of opts.regions ?? []) {
+    for (const im of r.images ?? []) {
+      if (im.href) resolvedFiles.add(im.href.replace(/^media\/ai\//, ""));
+    }
+  }
+  const hrefDetails = await validateImageHrefs(abs, svg, resolvedFiles);
+  if (hrefDetails.length) {
+    warnings.push(...hrefDetails.map((d) => d.message));
+    warningDetails.push(...hrefDetails);
   }
 
   const bytes = Buffer.byteLength(svg);

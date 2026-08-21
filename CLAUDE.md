@@ -148,10 +148,18 @@ server has no network/generation. The app's renderer resolves `<image href>` onl
 **page-relative file path** (no data-URIs), so `page.ts:resolveImages` validates the bytes
 (magic vs `format`, 2MB cap), writes them to the page's **`media/ai/`** folder, and rewrites
 the `<image href="media/ai/…">` into the region group; `svg.ts:imageDims` reads intrinsic size
-(aspect-fills an omitted height). Placement is region-local via `corner`/`x`/`y`. After each
-write, `gcOrphanMedia` deletes any `media/ai/*` the final (post-merge) ai.svg no longer
-references; `clear_underlay` removes the folder. Images ride inside their region's `<g>`, so
-`merge` preserves them with the region.
+(aspect-fills an omitted height). Placement is region-local via `corner`/`x`/`y`. When a
+region prints a dashed illustration placeholder (a rounded `stroke-dasharray` rect with no
+`data-region` — the header's right-side banner box), `template.parseRegions` exposes it as
+`Region.artSlot` and `svg.imageBox` makes it the effective box for image `corner`/`fit`
+placement **and** the `imageFloor` (so a right-sized header banner lands in the box, covering
+the placeholder, and isn't flagged too-small against the full band — #45). Text placement
+still uses the full region box. After each write, `gcOrphanMedia` deletes any `media/ai/*`
+the final (post-merge) ai.svg no longer references, and `validateImageHrefs` warns
+`image_href_missing` for any `<image href="media/ai/…">` in the final svg with no file written
+or on disk (a stale name, or a raw-svg href whose bytes weren't supplied — #46);
+`clear_underlay` removes the folder. Images ride inside their region's `<g>`, so `merge`
+preserves them with the region.
 
 A region entry may instead carry a **`calendar`** spec (`{ month: "YYYY-MM", days?: [...] }`)
 in place of `lines` — used for the gridded `month` region. `svg.composeCalendar` derives each

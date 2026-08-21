@@ -421,6 +421,13 @@ sending, or set `images[].maxDimension`). `notes` is
 `fill: ink` (handwriting) — at most a *tiny* corner mark there, never a sticker over the writing
 area.
 
+**Before you generate art, read the region's `artBrief`.** `read_page` gives every region with
+an image box `{ box, aspect, generateAt, place }` — the art slot's own aspect and a pixel size to
+ask the image model for. Generate *at that aspect, subject filling the frame, no padding*, then
+`fit: "contain"`. A banner made at the wrong aspect is contained (never stretched) and fills only
+one axis — it reads tiny even though it was "placed correctly"; the write info-flags
+`image_underfills_box` with the aspect to regenerate at.
+
 **Placement default: contain at native aspect, whitespace OK, never stretch or crop (#47).**
 The renderer scales an `<image>` to its *exact* box (no `preserveAspectRatio`), so the only
 way to distort art is to hand it a box of the wrong shape. The two warning-free paths:

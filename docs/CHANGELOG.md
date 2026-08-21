@@ -7,6 +7,17 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Feature: `read_page.artBrief` + `image_underfills_box` — tell the orchestrator what to generate — 2026-08-21
+
+"Still so tiny": the art box had grown to 460×164 but GPT's 2:1 banner was height-limited to
+304 wide — sized "correctly", still small. The tool should have said what shape to make.
+`read_page` now returns **`artBrief`** per region with an image box: the box, its aspect, a
+`generateAt` pixel size (2× the box, ≤1536 long side), and a one-line placement recipe; and a
+`fit` image whose source aspect fills < 75% of the box on one axis info-flags
+**`image_underfills_box`** naming the aspect to regenerate at (or `scale` to overflow). App
+catalogue `17-header-240` (TestFlight 136) pairs with it: a 460×224 daily header art box that a
+2:1 banner fills.
+
 ## Feature: `images[].scale` — a sticker may be bigger than its box; nested pockets — 2026-08-21
 
 Bridget: "the header just feels so tiny." The art box was 300×104 on a 1366px page. Two fixes,

@@ -1772,6 +1772,17 @@ async function main() {
   check("an image in a pocket nested inside the header does not warn image_overlaps_region", !pocket.warningDetails.some((w) => w.code === "image_overlaps_region"), JSON.stringify(pocket.warnings));
   const spill = composeAiSvg([1024, 1366], [{ region: "accent", images: [{ href: "media/ai/x.png", width: 140, height: 90, x: -300, y: 230 }] }], pocketTpl);
   check("a pocket image pushed into a sibling region still warns image_overlaps_region", spill.warningDetails.some((w) => w.code === "image_overlaps_region" && w.message.includes('"todo"')), JSON.stringify(spill.warnings));
+  console.log("\nartBrief on read_page; image_underfills_box on a wrong-aspect fit");
+  const briefHdr = (await readPage(root, hdrPage)).regions.find((r) => r.name === "header")!;
+  check("header artBrief describes the art slot box + aspect", briefHdr.artBrief?.box.width === briefHdr.artSlot!.width && briefHdr.artBrief?.aspect === `${(briefHdr.artSlot!.width / briefHdr.artSlot!.height).toFixed(2)}:1`, JSON.stringify(briefHdr.artBrief));
+  check("artBrief.generateAt is 2× the box capped at 1536 on the long side, same aspect", briefHdr.artBrief!.generateAt.width === Math.min(1536, briefHdr.artSlot!.width * 2) && Math.abs(briefHdr.artBrief!.generateAt.width / briefHdr.artBrief!.generateAt.height - briefHdr.artSlot!.width / briefHdr.artSlot!.height) < 0.02, JSON.stringify(briefHdr.artBrief));
+  check("artBrief.place names fit:contain and the art slot", /fit:"contain"/.test(briefHdr.artBrief!.place) && /art slot/.test(briefHdr.artBrief!.place), briefHdr.artBrief!.place);
+  const squareSrc = encodePng({ width: 40, height: 40, pixels: (() => { const a = new Uint8Array(40 * 40 * 4).fill(180); for (let i = 3; i < a.length; i += 4) a[i] = 255; return a; })() }).toString("base64");
+  const underfill = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: squareSrc, format: "png", fit: "contain" }] }] });
+  check("a square source contained in the wide art box info-flags image_underfills_box with the box aspect", underfill.warningDetails.some((w) => w.code === "image_underfills_box" && w.severity === "info" && w.message.includes(briefHdr.artBrief!.aspect)), JSON.stringify(underfill.warnings));
+  const goodFill = await writeUnderlay(root, hdrPage, { status: "ready", dryRun: true, regions: [{ region: "header", images: [{ data: encodePng({ width: briefHdr.artBrief!.generateAt.width / 4, height: Math.round(briefHdr.artBrief!.generateAt.height / 4), pixels: (() => { const n = (briefHdr.artBrief!.generateAt.width / 4) * Math.round(briefHdr.artBrief!.generateAt.height / 4) * 4; const a = new Uint8Array(n).fill(180); for (let i = 3; i < a.length; i += 4) a[i] = 255; return a; })() }).toString("base64"), format: "png", fit: "contain" }] }] });
+  check("art generated at the brief's aspect fills the box — no underfill warning", !goodFill.warningDetails.some((w) => w.code === "image_underfills_box"), JSON.stringify(goodFill.warnings));
+
 
 
 

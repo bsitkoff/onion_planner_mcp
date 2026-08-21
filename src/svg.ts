@@ -1101,6 +1101,39 @@ export function imageBox(
   return { x: 0, y: 0, width: region.width, height: region.height };
 }
 
+/**
+ * What to GENERATE for a region's image box, so an orchestrator asks its image model for
+ * the right shape the first time instead of discovering on device that a 2:1 banner in a
+ * 2.8:1 box is height-limited to 65% of the width (the "still so tiny" failure). Surfaced
+ * on `read_page` as `artBrief`; null for a region with no usable box.
+ */
+export function artBrief(region: Region): {
+  box: { width: number; height: number };
+  aspect: string;
+  generateAt: { width: number; height: number };
+  place: string;
+} | null {
+  const box = imageBox(region);
+  if (box.width === null || box.height === null || box.width <= 0 || box.height <= 0) return null;
+  const ratio = box.width / box.height;
+  const aspect = ratio >= 1 ? `${ratio.toFixed(2)}:1` : `1:${(1 / ratio).toFixed(2)}`;
+  // 2× the box for crisp rendering, capped at the 1536px guideline on the long side.
+  const long = Math.min(1536, Math.round(Math.max(box.width, box.height) * 2));
+  const generateAt =
+    ratio >= 1
+      ? { width: long, height: Math.round(long / ratio) }
+      : { width: Math.round(long * ratio), height: long };
+  return {
+    box: { width: box.width, height: box.height },
+    aspect,
+    generateAt,
+    place:
+      `generate at ${aspect} (≈${generateAt.width}×${generateAt.height}px, subject filling the frame, ` +
+      `no padding), then images[].fit:"contain"${region.artSlot ? " — it lands in the art slot" : ""}; ` +
+      `a different aspect is contained (never stretched) and will leave whitespace on one axis.`,
+  };
+}
+
 /** An axis-aligned rectangle, for overlap tests. */
 interface Bbox {
   x: number;
@@ -1587,6 +1620,29 @@ export function composeAiSvg(
           "info",
           region.name,
         );
+      }
+      // A `fit` image whose source aspect fights the box fills one axis and leaves the other
+      // mostly empty — the art "reads tiny" though it was sized correctly. Say what to
+      // generate instead (the box's own aspect) rather than let it ship quietly.
+      if (img.fit !== undefined && (img.scale ?? 1) <= 1) {
+        const fb = imageBox(region);
+        if (fb.width !== null && fb.height !== null && fb.width > 0 && fb.height > 0) {
+          const fillW = img.width / fb.width;
+          const fillH = img.height / fb.height;
+          if (Math.min(fillW, fillH) < 0.75) {
+            const brief = artBrief(region);
+            warn(
+              "image_underfills_box",
+              `region "${region.name}": image (${img.width}×${img.height}) fills only ` +
+                `${Math.round(Math.min(fillW, fillH) * 100)}% of the ${fb.width}×${fb.height} box's ` +
+                `${fillW < fillH ? "width" : "height"} — its aspect doesn't match the box. ` +
+                `Generate art at ${brief?.aspect ?? "the box aspect"} (≈${brief?.generateAt.width}×${brief?.generateAt.height}px) ` +
+                `so it fills the box, or add \`scale\` to let it overflow.`,
+              "info",
+              region.name,
+            );
+          }
+        }
       }
       // Absolute placement (region origin + local offset) for page/cross-region checks.
       const absX = region.x + x;

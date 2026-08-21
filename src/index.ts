@@ -182,6 +182,10 @@ server.tool(
     "image placement (corner/fit) and sizing target it, not the full region box (address it " +
     "through its parent region — it is not a region name), `gutterX` — where a ruled region's " +
     "rules start (the printed hour-label gutter; default x never sits left of it), " +
+    "`artBrief` — WHAT TO GENERATE for this region's image box: {box, aspect, generateAt " +
+    "{width,height} px, place} — read it BEFORE asking an image model for art so the banner " +
+    "is made at the box's own aspect and fills it (a 2:1 banner in a 2.8:1 box is " +
+    "height-limited and reads tiny; `image_underfills_box` tells you when that happened), " +
     "`imageFloor` — the {width,height} a centered image below trips `image_small_for_region` " +
     "in this region (245×245 when `intent` marks it interactive, e.g. a habit tracker the " +
     "user pencil-checks; else 35% of the box, or of the `artSlot` when it has one), so you " +

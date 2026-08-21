@@ -21,6 +21,7 @@ import {
   emptySvg,
   imageDims,
   imageSizeFloor,
+  artBrief,
   imageBox,
   scanRawSvgElements,
   scanRawSvgDataUriImages,
@@ -890,6 +891,13 @@ function pageSize(manifest: Manifest, templateSvg: string | null): [number, numb
 export type RegionRead = Region & {
   labelFilled: boolean | null;
   /**
+   * What to generate for this region's image box (the art slot when it has one): the box,
+   * its aspect, a pixel size to ask the image model for, and the one-line placement recipe.
+   * null when the region has no usable box. Read it BEFORE generating art (#47, and the
+   * "still so tiny" 2:1-banner-in-a-2.8:1-box failure).
+   */
+  artBrief: ReturnType<typeof artBrief>;
+  /**
    * The size `image_small_for_region` warns a centered image below in this region —
    * computed by the exact `imageSizeFloor` a write later checks against, so the
    * advertised and enforced floors can't drift (same pattern as `PageRead.theme`'s
@@ -981,6 +989,7 @@ export async function readPage(
     ...r,
     labelFilled: r.labelSlot === null ? null : /letter-spacing="0\.1em"/.test(aiGroups.get(r.name) ?? ""),
     imageFloor: imageSizeFloor(r),
+    artBrief: artBrief(r),
   }));
   return {
     page: rel,

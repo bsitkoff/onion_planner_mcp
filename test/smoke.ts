@@ -1389,22 +1389,54 @@ async function main() {
     JSON.stringify(scheduleAfterLabel?.labelFilled),
   );
 
-  console.log("\nprinted-checkbox templates warn on a redundant checkbox marker");
+  console.log("\n#44: no shipped template prints checkboxes — a marker never warns printed_checkboxes");
   const todoPage = "Shared/Daily/todo-day";
   await createPage(root, { chapter: "Daily", name: "todo-day", title: "Lists", template: "todo-minimal" });
   const todoRead = await readPage(root, todoPage);
   const listRegion = todoRead.regions.find((r) => r.name.startsWith("list")) ?? todoRead.regions.find((r) => r.name === "todo");
   check("todo template exposes a list region", !!listRegion, JSON.stringify(todoRead.regions.map((r) => r.name)));
-  const doubleBox = await writeUnderlay(root, todoPage, {
+  // Verified against the catalogue itself, not a template-id list: no to-do/list region of
+  // any shipped template draws a checkbox square (a small <rect> beside its rules).
+  const catalogue = (await fs.readdir(path.join(root, "Templates"), { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
+  let printedBoxTemplates: string[] = [];
+  for (const id of catalogue) {
+    const svgText = await fs.readFile(path.join(root, "Templates", id, "template.svg"), "utf8");
+    for (const r of parseRegions(svgText, id)) {
+      if (r.name !== "todo" && !r.name.startsWith("list")) continue;
+      const grp = svgText.match(new RegExp(`<g\\b[^>]*id="${r.id}"[\\s\\S]*?</g>`))?.[0] ?? "";
+      const smallRects = [...grp.matchAll(/<rect\b[^>]*width="(\d+(?:\.\d+)?)"[^>]*height="(\d+(?:\.\d+)?)"/g)].filter((m) => Number(m[1]) <= 30 && Number(m[2]) <= 30);
+      if (smallRects.length > 0) printedBoxTemplates.push(`${id}/${r.name}`);
+    }
+  }
+  check("catalogue audit: no shipped to-do/list region prints checkbox squares", printedBoxTemplates.length === 0, JSON.stringify(printedBoxTemplates));
+  const markerOnTodo = await writeUnderlay(root, todoPage, {
     status: "ready", dryRun: true,
     regions: [{ region: listRegion!.name, lines: [{ text: "Buy stamps", marker: "checkbox" }] }],
   });
-  check("checkbox marker on a printed-box template warns printed_checkboxes", doubleBox.warningDetails.some((w) => w.code === "printed_checkboxes"), JSON.stringify(doubleBox.warningDetails));
-  const textOnly = await writeUnderlay(root, todoPage, {
-    status: "ready", dryRun: true,
-    regions: [{ region: listRegion!.name, lines: [{ text: "Buy stamps" }] }],
-  });
-  check("text-only lines on the same template do not warn", !textOnly.warningDetails.some((w) => w.code === "printed_checkboxes"), JSON.stringify(textOnly.warningDetails));
+  check("a checkbox marker on todo-minimal draws a box and does not warn", !markerOnTodo.warningDetails.some((w) => w.code === "printed_checkboxes") && /<rect\b[^>]*rx="2"/.test(regionGroup(markerOnTodo.aiSvg, listRegion!.name) ?? ""), JSON.stringify(markerOnTodo.warningDetails));
+  const cozyTodo = parseRegions(cozyScheduleTemplateSvg, "daily-cozy");
+  const cozyMarker = composeAiSvg([1024, 1366], [{ region: "todo", lines: [{ text: "Buy stamps", marker: "checkbox" }] }], cozyTodo, undefined, "daily-cozy");
+  check("a checkbox marker on daily-cozy (formerly flagged) no longer warns", !cozyMarker.warningDetails.some((w) => w.code === "printed_checkboxes"), JSON.stringify(cozyMarker.warnings));
+
+  console.log("\n#43: minting a YYYY-MM chapter stamps year/month (no title); order is chronological");
+  await createPage(root, { chapter: "2026-09", name: "2026-09-15", template: "daily-minimal" });
+  const m43FolderFile = path.join(root, "Shared", "2026-09", ".folder.json");
+  let m43Folder = JSON.parse(await fs.readFile(m43FolderFile, "utf8"));
+  check("a freshly minted month chapter carries year + month", m43Folder.year === 2026 && m43Folder.month === 9, JSON.stringify(m43Folder));
+  check("no placeholder title is written (the app fills \"September 2026\")", !("title" in m43Folder), JSON.stringify(m43Folder));
+  await createPage(root, { chapter: "2026-09", name: "2026-09-03", template: "daily-minimal" });
+  await createPage(root, { chapter: "2026-09", name: "sketch-sept", template: "blank-minimal" });
+  await createPage(root, { chapter: "2026-09", name: "2026-09-08", template: "daily-minimal" });
+  m43Folder = JSON.parse(await fs.readFile(m43FolderFile, "utf8"));
+  check("a back-filled earlier day is inserted before later days, not appended", JSON.stringify(m43Folder.order) === JSON.stringify(["2026-09-03", "2026-09-08", "2026-09-15", "sketch-sept"]), JSON.stringify(m43Folder.order));
+  // An existing config is merged into, never clobbered, and a present pair is kept.
+  await fs.writeFile(m43FolderFile, JSON.stringify({ year: 2026, month: 9, title: "September 2026", theme: { accent: "#7B5EA7" }, order: ["2026-09-03"] }));
+  await createPage(root, { chapter: "2026-09", name: "2026-09-01", template: "daily-minimal" });
+  m43Folder = JSON.parse(await fs.readFile(m43FolderFile, "utf8"));
+  check("existing .folder.json keys (title, theme) survive a create", m43Folder.title === "September 2026" && m43Folder.theme?.accent === "#7B5EA7" && m43Folder.year === 2026, JSON.stringify(m43Folder));
+  check("the new day lands first in chronological order", m43Folder.order[0] === "2026-09-01", JSON.stringify(m43Folder.order));
+  const m43DailyFolder = JSON.parse(await fs.readFile(path.join(root, "Shared", "Daily", ".folder.json"), "utf8"));
+  check("a non-month chapter is unchanged: title = chapter name, no year/month", m43DailyFolder.title === "Daily" && !("year" in m43DailyFolder), JSON.stringify(m43DailyFolder));
 
   console.log("\nread_ink strips bulky data-stroke streams by default");
   const inkSvgDoc =

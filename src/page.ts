@@ -1474,15 +1474,44 @@ export async function createPage(
     throw e;
   }
 
-  // Append to the chapter's page order. The page already exists at this point, so a
-  // corrupt .folder.json downgrades to a warning — not an error for a created page.
+  // Register the page in the chapter's `.folder.json`. The page already exists at this
+  // point, so a corrupt .folder.json downgrades to a warning — not an error for a created
+  // page. Merge into an existing config; never clobber keys we don't own.
   const warnings: string[] = [];
   try {
     const folderFile = path.join(chapterAbs, ".folder.json");
     const existing = await readIfExists(folderFile);
-    const folder = existing ? (JSON.parse(existing) as any) : { title: chapterName };
+    const folder = existing ? (JSON.parse(existing) as any) : {};
+    // A chapter named like a calendar month (`YYYY-MM`) IS a month chapter only if its
+    // config carries `year` + `month` — month-ness is metadata, never the folder name
+    // (app FORMAT.md §4, onionskin#215 / #43). When this server mints such a chapter
+    // (create-on-write reaching next month before the app has), stamp the pair. Leave
+    // `title` alone: a non-empty title blocks the app from filling "August 2026".
+    const monthMatch = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(chapterName);
+    if (monthMatch) {
+      if (typeof folder.year !== "number") folder.year = Number(monthMatch[1]);
+      if (typeof folder.month !== "number") folder.month = Number(monthMatch[2]);
+    } else if (!existing) {
+      folder.title = chapterName;
+    }
     folder.order = Array.isArray(folder.order) ? folder.order : [];
-    if (!folder.order.includes(opts.name)) folder.order.push(opts.name);
+    if (!folder.order.includes(opts.name)) {
+      // Insert chronologically among dated siblings rather than appending: a calendar
+      // chapter reads oldest-first, and a back-filled earlier day must not land after
+      // later ones. Non-date names keep their positions; a page with no date, or a
+      // chapter with no dated sibling yet, appends.
+      const dateOf = (n: string) => (/^\d{4}-\d{2}-\d{2}$/.test(n) ? n : null);
+      const mine = dateOf(opts.name);
+      let at = folder.order.length;
+      if (mine !== null) {
+        const firstLater = folder.order.findIndex((n: string) => {
+          const d = dateOf(n);
+          return d !== null && d > mine;
+        });
+        if (firstLater !== -1) at = firstLater;
+      }
+      folder.order.splice(at, 0, opts.name);
+    }
     await atomicWrite(folderFile, JSON.stringify(folder, null, 2) + "\n");
   } catch (e: any) {
     warnings.push(

@@ -7,6 +7,29 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: minted month chapters carry `year`/`month`; spec re-verified (hour gutter, no printed checkboxes) — 2026-08-20
+
+[#43](https://github.com/bsitkoff/onion_planner_mcp/issues/43),
+[#44](https://github.com/bsitkoff/onion_planner_mcp/issues/44). On Aug 1 create-on-write reached
+`Shared/2026-08` before the app had, leaving a `.folder.json` with no `year`/`month` — month-ness
+is metadata, never the folder name, so the app saw a plain chapter (no overview, no day
+materialization). And `SHARED-VISUAL-SPEC.md` §1/§2 still carried 2026-06 "Verified" claims that
+the catalogue had since inverted.
+
+- **`createPage` stamps `year` + `month`** when it mints a `YYYY-MM` chapter, merging into any
+  existing config (other keys preserved) and writing **no placeholder `title`** — a non-empty
+  title blocks the app from filling "September 2026". Non-month chapters are unchanged.
+- **`order` is inserted chronologically** among `YYYY-MM-DD` siblings (a back-filled earlier day
+  no longer lands after later ones); non-date names keep their positions.
+- **Spec re-verified 2026-08-20 against catalogue 14:** hour labels are per style (cozy/colorful
+  schedule + agenda print a 34px IBM Plex Mono gutter; minimal none) and **no shipped template
+  prints checkbox squares** — so the template-id-keyed `printed_checkboxes` warning
+  (`PRINTS_OWN_CHECKBOXES_RE`) is retired: authors always draw `marker: "checkbox"`. A smoke
+  check now audits the catalogue for printed boxes instead of trusting a list. The same facts are
+  corrected in `ON-DEVICE-UNDERLAY.md` and `MCP-INTEGRATION.md`; CLAUDE.md's renderer gotcha is
+  trued up to the app's shipped `<tspan x/y/dy>` support and `<g>`-inherited
+  `text-anchor`/`font-weight` (onionskin#211/#212).
+
 ## Fix: sub-hour times interpolate, row pile-ups warn, tagged `art-header` + hour gutter — 2026-08-20
 
 [#32](https://github.com/bsitkoff/onion_planner_mcp/issues/32),

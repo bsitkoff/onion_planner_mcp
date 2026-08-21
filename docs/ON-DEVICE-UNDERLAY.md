@@ -61,6 +61,7 @@ layout. That visual spec, not a shared codebase, is the contract between the two
 resolved 2026-06) and its agreed parts (§0–4 + markers) are mirrored into
 `../onionskin/design/FORMAT.md`. The on-device composer matches it on its subset (schedule
 agenda, to-do text, note band, monthly markers) and draws **no banners** (§5 is MCP-only). Key
-resolved points for this author: the chapter's own ink palette, lifted for the underlay (gold is retired); schedule is agenda-style (no
-printed hour labels); write to-do **text only** where the template prints its own checkboxes;
-render **one quiet default style**, not a per-day theme.
+resolved points for this author: the chapter's own ink palette, lifted for the underlay (gold is retired); schedule is agenda-style
+(the cozy/colorful templates print an hour gutter — inset past `gutterX`; minimal prints none);
+no shipped template prints checkboxes, so to-do lines always draw their own marker (both claims
+re-verified 2026-08-20, issue #44); render **one quiet default style**, not a per-day theme.

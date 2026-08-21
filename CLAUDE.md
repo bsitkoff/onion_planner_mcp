@@ -240,9 +240,13 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
 - **The app renderer is a custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit):
   it handles `svg, g, rect, line, path, text, image, circle, ellipse, polyline, polygon`
   (`RAW_SVG_ALLOWED_ELEMENTS` in `src/svg.ts` is the source of truth) and silently drops
-  anything else — notably `<tspan>`, which is why multi-line text is stacked `<text>`.
-  `text-anchor`/`font-weight` do **not** inherit from a wrapping `<g>` (app
-  [#211](https://github.com/bsitkoff/onionskin/issues/211)) — set them per `<text>`.
+  anything else. Since app build 121 (onionskin#212) a `<tspan>` carrying `x`/`y`/`dy` starts a
+  new line inside one `<text>` (no per-run font/fill — a bare tspan still flattens into the
+  parent run with a space); this server's structured output keeps emitting stacked `<text>`
+  per line, and its raw-svg validator's tspan acceptance is tracked in #42. `font-family`,
+  `font-size`, `font-weight`, `text-anchor` and `fill` now **inherit from a wrapping `<g>`**
+  (onionskin#211 fixed; a value on the `<text>` wins) — older builds dropped the anchor/weight,
+  so per-`<text>` attributes remain the safest form.
   `<image href>` resolves **only as a page-relative file path** (no data-URIs) and the
   **AI layer needs a non-nil `imageProvider`** (an app change) for images to appear at all.
   When emitting raw `svg`, stay within that element set.

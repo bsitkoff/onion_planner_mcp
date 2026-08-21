@@ -1263,14 +1263,6 @@ export interface ComposeResult {
 }
 
 /**
- * Templates that print their own to-do checkboxes (the locked visual rule in
- * `docs/SHARED-VISUAL-SPEC.md` §2): on these, an authored `marker: "checkbox"`
- * draws a second box beside the printed one. Matched on the template id — a
- * heuristic until printed-box detection reads the geometry itself.
- */
-const PRINTS_OWN_CHECKBOXES_RE = /^todo-|^daily(-weekend)?-(cozy|colorful)$/;
-
-/**
  * Compose a complete ai.svg document from structured region input, positioning
  * each line using the parsed region geometry. Throws if a region name is unknown.
  * Returns the SVG plus non-fatal `warnings` (estimated overflow, more lines than
@@ -1539,23 +1531,9 @@ export function composeAiSvg(
           );
         }
       }
-      // The locked visual rule: where the template prints its own checkboxes, the
-      // author writes text only — a `marker: "checkbox"` would draw a second box.
-      if (
-        templateName &&
-        PRINTS_OWN_CHECKBOXES_RE.test(templateName) &&
-        (region.name === "todo" || region.name.startsWith("list")) &&
-        lines.some((l) => l.marker === "checkbox")
-      ) {
-        warn(
-          "printed_checkboxes",
-          `region "${region.name}": template "${templateName}" prints its own ` +
-            `checkboxes — write text only (drop \`marker: "checkbox"\`) to avoid ` +
-            `double boxes.`,
-          "warning",
-          region.name,
-        );
-      }
+      // (No shipped template prints its own checkboxes — re-verified 2026-08-20 against
+      // catalogue 14, #44 — so the old `printed_checkboxes` warning, keyed on template id,
+      // is retired: authors always draw `marker: "checkbox"` on to-do lines.)
       // Body text uses the theme's ink; the ainotes box uses its serif colour
       // (quote/affirmation are legacy aliases for it).
       const baseFill =

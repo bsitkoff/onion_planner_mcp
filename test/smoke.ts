@@ -1418,6 +1418,78 @@ async function main() {
   const cozyMarker = composeAiSvg([1024, 1366], [{ region: "todo", lines: [{ text: "Buy stamps", marker: "checkbox" }] }], cozyTodo, undefined, "daily-cozy");
   check("a checkbox marker on daily-cozy (formerly flagged) no longer warns", !cozyMarker.warningDetails.some((w) => w.code === "printed_checkboxes"), JSON.stringify(cozyMarker.warnings));
 
+  console.log("\n#33 align; #42 positioned <tspan>; #29 typography warnings");
+  const alignRead = await readPage(root, daily);
+  const anRegion = alignRead.regions.find((r) => r.name === "ainotes")!;
+  const aligned = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [
+      { text: "Centered", align: "center", wrap: false },
+      { text: "Flush right", align: "right", wrap: false },
+      { text: "Plain left", wrap: false },
+      { text: "Marked", align: "right", marker: "checkbox", wrap: false },
+    ] }],
+  });
+  const alignGroup = regionGroup(aligned.aiSvg, "ainotes") ?? "";
+  const centerEl = alignGroup.match(/<text[^>]*>Centered<\/text>/)?.[0] ?? "";
+  const rightEl = alignGroup.match(/<text[^>]*>Flush right<\/text>/)?.[0] ?? "";
+  const leftEl = alignGroup.match(/<text[^>]*>Plain left<\/text>/)?.[0] ?? "";
+  check("align center emits text-anchor=middle at the box centre", centerEl.includes('text-anchor="middle"') && centerEl.includes(`x="${Math.round(anRegion.width! / 2)}"`), centerEl);
+  check("align right emits text-anchor=end at the right inset", rightEl.includes('text-anchor="end"') && Number(rightEl.match(/ x="(\d+)"/)?.[1]) === anRegion.width! - 24, rightEl);
+  check("a left line carries no text-anchor (unchanged output)", !leftEl.includes("text-anchor"), leftEl);
+  check("a marker on an aligned line is skipped with an info warning", aligned.warningDetails.some((w) => w.code === "align_marker_ignored" && w.severity === "info"), JSON.stringify(aligned.warnings));
+  check("aligned short lines do not trip text_overflow", !aligned.warningDetails.some((w) => w.code === "text_overflow"), JSON.stringify(aligned.warnings));
+  const wideRight = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: "A right-aligned line far too long for this two-hundred-and-eighty-nine pixel box", align: "right", wrap: false }] }],
+  });
+  check("a right-aligned overlong line warns text_overflow (spills left)", wideRight.warningDetails.some((w) => w.code === "text_overflow"), JSON.stringify(wideRight.warnings));
+  const wrapCenter = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: "A centred paragraph that is long enough to wrap onto several lines inside the notes box", align: "center" }] }],
+  });
+  const wrapCenterEls = [...(regionGroup(wrapCenter.aiSvg, "ainotes") ?? "").matchAll(/<text[^>]*text-anchor="middle"[^>]*>/g)];
+  check("wrapped continuations of a centred line share the anchor", wrapCenterEls.length > 1, String(wrapCenterEls.length));
+  const alignedHeading = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", lines: [{ text: "Tomorrow", heading: true, align: "center" }, { text: "Pack bag" }] }],
+  });
+  check("an aligned heading composes (pill or anchored label)", (regionGroup(alignedHeading.aiSvg, "ainotes") ?? "").includes(">Tomorrow</text>"), JSON.stringify(alignedHeading.warnings));
+  const unbounded = composeAiSvg([1024, 1366], [{ region: "ruled", lines: [{ text: "x", align: "right" }] }], parseRegions('<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><g id="region-ruled" data-region="ruled" transform="translate(0,0)"><line x1="0" y1="40" x2="200" y2="40"/></g></svg>'));
+  check("align on a region with no width degrades to left with an info warning", unbounded.warningDetails.some((w) => w.code === "align_unbounded_region") && !unbounded.svg.includes("text-anchor"), JSON.stringify(unbounded.warnings));
+  // #42 — positioned <tspan> is accepted; styled / bare tspans warn.
+  const tspanOk = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", svg: '<text x="24" y="30" font-family="Mulish" font-size="15" fill="#3b7bad">First line<tspan x="24" dy="20">second line</tspan><tspan x="24" dy="20">third</tspan></text>' }],
+  });
+  check("positioned <tspan x/dy> passes the raw-svg validator clean", !tspanOk.warningDetails.some((w) => w.code.startsWith("raw_svg_")), JSON.stringify(tspanOk.warnings));
+  const tspanStyled = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "ainotes", svg: '<text x="24" y="30">A<tspan x="24" dy="20" fill="#ff0000" font-weight="800">B</tspan></text>' }],
+  });
+  check("a tspan with fill/font-weight warns raw_svg_tspan_attrs (naming them)", tspanStyled.warningDetails.some((w) => w.code === "raw_svg_tspan_attrs" && w.message.includes("fill") && w.message.includes("font-weight")), JSON.stringify(tspanStyled.warnings));
+  const tspanBare = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    svg: '<svg viewBox="0 0 1024 1366" xmlns="http://www.w3.org/2000/svg"><text x="100" y="100">A<tspan>B</tspan></text></svg>',
+  });
+  check("a bare <tspan> (top-level raw svg) is info-flagged as unpositioned, not unsupported", tspanBare.warningDetails.some((w) => w.code === "raw_svg_tspan_unpositioned" && w.severity === "info") && !tspanBare.warningDetails.some((w) => w.code === "raw_svg_unsupported_element"), JSON.stringify(tspanBare.warningDetails));
+  // #29 — body text ≥13px, handwriting faces reserved for the user's ink.
+  const typo = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [
+      { region: "todo", lines: [{ text: "tiny", size: 11 }, { text: "scrawl", font: "Caveat" }, { text: "Label", heading: true, size: 11, font: "Caveat" }] },
+      { region: "header", lines: [{ text: "Thursday", font: "Caveat" }] },
+    ],
+  });
+  check("body text under 13px warns text_too_small", typo.warningDetails.filter((w) => w.code === "text_too_small").length === 1, JSON.stringify(typo.warnings));
+  check("Caveat body copy in todo is info-flagged handwriting_body_font (once per region)", typo.warningDetails.filter((w) => w.code === "handwriting_body_font").length === 1 && typo.warningDetails.find((w) => w.code === "handwriting_body_font")?.region === "todo", JSON.stringify(typo.warnings));
+  check("a heading, and Caveat in the header, are exempt", !typo.warningDetails.some((w) => w.code === "handwriting_body_font" && w.region === "header"), JSON.stringify(typo.warnings));
+  const cleanTypo = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "todo", lines: [{ text: "Buy stamps", marker: "checkbox" }] }],
+  });
+  check("default Mulish 15 body text trips neither typography warning", !cleanTypo.warningDetails.some((w) => w.code === "text_too_small" || w.code === "handwriting_body_font"), JSON.stringify(cleanTypo.warnings));
+
   console.log("\n#43: minting a YYYY-MM chapter stamps year/month (no title); order is chronological");
   await createPage(root, { chapter: "2026-09", name: "2026-09-15", template: "daily-minimal" });
   const m43FolderFile = path.join(root, "Shared", "2026-09", ".folder.json");

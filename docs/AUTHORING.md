@@ -217,6 +217,32 @@ past the grid, which would otherwise fold onto the last rule), and `text_below_r
 line whose baseline falls below the region box). Treat any of these as "re-layout", not noise —
 an unattended write has no human to notice the pile-up.
 
+### Font roles (#29)
+
+AI underlay copy is **clean UI type**; the handwriting faces belong to the user's ink layer.
+The defaults already do this — change them deliberately, not by habit:
+
+| Role | Face | Notes |
+|---|---|---|
+| Body copy — schedule, to-dos, `focus`, list items | **Mulish** 15 / 600 | the per-region default |
+| `ainotes` prose | **Newsreader** 15 / 500 | the serif AI voice |
+| Hour gutter / monospace data | IBM Plex Mono | printed by cozy/colorful templates |
+| Headings / banner labels | Mulish (or the theme's heading face) | 700–800 |
+| `Caveat` / `Fredoka` | **opt-in only** — `fontPersonality: "handwritten"` or a per-line `font` | reads as handwriting; body copy set in it is info-flagged `handwriting_body_font` |
+
+**Never below 13px** for body text (`text_too_small` warns; headings are exempt). The font set
+is closed — `Mulish`, `Newsreader`, `IBM Plex Mono`, `Caveat`, `Fredoka`, `Phosphor` — so a
+"Shantell Sans affirmation" isn't available; use Newsreader in `ainotes` for warmth instead.
+
+### Alignment (#33)
+
+A line's `align: "left" | "center" | "right"` anchors it against the region box from the
+template geometry — you never measure text. `center` emits `text-anchor="middle"` on the box's
+horizontal centre, `right` emits `text-anchor="end"` at the right inset; wrapped continuations
+share the anchor and a `heading` pill shifts with it. A leading `marker`/`icon` is only drawn
+on a left-aligned line (`align_marker_ignored`, info). Typical uses: a right-aligned date in the
+header, a centred label under a sticker, a right-aligned total.
+
 ## Use the placement the server already does for you
 
 - **Schedule by clock time, not coordinates.** Give each line a `time: "HH:MM"`; the server
@@ -288,33 +314,39 @@ silently dropped on device, so `write_underlay` warns `raw_svg_unsupported_eleme
 
 | Accepted | Rejected (warns) |
 |---|---|
-| `svg` `g` `rect` `line` `path` `text` `image` `circle` `ellipse` `polyline` `polygon` | everything else — notably `tspan`, `foreignObject`, `use`, `defs`, `style`, `clipPath`, `mask`, `filter`, `textPath` |
+| `svg` `g` `rect` `line` `path` `text` `tspan` `image` `circle` `ellipse` `polyline` `polygon` | everything else — notably `foreignObject`, `use`, `defs`, `style`, `clipPath`, `mask`, `filter`, `textPath` |
 
-**Attributes** — the split that costs the most trial-and-error is *what inherits*. The
-renderer resolves style per leaf element, not by cascading from ancestors:
+**Attributes — what inherits.** Since app build 121 the renderer cascades these five from
+a wrapping `<g>` (a value on the `<text>` wins): `font-family`, `font-size`, `font-weight`,
+`text-anchor`, `fill` ([onionskin#211](https://github.com/bsitkoff/onionskin/issues/211),
+fixed). Older builds dropped `text-anchor`/`font-weight` set only on the `<g>` (a centred
+block silently rendered left-aligned), so per-`<text>` attributes remain the safest form —
+and are what the structured `align` option emits.
 
-| Attribute | On `<text>` | On a wrapping `<g>` |
-|---|---|---|
-| `fill`, `fill-opacity`, `font-family`, `font-size` | works | **inherits** |
-| `text-anchor` (`middle` / `end`) | works | **dropped** — put it on each `<text>` |
-| `font-weight` (`400`–`800`) | works | **dropped** — put it on each `<text>` |
+**`<tspan>` — one multi-line `<text>` object.** Since build 121
+([onionskin#212](https://github.com/bsitkoff/onionskin/issues/212)) a `<tspan>` carrying
+`x`, `y` or `dy` starts a new line *inside one `<text>`*, and the whole block is **one**
+selectable/movable object in the app's underlay editor:
 
-The two "dropped" rows are app bug
-[onionskin#211](https://github.com/bsitkoff/onionskin/issues/211), still open as of
-2026-07-24 — a `text-anchor` set only on the `<g>` silently renders left-aligned, which can
-push centered content off-page. Set both per `<text>` until that lands.
+```xml
+<text x="24" y="30" font-family="Mulish" font-size="15" fill="#3B7BAD">First line
+  <tspan x="24" dy="20">second line</tspan>
+  <tspan x="24" dy="20">third</tspan></text>
+```
 
-Two more things worth knowing before you design around them:
+Two app-side limits, both surfaced by the validator:
 
-- **`<tspan>` is not a positioned element.** Multi-line text is authored as *stacked
-  `<text>` elements*, one per line — which is exactly what the structured `lines` input
-  (and its `wrap`) already emits. The validator rejects `<tspan>` outright.
-- **`<g>` is file-level grouping only — not a selectable object.** Wrapping several lines in
-  a `<g>` does *not* make them one movable unit in the app's editor: `AIEditModel`
-  hit-tests and selects at the leaf level (text or image), descending through groups. There
-  is currently no way to author one multi-line text object
-  ([onionskin#212](https://github.com/bsitkoff/onionskin/issues/212)).
-- `xml:space="preserve"` passes the validator but has no effect on the renderer.
+- **No per-line styling.** A tspan's `font-*`, `fill`, `text-anchor`, `dx`, `rotate` are
+  ignored — the `<text>`'s own attributes apply to every line (`raw_svg_tspan_attrs`).
+- **A bare `<tspan>` (no `x`/`y`/`dy`) is not a line break.** Its characters flatten into
+  the parent run with one inserted space (`raw_svg_tspan_unpositioned`, info).
+- Pages rendered by app builds **older than 121** flatten positioned tspans into one
+  space-joined line — no runtime gymnastics here, just know it.
+- A hand-edit in the app's "Edit underlay" collapses the runs to flat embedded-`\n` text.
+
+The structured `lines` input still emits stacked `<text>` per line (one per wrapped segment),
+which renders identically on every build; reach for tspans only when you want the block to be
+one object in the editor. `xml:space="preserve"` passes the validator but has no effect.
 
 ## Images (stickers / art)
 

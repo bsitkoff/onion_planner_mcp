@@ -23,6 +23,7 @@ import {
   imageBox,
   scanRawSvgElements,
   scanRawSvgDataUriImages,
+  scanRawSvgTspans,
   extractRegionGroups,
   type RegionInput,
   type ImageInput,
@@ -1011,6 +1012,25 @@ function rawSvgWarnings(svg: string, size: [number, number]): {
       "raw_svg_unsupported_element",
       `raw svg uses unsupported element(s) for the app renderer: ${unsupported.join(", ")}.`,
     );
+  }
+
+  const tspans = scanRawSvgTspans(svg);
+  if (tspans.styled.length > 0) {
+    warn(
+      "raw_svg_tspan_attrs",
+      `raw svg <tspan> carries ${tspans.styled.join(", ")} — the app honours only x/y/dy on ` +
+        `a tspan; per-line font/fill/anchor is ignored (the <text>'s own attributes apply ` +
+        `to every line).`,
+    );
+  }
+  if (tspans.unpositioned > 0) {
+    warningDetails.push({
+      code: "raw_svg_tspan_unpositioned",
+      severity: "info",
+      message:
+        `raw svg has ${tspans.unpositioned} <tspan> without x/y/dy — not a line break; its ` +
+        `text flattens into the parent run with a space.`,
+    });
   }
 
   const vb = parseViewBox(svg);

@@ -242,8 +242,12 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
   (`RAW_SVG_ALLOWED_ELEMENTS` in `src/svg.ts` is the source of truth) and silently drops
   anything else. Since app build 121 (onionskin#212) a `<tspan>` carrying `x`/`y`/`dy` starts a
   new line inside one `<text>` (no per-run font/fill — a bare tspan still flattens into the
-  parent run with a space); this server's structured output keeps emitting stacked `<text>`
-  per line, and its raw-svg validator's tspan acceptance is tracked in #42. `font-family`,
+  parent run with a space); the raw-svg validator accepts `tspan` and warns
+  `raw_svg_tspan_attrs` / `raw_svg_tspan_unpositioned` for those two limits (#42), while
+  structured output keeps emitting stacked `<text>` per line (renders on every build).
+  Structured lines take `align: left|center|right` (#33), emitted as `text-anchor` per
+  `<text>`. Body copy under 13px warns `text_too_small`; Caveat/Fredoka body copy in a
+  planner region is info-flagged `handwriting_body_font` (#29). `font-family`,
   `font-size`, `font-weight`, `text-anchor` and `fill` now **inherit from a wrapping `<g>`**
   (onionskin#211 fixed; a value on the `<text>` wins) — older builds dropped the anchor/weight,
   so per-`<text>` attributes remain the safest form.

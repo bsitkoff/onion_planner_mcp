@@ -320,6 +320,15 @@ const lineSchema = z.object({
     .optional()
     .describe("Explicit baseline y, local to the region's top-left. Overrides `row`."),
   x: z.number().optional().describe("Local x offset from the region's left edge. Default 24."),
+  align: z
+    .enum(["left", "center", "right"])
+    .optional()
+    .describe(
+      "Horizontal alignment within the region box: 'left' (default) starts at the inset; " +
+        "'center' anchors on the box's horizontal centre; 'right' anchors at the right " +
+        "inset — resolved from the template geometry, so you never measure text. Wrapped " +
+        "continuations share the anchor; a leading marker/icon is only drawn when left-aligned.",
+    ),
   font: FONT_ENUM.optional().describe(
     "Font family. Defaults per region (Mulish; Newsreader for the serif ainotes block).",
   ),

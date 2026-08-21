@@ -65,7 +65,8 @@ write_underlay         → place text by region/row; server computes coordinates
 }
 ```
 
-`row` aligns to the region's ruled lines (from `read_page`). Use `y`/`x` for explicit
+`row` aligns to the region's ruled lines (from `read_page`); `align` (`left`/`center`/`right`)
+anchors a line against the region box. Use `y`/`x` for explicit
 placement, `marker` (`checkbox`/`bullet`) for a leading mark, and `time` to place
 a schedule line by the clock (anchored by the template's `data-start-hour`, or a per-call
 `startHour` override). For hand-placed content in a single region, give it a raw

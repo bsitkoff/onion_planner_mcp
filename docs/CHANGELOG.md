@@ -7,6 +7,29 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Feature: `align` on structured lines, positioned `<tspan>` accepted, typography warnings — 2026-08-20
+
+[#33](https://github.com/bsitkoff/onion_planner_mcp/issues/33),
+[#42](https://github.com/bsitkoff/onion_planner_mcp/issues/42),
+[#29](https://github.com/bsitkoff/onion_planner_mcp/issues/29). Centred/right-aligned text was
+unreachable through the structured API (only raw svg with hand-measured x), the validator still
+rejected the `<tspan x/y/dy>` the app has rendered since build 121, and nothing flagged 11px
+body copy or Caveat-set to-dos.
+
+- **`lines[].align: "left" | "center" | "right"`** — resolved against the region box and emitted
+  as `text-anchor="middle"|"end"` **per `<text>`** (renders on every app build); wrapped
+  continuations share the anchor, a banner heading's pill shifts with it, `text_overflow`
+  measures from the anchor. A marker/icon on an aligned line is skipped (`align_marker_ignored`,
+  info); a region with no width degrades to left (`align_unbounded_region`, info).
+- **`tspan` joins `RAW_SVG_ALLOWED_ELEMENTS`**; `scanRawSvgTspans` warns `raw_svg_tspan_attrs`
+  for per-run attributes the app ignores (anything but `x`/`y`/`dy`) and info-flags
+  `raw_svg_tspan_unpositioned` for a bare tspan (flattens with a space). Both raw-svg sites.
+- **`text_too_small`** (body `size < 13`) and **`handwriting_body_font`** (info, once per region:
+  Caveat/Fredoka body copy in a planner region — opt out with `fontPersonality: "clean"` or a
+  per-line `font`). `AUTHORING.md` gains "Font roles" + "Alignment"; the raw-SVG section is
+  rewritten to the shipped tspan / inheritance contract. Shantell Sans (asked for in #29) is not
+  in the closed font set and isn't added.
+
 ## Fix: minted month chapters carry `year`/`month`; spec re-verified (hour gutter, no printed checkboxes) — 2026-08-20
 
 [#43](https://github.com/bsitkoff/onion_planner_mcp/issues/43),

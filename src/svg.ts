@@ -38,6 +38,10 @@ export const RAW_SVG_ALLOWED_ELEMENTS = new Set([
   "ellipse",
   "polyline",
   "polygon",
+  // Since app build 121 (onionskin#212): a <tspan> carrying x/y/dy starts a new line
+  // inside ONE <text> (one selectable object in the app's underlay editor). See
+  // `scanRawSvgTspans` for the two limits the app keeps.
+  "tspan",
 ]);
 
 /** Element names used in `svg` that fall outside the renderer's set (sorted, unique). */
@@ -49,6 +53,36 @@ export function scanRawSvgElements(svg: string): string[] {
   }
   return [...unsupported].sort();
 }
+
+/** The only <tspan> attributes the app honours (onionskin#212). */
+const TSPAN_POSITION_ATTRS = new Set(["x", "y", "dy"]);
+
+/**
+ * What raw svg does with `<tspan>` that the app will NOT honour (#42):
+ * - `styled`: attribute names (other than `x`/`y`/`dy`) found on any tspan — the app
+ *   ignores per-run `font-*`/`fill`/`text-anchor`/`dx`/`rotate`; a `<text>`'s own
+ *   attributes apply to every line.
+ * - `unpositioned`: tspans carrying none of `x`/`y`/`dy` — these are not lines; their
+ *   characters flatten into the parent run with a separating space (app issue #72).
+ */
+export function scanRawSvgTspans(svg: string): { styled: string[]; unpositioned: number } {
+  const styled = new Set<string>();
+  let unpositioned = 0;
+  for (const m of svg.matchAll(/<\s*tspan\b([^>]*)>/gi)) {
+    const attrs = [...m[1].matchAll(/([A-Za-z_:][A-Za-z0-9_:.-]*)\s*=/g)].map((a) => a[1]);
+    const positioned = attrs.some((a) => TSPAN_POSITION_ATTRS.has(a.toLowerCase()));
+    if (!positioned) unpositioned++;
+    for (const a of attrs) if (!TSPAN_POSITION_ATTRS.has(a.toLowerCase())) styled.add(a);
+  }
+  return { styled: [...styled].sort(), unpositioned };
+}
+
+/** Fonts that read as the user's handwriting layer, not AI body copy (#29). */
+const HANDWRITING_FONTS = new Set(["Caveat", "Fredoka"]);
+/** Regions whose body copy is planner content (schedule/to-do/notes), not decoration. */
+const BODY_COPY_REGION_RE = /^(schedule|agenda|todo|list-\d+|ainotes|focus|notes|last)$/;
+/** Minimum legible body size for AI underlay text (#29). */
+const MIN_BODY_TEXT_SIZE = 13;
 
 /**
  * True when raw svg contains an <image href="data:..."> — the app renderer resolves
@@ -454,6 +488,15 @@ export interface LineInput {
   y?: number;
   /** Local x offset from the region's left edge. Defaults to 24. */
   x?: number;
+  /**
+   * Horizontal alignment within the region box (#33). `left` (default) starts the text
+   * at the inset `x`; `center` anchors it (`text-anchor="middle"`) on the box's
+   * horizontal centre; `right` anchors it (`text-anchor="end"`) at the box's right
+   * inset. Emitted per `<text>` (not on the wrapping `<g>`) so it renders on every
+   * app build; wrapped continuations share the anchor. A leading `marker`/`icon` is
+   * only drawn on a left-aligned line. Ignored in a region with no known width.
+   */
+  align?: "left" | "center" | "right";
   font?: string;
   size?: number;
   /** SVG font-weight (100–900). Defaults per region (600; 500 for the quote). */
@@ -1490,6 +1533,26 @@ export function composeAiSvg(
       // Raw fragment, emitted verbatim inside the region group (escape hatch).
       const frag = input.svg.trim();
       if (frag) {
+        const tspans = scanRawSvgTspans(frag);
+        if (tspans.styled.length > 0) {
+          warn(
+            "raw_svg_tspan_attrs",
+            `region "${region.name}": <tspan> carries ${tspans.styled.join(", ")} — the app ` +
+              `honours only x/y/dy on a tspan; per-line font/fill/anchor is ignored (the ` +
+              `<text>'s own attributes apply to every line).`,
+            "warning",
+            region.name,
+          );
+        }
+        if (tspans.unpositioned > 0) {
+          warn(
+            "raw_svg_tspan_unpositioned",
+            `region "${region.name}": ${tspans.unpositioned} <tspan> without x/y/dy — not a ` +
+              `line break; its text flattens into the parent run with a space.`,
+            "info",
+            region.name,
+          );
+        }
         const unsupported = scanRawSvgElements(frag);
         if (unsupported.length > 0) {
           warn(
@@ -1588,9 +1651,38 @@ export function composeAiSvg(
       const flowBases = flowBaselines(region, lines, def, theme);
       // baseline y -> the text of the `lines[]` entry that owns it (row_collision, #30).
       const baselineOwners = new Map<number, string>();
+      let handwritingWarned = false;
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
         const font = line.font ?? themeFontFor(theme, region.name, !!line.heading) ?? def.font;
+        // #29: AI body copy is clean UI type — ≥13px, and not a handwriting face (Caveat/
+        // Fredoka read as the user's ink layer). Both are advisory; an explicit per-line
+        // `font`/`size` or `fontPersonality: "handwritten"` still wins.
+        if (!line.heading && size < MIN_BODY_TEXT_SIZE) {
+          warn(
+            "text_too_small",
+            `region "${region.name}": line "${truncate(line.text)}" is ${size}px — body text ` +
+              `below ${MIN_BODY_TEXT_SIZE}px is hard to read on the iPad; use ≥${MIN_BODY_TEXT_SIZE}.`,
+            "warning",
+            region.name,
+          );
+        }
+        if (
+          !line.heading &&
+          !handwritingWarned &&
+          HANDWRITING_FONTS.has(font) &&
+          BODY_COPY_REGION_RE.test(region.name)
+        ) {
+          handwritingWarned = true;
+          warn(
+            "handwriting_body_font",
+            `region "${region.name}": body copy is set in ${font}, which reads as the user's ` +
+              `handwriting layer — AI planner content is clearest in Mulish (the default). ` +
+              `Pass \`fontPersonality: "clean"\` or a per-line \`font\` if this wasn't intended.`,
+            "info",
+            region.name,
+          );
+        }
         const weight = line.weight ?? def.weight;
         const fill = line.fill !== undefined ? floorTextFill(line.fill) : baseFill;
         // Inset at least past the template's printed hour-label gutter (#44).
@@ -1802,6 +1894,29 @@ export function composeAiSvg(
           }
         }
 
+        // Horizontal alignment (#33): resolved against the region box, emitted as
+        // `text-anchor` per <text> so the renderer measures — this server never does.
+        const xPadR = def.xPad ?? DEFAULT_X_PAD;
+        let align: "left" | "center" | "right" = line.align ?? "left";
+        if (align !== "left" && region.width === null) {
+          warn(
+            "align_unbounded_region",
+            `region "${region.name}": line "${truncate(line.text)}" asks for align "${align}" ` +
+              `but the region has no known width — drawn left-aligned.`,
+            "info",
+            region.name,
+          );
+          align = "left";
+        }
+        const anchorX =
+          align === "center"
+            ? Math.round(region.width! / 2)
+            : align === "right"
+              ? region.width! - xPadR
+              : x;
+        const anchorAttr =
+          align === "center" ? ' text-anchor="middle"' : align === "right" ? ' text-anchor="end"' : "";
+
         // A section heading. `banner` themes draw a coloured pill + white label
         // (cycling banner colours so sections read distinctly); `underline` themes
         // draw a coloured label + hairline rule (quieter). No marker/wrap — a label.
@@ -1810,26 +1925,28 @@ export function composeAiSvg(
           if (theme.headingStyle === "banner") {
             const labelW = bannerLabelWidth(line.text, size);
             const padX = BANNER_PAD_X;
+            const pillW = labelW + padX * 2;
+            const px = align === "center" ? anchorX - Math.round(pillW / 2) : align === "right" ? anchorX - pillW : x;
             const bh = Math.round(size * 1.15) + 6;
             const by = y - Math.round(size * 0.82) - 3;
             const color = line.fill ?? theme.banners[bannerIdx % theme.banners.length];
             bannerIdx++;
             const headText = pillLabelColor(color, line.fill !== undefined, region.name);
             parts.push(
-              `    <rect x="${x}" y="${by}" width="${labelW + padX * 2}" height="${bh}" ` +
+              `    <rect x="${px}" y="${by}" width="${pillW}" height="${bh}" ` +
                 `rx="6" fill="${color}"/>`,
             );
             parts.push(
-              `    <text x="${x + padX}" y="${y}" font-family="${escapeXml(font)}" ` +
+              `    <text x="${px + padX}" y="${y}" font-family="${escapeXml(font)}" ` +
                 `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em" ` +
                 `fill="${headText}">${escapeXml(line.text)}</text>`,
             );
           } else {
             const hfill = line.fill !== undefined ? floorTextFill(line.fill) : theme.text;
             parts.push(
-              `    <text x="${x}" y="${y}" font-family="${escapeXml(font)}" ` +
-                `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em" ` +
-                `fill="${hfill}">${escapeXml(line.text)}</text>`,
+              `    <text x="${anchorX}" y="${y}" font-family="${escapeXml(font)}" ` +
+                `font-size="${size}" font-weight="${hWeight}" letter-spacing="0.08em"` +
+                `${anchorAttr} fill="${hfill}">${escapeXml(line.text)}</text>`,
             );
             if (region.width !== null) {
               const rx2 = region.width - (def.xPad ?? DEFAULT_X_PAD);
@@ -1845,7 +1962,17 @@ export function composeAiSvg(
           return;
         }
 
-        if (line.marker) {
+        if ((line.marker || line.icon) && align !== "left") {
+          // A leading mark is measured from the text's START, which an anchored line
+          // doesn't know without font metrics — keep the server out of that business.
+          warn(
+            "align_marker_ignored",
+            `region "${region.name}": line "${truncate(line.text)}" has a ${line.marker ? "marker" : "icon"} ` +
+              `and align "${align}" — the mark is only drawn on left-aligned lines; skipped.`,
+            "info",
+            region.name,
+          );
+        } else if (line.marker) {
           const m = markerFragment(line.marker, x, y, size, line.fill ?? theme.accent);
           parts.push(`    ${m.svg}`);
           x += m.advance;
@@ -1864,17 +1991,28 @@ export function composeAiSvg(
             effLine.row === undefined &&
             effLine.y === undefined &&
             line.time === undefined);
-        const maxWidth = region.width !== null ? region.width - x : null;
+        // Available width is box-relative: from the inset to the right edge when
+        // left-aligned; symmetric about the centre; from the left inset to the anchor
+        // when right-aligned.
+        const maxWidth =
+          region.width === null
+            ? null
+            : align === "center"
+              ? region.width - 2 * xPadR
+              : align === "right"
+                ? anchorX - xPadR
+                : region.width - x;
         const segments =
           effWrap && maxWidth !== null && maxWidth > 0
             ? wrapText(line.text, font, size, maxWidth)
             : [line.text];
         const subPitch = Math.round(size * 1.3);
+        const textX = align === "left" ? x : anchorX;
         segments.forEach((seg, si) => {
           const sy = y + si * subPitch;
           parts.push(
-            `    <text x="${x}" y="${sy}" font-family="${escapeXml(font)}" ` +
-              `font-size="${size}" font-weight="${weight}" fill="${fill}">${escapeXml(seg)}</text>`,
+            `    <text x="${textX}" y="${sy}" font-family="${escapeXml(font)}" ` +
+              `font-size="${size}" font-weight="${weight}"${anchorAttr} fill="${fill}">${escapeXml(seg)}</text>`,
           );
         });
 
@@ -1897,13 +2035,17 @@ export function composeAiSvg(
 
         if (region.width !== null) {
           if (!effWrap) {
-            // Warn if the (unwrapped) text likely runs past the right edge.
-            const end = x + estimateTextWidth(line.text, font, size);
-            if (end > region.width) {
+            // Warn if the (unwrapped) text likely runs past an edge — measured from the
+            // anchor: a centred run spills both ways, a right-anchored run spills left.
+            const w = estimateTextWidth(line.text, font, size);
+            const start = align === "center" ? anchorX - w / 2 : align === "right" ? anchorX - w : x;
+            const end = start + w;
+            if (end > region.width || start < 0) {
               warn(
                 "text_overflow",
                 `region "${region.name}": line "${truncate(line.text)}" ` +
-                  `(~${end}px) may overflow the ${region.width}px region width.`,
+                  `(~${Math.round(w)}px${align !== "left" ? `, ${align}-aligned` : ""}) may ` +
+                  `overflow the ${region.width}px region width.`,
                 "warning",
                 region.name,
               );

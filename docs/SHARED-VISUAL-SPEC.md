@@ -167,8 +167,7 @@ tint) instead of a solid fill — the only element in this file to use `fill-opa
 `design/UNDERLAY-VISUAL.md`, forthcoming — onionskin#23). Tint defaults to the chapter's
 **`chromeAccent`** (the chapter's accent colour — a no-text fill, so it rides through raw),
 falling back to `theme.accent`, overridable per-block via `blockFill`. The label text sits
-vertically centred inside the block at `y1 + height − round(height × 0.28)` — the same centring
-ratio as §5's label-slot text. Left inset = `max(xPad, gutterX)` — the region's `xPad`, never
+vertically centred inside the block at `round(y1 + height / 2 + size × 0.32)`. Left inset = `max(xPad, gutterX)` — the region's `xPad`, never
 left of where its rules start (the printed hour gutter on cozy/colorful, §1); right edge =
 `region.width − DEFAULT_X_PAD`, the *standard* margin — not the region's (often wider) `xPad`
 again, which would double-charge the left gutter on a side that has no hour labels to clear.
@@ -178,11 +177,17 @@ interval) — #32. A label too long to fit the block's width on one line wraps
 height; if the wrapped lines still don't fit the block's height it warns
 `washi_block_label_overflow` rather than silently overrunning. A span partly outside the
 region's ruled grid is pinned to fit and still drawn (warns `washi_block_clamped`).
-**Minimum block height is one schedule-line interval, read from the template's ruled lines** —
-a span too short to cross a ruled row (a 20-min meeting on a 1-row-per-hour grid, or a
-backwards range) is drawn at the one-interval minimum (info `washi_block_min_height`) rather
-than degrading to a bare time line; only an event starting on the grid's *last* ruled line,
-where no block can fit, falls back to a plain time line (info `washi_block_zero_duration`).
+**Valid durations have no minimum height.** Both edges follow the exact clock minutes,
+including sub-row events. Real overlaps are partitioned into side-by-side columns with a
+6px maximum gutter; events sharing only an endpoint do not overlap. Each connected overlap
+group uses a consistent column width, and later nonoverlapping groups recover the full width.
+An explicit `x` is respected for isolated blocks; overlap groups use the region's shared
+inset so per-line offsets cannot reintroduce collisions. Short labels are centred using
+font size, not stretched block height. Even a single-line label warns
+`washi_block_label_overflow` when the real duration cannot contain it; the caller must
+shorten/reformat the label rather than falsify the event's duration. Non-positive ranges
+retain the legacy one-row fallback with `washi_block_min_height`; at the last ruled line
+there is no span to draw, so the plain-time fallback warns `washi_block_zero_duration`.
 
 ## Resolved decisions (consolidated)
 
@@ -209,5 +214,5 @@ where no block can fit, falls back to a plain time line (info `washi_block_zero_
    defaults to the chapter's `chromeAccent` (else `theme.accent`), `fill-opacity` default 0.16,
    `rx 8` (2026-07-09 washi spec); right inset is the standard margin (not the schedule's own
    wider left gutter); an overlong label wraps into the block before anything warns; span
-   overflow clamps and warns rather than distorting the grid; min block height = one
-   schedule-line interval read from the template (never a hardcoded minimum). (§7)
+   overflow clamps and warns rather than distorting the grid; valid durations keep exact minute endpoints with no minimum height; actual overlaps
+   use separate columns. (§7)

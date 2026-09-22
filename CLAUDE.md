@@ -139,7 +139,8 @@ where wrapped continuations of one entry never count; a wrapped block that overr
 `time` that can't be anchored) and surface in the `write_underlay` result — important because
 overnight/unattended writes have no human watching. A clock `time` resolves to a **fractional**
 row (`13:30` on a 1-row-per-hour grid is row 6.5, interpolated between the rules — #32), for
-both plain lines and washi blocks; the one-interval minimum block height still applies.
+both plain lines and washi blocks; block duration and overlap rules live in
+`docs/SHARED-VISUAL-SPEC.md §7`.
 
 Two `write_underlay` modifiers: **`merge`** patches only the named regions into the
 existing `ai.svg` (parsing its `<g data-region>` blocks, replacing matches, keeping the rest

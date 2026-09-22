@@ -550,19 +550,17 @@ async function main() {
     zeroH === oneInterval,
     `height=${zeroH} interval=${oneInterval}`,
   );
-  // The real-world case that motivated #17's old fallback: a 20-minute meeting on a
-  // 1-row-per-hour grid snaps both ends to the same row — it must not vanish. It now
-  // draws the one-interval minimum tape instead of degrading to a bare time line.
+  // A 20-minute meeting must remain a 20-minute tape, even on an hourly grid.
   const shortMeeting = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
     regions: [{ region: "schedule", lines: [{ text: "Morning Meeting", time: "08:00", endTime: "08:20" }] }],
   });
   const shortGroup = regionGroup(shortMeeting.aiSvg, "schedule") ?? "";
   check(
-    "a sub-row meeting (08:00-08:20) draws a minimum-height block, label inside",
+    "a sub-row meeting (08:00-08:20) keeps its exact duration",
     shortGroup.includes(">Morning Meeting</text>") &&
       /<rect[^>]*fill-opacity="[\d.]+"/.test(shortGroup) &&
-      shortMeeting.warningDetails.some((w) => w.code === "washi_block_min_height"),
+      !shortMeeting.warningDetails.some((w) => w.code === "washi_block_min_height"),
     shortGroup.slice(0, 300),
   );
   // The one geometry no block can fit: an event starting on the grid's LAST ruled
@@ -802,12 +800,11 @@ async function main() {
   check("label draws a banner above the region (negative y)", /<rect[^>]*y="-\d+"[^>]*rx="6"/.test(lgroup), lgroup.slice(0, 200));
   check("label text is the title, white on the banner", lgroup.includes(">SCHEDULE</text>") && lgroup.includes('fill="#FFFFFF"'), lgroup.slice(0, 260));
   check("label does not consume row 0 (the line still lands in its slot)", lgroup.includes(">9:00 standup</text>"), lgroup);
-  // schedule has a printed label slot (see above) — the banner pill must fill that
-  // slot's exact box (geometry-derived, not hard-coded) rather than the old fixed
-  // margin placement.
+  // schedule has a printed label slot (see above) — the banner pill starts at that
+  // geometry-derived anchor and is allowed to expand enough to contain its text.
   const slot = schedule!.labelSlot!;
-  const slotRect = `<rect x="${slot.x}" y="${slot.y}" width="${slot.width}" height="${slot.height}" rx="6"`;
-  check("banner pill fills the printed label slot's exact box", lgroup.includes(slotRect), `expected ${slotRect} in ${lgroup.slice(0, 260)}`);
+  const slotRect = lgroup.match(new RegExp(`<rect x="${slot.x}" y="${slot.y}" width="([\\d.]+)" height="${slot.height}" rx="6"`));
+  check("banner pill starts at the printed label slot and contains its text", !!slotRect && Number(slotRect[1]) >= slot.width && Number(slotRect[1]) >= 122, lgroup.slice(0, 260));
   // Underline-style theme (e.g. gold): no box to fill, so it only anchors off the
   // slot's origin — text baseline inside the slot's vertical range, no pill rect.
   const underlineLabeled = await writeUnderlay(root, daily, {
@@ -1658,6 +1655,19 @@ async function main() {
   const plainGroup = regionGroup(plainLabel.aiSvg, "schedule") ?? "";
   const schedSlot = schedule!.labelSlot!;
   check("labelStyle plain writes uppercase Mulish 12/700 at the slot origin (composer sectionLabel)", plainGroup.includes(`<text x="${schedSlot.x + 2}" y="${schedSlot.y + Math.min(schedSlot.height - 4, 16)}" font-family="Mulish" font-size="12" font-weight="700"`) && plainGroup.includes(">SCHEDULE</text>") && !/<rect[^>]*rx="6"/.test(plainGroup), plainGroup.slice(0, 300));
+  const longRegionLabel = await writeUnderlay(root, daily, {
+    status: "ready",
+    dryRun: true,
+    theme: "bright",
+    regions: [{ region: "ainotes", label: "A little momentum", lines: [{ text: "x", y: 30 }] }],
+  });
+  const longLabelGroup = regionGroup(longRegionLabel.aiSvg, "ainotes") ?? "";
+  const longLabelRect = longLabelGroup.match(/<rect x="0" y="-54" width="([\d.]+)" height="34"/);
+  check(
+    "a long region label expands beyond a narrow printed slot instead of clipping",
+    !!longLabelRect && Number(longLabelRect[1]) > 112 && longLabelGroup.includes(">A little momentum</text>"),
+    longLabelGroup.slice(0, 500),
+  );
   console.log("\npage-level delight nudges: header_unwritten / page_no_art");
   const barePage = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [
     { region: "schedule", lines: [{ text: "Standup", time: "09:00", endTime: "10:00" }] },

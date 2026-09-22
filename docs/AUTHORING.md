@@ -36,6 +36,14 @@ the date, don't also write a line spelling it out; if it already labels itself (
 skip a redundant `label`. Read it instead of memorizing which templates print what — templates
 change.
 
+For daily headers, treat a printed `TODAY`/`DATE` microcap as the date-label anchor: put one
+date treatment over that chrome or use one integrated date sticker in the header art, never a
+second floating date pill above it. For section labels, the printed `labelSlot` is an anchor,
+not a clipping mask; use the structured `label` field so the MCP can expand a banner within
+the region when the wording is longer than the slot. If you use a raw SVG fragment for a
+custom sticker, keep its fills in the page's resolved `underlay` palette and size its label
+against the actual region width.
+
 ## Who fills a region — `fill` and `intent`
 
 Ownership in Onionskin is by *layer* — you write `ai.svg`, the user owns `ink.svg`
@@ -296,11 +304,12 @@ header, a centred label under a sticker, a right-aligned total.
   drop-off). Tint defaults to the **chapter's `chromeAccent`** (else the theme's accent),
   drawn at a soft 0.16 opacity with an 8px radius; override per-block with
   `blockFill`/`blockOpacity`. **Block dimensions come from the template's geometry** — the
-  minimum height is one schedule-line interval read from the template's ruled lines, so even
-  a 20-minute meeting draws a visible tape (info `washi_block_min_height`) instead of a bare
-  line. `endTime`/`durationMin` without a `time` start is ignored
-  (mirrors how `marker`/`wrap` are ignored on a heading). A long event name wraps to fit the
-  block automatically — no need to shorten it or pass `wrap` yourself.
+  start and end are interpolated to the exact minute, with no minimum height for valid
+  durations. True overlaps use separate columns; back-to-back events share a column.
+  A short or narrow block can report `washi_block_label_overflow`: shorten its label or
+  use a separate time-keyed note rather than extending the duration or shrinking below
+  readable type. `endTime`/`durationMin` without a `time` start is ignored. See
+  [the visual specification §7](SHARED-VISUAL-SPEC.md#7-washi-tape-schedule-blocks--mcp-only).
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
   dependency.
 - **`icon`** — a leading Phosphor glyph (font-rendered) instead of a marker; mutually exclusive

@@ -8,7 +8,7 @@
     "start": "tsx src/index.ts",
     "call": "tsx test/cli.ts",
     "build": "tsc",
-    "smoke": "node --import tsx --test test/nested-svg.ts && rm -rf /tmp/onionskin-test && cp -R ../onionskin/Onionskin/Fixtures/Library /tmp/onionskin-test && ONIONSKIN_CONTAINER=/tmp/onionskin-test tsx test/smoke.ts && tsx test/parity.ts",
+    "smoke": "node --import tsx --test test/nested-svg.ts test/schedule-blocks.ts && rm -rf /tmp/onionskin-test && cp -R ../onionskin/Onionskin/Fixtures/Library /tmp/onionskin-test && ONIONSKIN_CONTAINER=/tmp/onionskin-test tsx test/smoke.ts && tsx test/parity.ts",
     "parity": "tsx test/parity.ts"
   },
   "author": "Bridget Sitkoff",

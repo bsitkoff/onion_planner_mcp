@@ -1239,14 +1239,53 @@ async function main() {
   check("clear empties ai.svg", !(await fs.readFile(aiPath, "utf8")).includes("<text"));
 
   console.log("\ncreate_page by cloning a sibling");
-  await fs.mkdir(path.join(root, "Shared", "Daily", "reserved-dir"), { recursive: true });
-  let refusedExistingDir = false;
+  // An existing folder that IS a page is never clobbered...
+  let refusedExistingPage = false;
   try {
-    await createPage(root, { chapter: "Daily", name: "reserved-dir", title: "Nope" });
+    await createPage(root, { chapter: "Daily", name: "2026-06-22", title: "Nope" });
   } catch {
-    refusedExistingDir = true;
+    refusedExistingPage = true;
   }
-  check("create_page refuses an existing destination directory", refusedExistingDir);
+  check("create_page refuses an existing page", refusedExistingPage);
+
+  // ...but a folder with no manifest is not a page, it's debris from an interrupted create
+  // (app or server). Refusing it stranded the day: unreadable AND uncreatable — which is
+  // exactly how 2026-09-22 blocked a morning planner run. It gets completed in place, and
+  // whatever was already in its media/ survives.
+  const stub = path.join(root, "Shared", "Stub", "2026-06-24");
+  await fs.mkdir(path.join(stub, "media"), { recursive: true });
+  await fs.writeFile(path.join(stub, "media", "keepsake.txt"), "mine");
+  const there = (p: string) => fs.access(p).then(() => true).catch(() => false);
+  const completed = await createPage(root, { chapter: "Stub", name: "2026-06-24", title: "Wednesday",
+                                          template: "daily-minimal" });
+  check("create_page completes a manifest-less stub folder", completed.completed === true);
+  check("completed stub has a manifest", await there(path.join(stub, "manifest.json")));
+  check("completing a stub keeps its media/", await there(path.join(stub, "media", "keepsake.txt")));
+  let readsBack = false;
+  try {
+    await readPage(root, "Shared/Stub/2026-06-24");
+    readsBack = true;
+  } catch { /* readsBack stays false */ }
+  check("the completed page reads back", readsBack);
+
+  // A page folder with no manifest says so, instead of a bare ENOENT path.
+  const orphan = path.join(root, "Shared", "Stub", "orphan-dir");
+  await fs.mkdir(orphan, { recursive: true });
+  let orphanMessage = "";
+  try {
+    await readPage(root, "Shared/Stub/orphan-dir");
+  } catch (e: any) {
+    orphanMessage = e.message;
+  }
+  check("read_page names an incomplete page folder", orphanMessage.includes("incomplete page folder"), orphanMessage);
+  let missingMessage = "";
+  try {
+    await readPage(root, "Shared/Stub/never-existed");
+  } catch (e: any) {
+    missingMessage = e.message;
+  }
+  check("read_page still says a missing page is missing", missingMessage.includes("doesn't exist"), missingMessage);
+  await fs.rm(path.join(root, "Shared", "Stub"), { recursive: true, force: true });
   let cleanedStage = false;
   try {
     await createPage(root, { chapter: "Daily", name: "bad-template", title: "Bad", template: "missing-template" });

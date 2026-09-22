@@ -865,6 +865,68 @@ async function readJson<T>(absFile: string): Promise<T> {
   return JSON.parse(await fs.readFile(absFile, "utf8")) as T;
 }
 
+/**
+ * Whether a page folder holds a manifest — locally, or as the `.manifest.json.icloud`
+ * stub iCloud leaves for a file it hasn't downloaded to this Mac. Both mean "a real page
+ * lives here"; neither means the folder is debris.
+ */
+async function hasManifest(abs: string): Promise<{ local: boolean; cloudOnly: boolean }> {
+  const local = await isFile(path.join(abs, "manifest.json"));
+  if (local) return { local: true, cloudOnly: false };
+  return { local: false, cloudOnly: await isFile(path.join(abs, ".manifest.json.icloud")) };
+}
+
+async function isFile(absFile: string): Promise<boolean> {
+  try {
+    return (await fs.stat(absFile)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read a page's `manifest.json`, turning the three ways it can be absent into three
+ * different sentences. A raw `ENOENT: … /manifest.json` told the caller nothing about
+ * which one it was hitting, and the one that matters most is invisible from the message:
+ * the folder is **there** but carries no manifest.
+ *
+ * That third case is a page folder created by something that was interrupted before it
+ * wrote the manifest (the app builds a page folder-first, manifest last). It reads as
+ * neither "no page" nor "a page", and it blocked a whole morning's planner run on
+ * 2026-09-22 — `read_page` said ENOENT while `create_page` said "already exists".
+ */
+async function readManifest(abs: string, rel: string): Promise<Manifest> {
+  try {
+    return await readJson<Manifest>(path.join(abs, "manifest.json"));
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") {
+      throw new Error(`"${rel}": manifest.json is unreadable (${e.message}).`);
+    }
+    const dirExists = await isDir(abs);
+    if (!dirExists) throw new Error(`Page "${rel}" doesn't exist.`);
+    const { cloudOnly } = await hasManifest(abs);
+    if (cloudOnly) {
+      throw new Error(
+        `"${rel}" is a real page, but its manifest.json hasn't downloaded to this Mac yet ` +
+          `(iCloud placeholder). Try again once it syncs.`,
+      );
+    }
+    throw new Error(
+      `"${rel}" is an incomplete page folder: it exists but has no manifest.json, so there is ` +
+        `nothing to read. Something was interrupted before it finished writing the page. ` +
+        `\`create_page\` completes such a folder in place — run it with this chapter and name.`,
+    );
+  }
+}
+
+async function isDir(abs: string): Promise<boolean> {
+  try {
+    return (await fs.stat(abs)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export async function readIfExists(absFile: string): Promise<string | null> {
   try {
     return await fs.readFile(absFile, "utf8");
@@ -962,7 +1024,7 @@ export async function readPage(
   includeTemplate = false,
 ): Promise<PageRead> {
   const abs = resolvePageRel(root, rel);
-  const manifest = await readJson<Manifest>(path.join(abs, "manifest.json"));
+  const manifest = await readManifest(abs, rel);
   const templateSvg = await readIfExists(path.join(abs, "template.svg"));
   const stickersSvg = await readIfExists(path.join(abs, "stickers.svg"));
   const aiSvg = await readIfExists(path.join(abs, "ai.svg"));
@@ -1030,7 +1092,7 @@ export async function readInk(
   includeStrokeData = false,
 ): Promise<{ page: string; inkSvg: string | null }> {
   const abs = resolvePageRel(root, rel);
-  const manifest = await readJson<Manifest>(path.join(abs, "manifest.json")); // confirms it's a real page
+  const manifest = await readManifest(abs, rel); // confirms it's a real page
   const config = await readChapterConfig(abs);
   if (!resolveInkReadable(config, manifest)) {
     throw new Error(
@@ -1170,7 +1232,7 @@ export async function writeUnderlay(
 ): Promise<WriteResult> {
   const abs = resolvePageRel(root, rel);
   // Confirm it's a real page before writing.
-  const manifest = await readJson<Manifest>(path.join(abs, "manifest.json"));
+  const manifest = await readManifest(abs, rel);
 
   // A data: URI <image href> would write fine but never render (the app renderer only
   // resolves a page-relative file path) — refuse outright, before resolveImages writes
@@ -1301,14 +1363,14 @@ export async function setStatus(
   status: AiStatus,
 ): Promise<void> {
   const abs = resolvePageRel(root, rel);
-  await readJson<Manifest>(path.join(abs, "manifest.json")); // existence check
+  await readManifest(abs, rel); // existence check
   await patchManifestStatus(abs, status);
 }
 
 /** Reset ai.svg to empty and status to "empty", and drop AI-owned media. */
 export async function clearUnderlay(root: string, rel: string): Promise<void> {
   const abs = resolvePageRel(root, rel);
-  const manifest = await readJson<Manifest>(path.join(abs, "manifest.json"));
+  const manifest = await readManifest(abs, rel);
   const templateSvg = await readIfExists(path.join(abs, "template.svg"));
   const size = pageSize(manifest, templateSvg);
   await atomicWrite(path.join(abs, "ai.svg"), emptySvg(size));
@@ -1322,6 +1384,8 @@ export interface CreateResult {
   template: string;
   size: [number, number];
   clonedFrom: string;
+  /** True when the folder was already there without a manifest and was completed in place. */
+  completed?: boolean;
   /** Non-fatal problems (e.g. the page was created but the chapter order wasn't updated). */
   warnings?: string[];
 }
@@ -1515,12 +1579,23 @@ export async function createPage(
   const newRel = `${chapterRel}/${opts.name}`;
   const newAbs = resolvePageRel(root, newRel); // also validates name has no traversal
 
-  // Refuse to clobber any existing destination, even a partial/non-page folder.
-  try {
-    await fs.access(newAbs);
-    throw new Error(`Page folder "${newRel}" already exists.`);
-  } catch (e: any) {
-    if (e.code !== "ENOENT") throw e;
+  // A destination that is already a page is never clobbered. A folder that exists but holds
+  // NO manifest is not a page: it is debris from a create that was interrupted before it
+  // wrote one (the app builds a page folder-first, manifest last). Refusing that — the old
+  // behaviour — left the day permanently unreachable, readable by nobody and creatable by
+  // nobody. Adopt it instead and write the page into it in place; whatever is already in its
+  // `media/` is left alone.
+  let adopting = false;
+  const destStat = await fs.stat(newAbs).catch((e: any) => {
+    if (e.code === "ENOENT") return null;
+    throw e;
+  });
+  if (destStat) {
+    const { local, cloudOnly } = await hasManifest(newAbs);
+    if (!destStat.isDirectory() || local || cloudOnly) {
+      throw new Error(`Page folder "${newRel}" already exists.`);
+    }
+    adopting = true;
   }
 
   // The chapter's declared default template (FORMAT.md §4) fills in when the caller
@@ -1577,14 +1652,18 @@ export async function createPage(
   const stageAbs = path.join(chapterAbs, stageName);
   let staged = false;
 
+  // A fresh page is built in a hidden sibling and renamed into place, so an interruption
+  // here can never mint the very stub this function now has to repair. An adopted stub is
+  // written in place — it is already on disk, and a rename can't land on top of it.
+  const buildAbs = adopting ? newAbs : stageAbs;
   try {
     await fs.mkdir(chapterAbs, { recursive: true });
-    await fs.mkdir(path.join(stageAbs, "media"), { recursive: true });
-    staged = true;
-    await atomicWrite(path.join(stageAbs, "template.svg"), source.templateSvg);
-    await atomicWrite(path.join(stageAbs, "ai.svg"), emptySvg(size));
-    await atomicWrite(path.join(stageAbs, "stickers.svg"), source.stickersSvg ?? emptySvg(size));
-    await atomicWrite(path.join(stageAbs, "ink.svg"), emptySvg(size));
+    await fs.mkdir(path.join(buildAbs, "media"), { recursive: true });
+    staged = !adopting;
+    await atomicWrite(path.join(buildAbs, "template.svg"), source.templateSvg);
+    await atomicWrite(path.join(buildAbs, "ai.svg"), emptySvg(size));
+    await atomicWrite(path.join(buildAbs, "stickers.svg"), source.stickersSvg ?? emptySvg(size));
+    await atomicWrite(path.join(buildAbs, "ink.svg"), emptySvg(size));
 
     const manifest: Manifest = {
       title: opts.title ?? opts.name,
@@ -1599,12 +1678,15 @@ export async function createPage(
         ink: { file: "ink.svg", z: 3 },
       },
     };
+    // Last, so the folder becomes a page only once everything it needs is beside it.
     await atomicWrite(
-      path.join(stageAbs, "manifest.json"),
+      path.join(buildAbs, "manifest.json"),
       JSON.stringify(manifest, null, 2) + "\n",
     );
-    await fs.rename(stageAbs, newAbs);
-    staged = false;
+    if (!adopting) {
+      await fs.rename(stageAbs, newAbs);
+      staged = false;
+    }
   } catch (e) {
     if (staged) {
       await fs.rm(stageAbs, { recursive: true, force: true }).catch(() => {});
@@ -1663,6 +1745,7 @@ export async function createPage(
     template: templateName,
     size,
     clonedFrom: source.clonedFrom,
+    ...(adopting ? { completed: true } : {}),
     ...(warnings.length ? { warnings } : {}),
   };
 }

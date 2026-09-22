@@ -858,7 +858,10 @@ server.tool(
     "grid is never used for a new day page), else the id is instantiated from the top-level " +
     "Templates/ catalogue — so a brand-new/empty chapter can still be seeded. A page named in " +
     "the chapter's `.folder.json → deletedDays` tombstone list is refused unless `clearDeleted` " +
-    "is set. Writes manifest + layers + media/ and adds it to the chapter order. Prefer " +
+    "is set. Writes manifest + layers + media/ and adds it to the chapter order. A destination " +
+    "that is already a page is refused; one that EXISTS BUT HAS NO manifest.json is not a page " +
+    "(debris from a create that was interrupted before writing one) and is completed in place " +
+    "instead — its media/ is left as-is and the result carries `completed: true`. Prefer " +
     "letting the user create pages in the app; use this only when asked.",
   {
     chapter: z

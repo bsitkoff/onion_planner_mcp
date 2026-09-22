@@ -7,6 +7,23 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: an incomplete page folder is completed, not refused — 2026-09-22
+
+The morning planner run couldn't write today's page. `Shared/2026-09/2026-09-22` had been left
+on 2026-09-08 as a folder holding only an empty `media/` — a page create (app side) interrupted
+before it wrote `manifest.json`. That stub was unreachable from both ends: `read_page` /
+`read_ink` reported a bare `ENOENT … /manifest.json`, `create_page` reported "already exists",
+and the app's own materializer, which judged a day by its folder NAME, skipped it on every
+launch. It sat there for two weeks.
+
+`create_page` now refuses only a destination that really **is** a page (manifest present, or a
+`.manifest.json.icloud` placeholder for one still syncing). A folder with no manifest is debris:
+it gets the page written into it in place — media/ untouched — and the result carries
+`completed: true`. Every page-manifest read goes through one reader that names which of the
+three cases it hit: no such page · a real page whose manifest hasn't downloaded yet · a folder
+that exists with no manifest (and how to complete it). The app-side half — never leave the stub
+in the first place, and never mistake one for a page — ships in the Onionskin repo.
+
 ## Feature: `read_page.artBrief` + `image_underfills_box` — tell the orchestrator what to generate — 2026-08-21
 
 "Still so tiny": the art box had grown to 460×164 but GPT's 2:1 banner was height-limited to

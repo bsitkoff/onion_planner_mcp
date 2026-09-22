@@ -68,7 +68,7 @@ to exercise the MCP transport itself.
 
 | File | Role |
 |---|---|
-| `src/index.ts` | MCP server + the 10 tools (zod schemas, annotations, error handling). |
+| `src/index.ts` | MCP server + the 11 tools (zod schemas, annotations, error handling). |
 | `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under `Shared/`, no traversal). |
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |

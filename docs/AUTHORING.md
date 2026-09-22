@@ -309,7 +309,7 @@ header, a centred label under a sticker, a right-aligned total.
   A short or narrow block can report `washi_block_label_overflow`: shorten its label or
   use a separate time-keyed note rather than extending the duration or shrinking below
   readable type. `endTime`/`durationMin` without a `time` start is ignored. See
-  [the visual specification §7](SHARED-VISUAL-SPEC.md#7-washi-tape-schedule-blocks--mcp-only).
+  [the visual specification §7](SHARED-VISUAL-SPEC.md#7-washi-tape-schedule-blocks).
 - **`marker`** — `checkbox` for todos/habits, `bullet` for note items. Drawn shapes, no font
   dependency.
 - **`icon`** — a leading Phosphor glyph (font-rendered) instead of a marker; mutually exclusive
@@ -464,8 +464,8 @@ that work (#25, #28):
   date text lands in the band, clear of the slot — see the header recipe under *Composer
   parity*). Leaving the slot empty while writing text prints an orphaned dashed box under your
   copy — the server info-flags `art_slot_unfilled`.
-- **Make it big enough to feel like a sticker.** On catalogue ≥ `16-big-header` the art box is
-  460×164 — `fit: "contain"` is plenty. On older pages (300×104) add `scale: 1.5`: the banner
+- **Make it big enough to feel like a sticker.** On catalogue ≥ `17-header-240` (current) the
+  art box is 460×224 (`16-big-header` pages: 460×164) — `fit: "contain"` is plenty. On older pages (300×104) add `scale: 1.5`: the banner
   overflows the box into the header's whitespace, pinned to the box's right/top edge, and reads
   as a real sticker rather than a tiny inset (no `image_overflow` — that's intended).
 - **One integrated date sticker.** When the art already carries the day/date (the strongest

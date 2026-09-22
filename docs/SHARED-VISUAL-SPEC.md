@@ -144,7 +144,9 @@ overridable per element):
    - **`fontPersonality`** (`clean`/`handwritten`/`editorial`) swaps font families only (within the
      closed set: `clean`=Mulish/Newsreader, `handwritten`=Caveat/Fredoka, `editorial`=Newsreader-led)
      — an **orthogonal axis**, layered on any palette including the default.
-   - **`chromeAccent`** is the app's concern (chrome only) — accepted and ignored.
+   - **`chromeAccent`** drives the app's chrome, and both writers also use it as the default
+     washi tint for schedule duration blocks (§7; `src/svg.ts` `washiTint`, app
+     `UnderlayTheme.swift`) — not otherwise consumed here.
 
 `write_underlay` reads the chapter theme as the **default** and accepts per-call **overrides**
 (field-by-field; a per-call preset name given alone wins outright). The app passes the same block
@@ -155,10 +157,13 @@ to the on-device composer.
 > *mood* axis and is independent of the template's *style* (§0). The orchestrator picks the theme
 > to fit the day, or sets it once on the chapter (see `AUTHORING.md`).
 
-## 7. Washi-tape schedule blocks — MCP only
+## 7. Washi-tape schedule blocks
 
-> **Resolved — MCP-only decoration.** The on-device sibling draws no duration blocks; this is
-> underlay-authored, matching the app renderer's confirmed support for `rx` + `fill-opacity`.
+> **Status (2026-09-22 audit): no longer MCP-only.** The app's on-device composer now draws
+> duration blocks too (`Features/OnDeviceAI/UnderlaySVGComposer.swift`, onionskin#170) with the
+> same tint/`rx`/opacity, but it snaps to whole rows with a one-row minimum and has **no overlap
+> lanes** — so the two writers diverge on short and overlapping events until the app ports these
+> rules. Originally resolved as MCP-only decoration: underlay-authored, matching the app renderer's confirmed support for `rx` + `fill-opacity`.
 
 A schedule line with `time` + (`endTime` or `durationMin`) draws a block instead of a single
 baseline: rounded `<rect rx="8">` with `fill-opacity` (default **0.16**, a translucent "tape"

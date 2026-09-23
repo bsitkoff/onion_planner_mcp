@@ -455,7 +455,9 @@ const imageSchema = z.object({
     .describe(
       "Absolute local file path to read the image from instead of inlining `data` — so a " +
         "generated PNG never passes through the model context (right for overnight/automated " +
-        "writes). Leading `~` is expanded. Give EITHER `data` or `path`, not both.",
+        "writes). Leading `~` is expanded. Must resolve (symlinks followed) to a file under " +
+        "$TMPDIR (where fetch_image saves), /tmp or ~/Downloads — never inside the Onionskin " +
+        "library. Give EITHER `data` or `path`, not both.",
     ),
   format: z
     .enum(["png", "jpeg"])

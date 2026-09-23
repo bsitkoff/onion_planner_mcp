@@ -500,7 +500,7 @@ export async function fetchImageToTemp(
 
   const stem = sanitizeName(name ?? (parsed.pathname.split("/").pop() ?? "img"));
   const ext = format === "jpeg" ? "jpg" : "png";
-  const dir = path.join(os.tmpdir(), "onionskin-fetch");
+  const dir = FETCH_DIR;
   await fs.mkdir(dir, { recursive: true });
   // Don't clobber an earlier fetch that landed on the same stem (its path may still
   // be queued for a write_underlay call) — suffix instead.
@@ -529,6 +529,51 @@ export async function fetchImageToTemp(
   return { path: dest, format, bytes: buf.byteLength };
 }
 
+/**
+ * Where `fetch_image` lands downloads — under the OS temp dir, so it is inside the
+ * `images[].path` allowlist (`resolveImagePath`) by construction.
+ */
+export const FETCH_DIR = path.join(os.tmpdir(), "onionskin-fetch");
+
+/** `child` is `parent` itself or inside it (both already real, absolute paths). */
+function isWithin(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/**
+ * Resolve a caller's `images[].path` to the real file to read, or refuse it (#59).
+ * Without a fence this was the one input that could move bytes OUT of `Private/` — a
+ * Private photo copied into a Shared page's `media/ai/` syncs everywhere and reads back
+ * via read_page. After `realpath` (so a symlink can't smuggle anything past), the file
+ * must NOT be inside the library root at all, and MUST be inside an allowlisted scratch
+ * location: the OS temp dir (`$TMPDIR`, which holds `FETCH_DIR`), `/tmp` (the documented
+ * AUTHORING.md drop spot; `/private/tmp` on macOS), or `~/Downloads`.
+ */
+async function resolveImagePath(libraryRoot: string, regionName: string, given: string): Promise<string> {
+  let real: string;
+  try {
+    real = await fs.realpath(expandHome(given));
+  } catch {
+    throw new Error(`image in region "${regionName}": cannot read file "${given}".`);
+  }
+  const realOrNull = (p: string) => fs.realpath(p).catch(() => null);
+  const refuse = () =>
+    new Error(
+      `image in region "${regionName}": "${given}" — images[].path must be a local file under ` +
+        "$TMPDIR, /tmp or ~/Downloads; library files can't be copied.",
+    );
+  // The library check comes first, whatever the allowlist says: a library that itself
+  // lives under a temp dir (the smoke fixture does) must still never be a source.
+  const libReal = (await realOrNull(libraryRoot)) ?? path.resolve(libraryRoot);
+  if (isWithin(libReal, real)) throw refuse();
+  const allowed = (
+    await Promise.all([os.tmpdir(), "/tmp", path.join(os.homedir(), "Downloads")].map(realOrNull))
+  ).filter((p): p is string => p !== null);
+  if (real === "/" || !allowed.some((a) => real !== a && isWithin(a, real))) throw refuse();
+  return real;
+}
+
 /** Test seam for `resolveImages`'s `knockout: "subject"` path — mirrors `fetchImageToTemp`'s `deps` shape. */
 export interface ResolveImagesDeps {
   knockoutSubjectImpl?: (inputPath: string, outputPath: string) => Promise<void>;
@@ -544,6 +589,7 @@ export interface ResolveImagesDeps {
  */
 async function resolveImages(
   pageAbs: string,
+  libraryRoot: string,
   regions: RegionInput[],
   geometry: Region[],
   dryRun: boolean,
@@ -575,7 +621,7 @@ async function resolveImages(
       // Source the bytes: a local file (no base64 through context) or inline base64.
       let buf: Buffer;
       if (img.path !== undefined) {
-        const fileSrc = expandHome(img.path);
+        const fileSrc = await resolveImagePath(libraryRoot, region.region, img.path);
         try {
           buf = await fs.readFile(fileSrc);
         } catch {
@@ -1311,6 +1357,7 @@ export async function writeUnderlay(
     }
     const imageResult = await resolveImages(
       abs,
+      root,
       opts.regions,
       regions,
       opts.dryRun ?? false,

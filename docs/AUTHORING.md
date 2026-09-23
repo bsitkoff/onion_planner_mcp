@@ -489,7 +489,9 @@ the server own the filename, not to guess a stem.
 1. Generate a small square image with whatever image tool you use. Prompt for the planner
    look: soft watercolour / doodle / washi-sticker, simple subject. Prefer a tool that returns
    a **file path**, not base64, so a ~1 MB PNG never rides through the model context.
-2. Make sure the file is on this Mac (e.g. saved or copied to `/tmp/onionskin-img.png`). If
+2. Make sure the file is on this Mac under `$TMPDIR`, `/tmp` or `~/Downloads` (e.g. saved or
+   copied to `/tmp/onionskin-img.png`) — `images[].path` refuses anything else, and any file
+   inside the library itself, so `Private/` bytes can never be copied into a Shared page. If
    the image tool only returns **base64 JSON** (common for remote image-gen MCPs), the correct
    move — especially for an overnight/automated run — is to **decode it to a local temp file
    yourself** (e.g. `/tmp/onionskin-img.png`) and pass `images[].path`, not to inline the

@@ -33,6 +33,7 @@ import {
   createPage,
   writeChapterTheme,
   fetchImageToTemp,
+  FETCH_DIR,
 } from "../src/page.js";
 import { resolveTheme, composeAiSvg, PHOSPHOR_CODEPOINTS, scanRawSvgDataUriImages, REGION_DEFAULTS } from "../src/svg.js";
 import {
@@ -1920,6 +1921,40 @@ async function main() {
   let bothErr = false;
   try { await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ data: PNG_1x1, path: srcPng, format: "png", width: 40 }] }] }); } catch { bothErr = true; }
   check("rejects an image with both data and path", bothErr);
+
+  console.log("\nimages[].path containment: never copy library / arbitrary files into Shared (#59)");
+  // A Private/ photo copied into a Shared page's media/ai/ would sync out through iCloud and
+  // be readable via read_page — the one input that could move bytes OUT of Private/.
+  const privMedia = path.join(root, "Private", "Secret", "2026-01-01", "media");
+  await fs.mkdir(privMedia, { recursive: true });
+  const privPng = path.join(privMedia, "photo.png");
+  await fs.writeFile(privPng, Buffer.from(PNG_1x1, "base64"));
+  const refusedWith = async (p: string) => {
+    try {
+      await writeUnderlay(root, imgPage, { status: "ready", dryRun: true, regions: [{ region: "todo", images: [{ path: p, width: 40 }] }] });
+      return null;
+    } catch (e: any) {
+      return String(e.message);
+    }
+  };
+  const privErr = await refusedWith(privPng);
+  check("a Private/ media path is refused", privErr !== null && /library files can't be copied/.test(privErr), String(privErr));
+  const sharedErr = await refusedWith(path.join(root, imgPage, "media", "ai", "from-path.png"));
+  check("a Shared/ page's own media path is refused too (any library file)", sharedErr !== null && /library files can't be copied/.test(sharedErr), String(sharedErr));
+  const escapeRel = path.join(os.tmpdir(), ...Array(12).fill(".."), "etc", "hosts");
+  const escapeErr = await refusedWith(escapeRel);
+  check("a `..` path escaping $TMPDIR (→ /etc/hosts) is refused", escapeErr !== null && /must be a local file under/.test(escapeErr), String(escapeErr));
+  const linkPath = path.join(os.tmpdir(), `onionskin-smoke-link-${process.pid}.png`);
+  await fs.rm(linkPath, { force: true });
+  await fs.symlink(privPng, linkPath);
+  const linkErr = await refusedWith(linkPath);
+  check("a $TMPDIR symlink pointing into the library's Private/ is refused", linkErr !== null && /library files can't be copied/.test(linkErr), String(linkErr));
+  await fs.rm(linkPath, { force: true });
+  const okErr = await refusedWith(srcPng);
+  check("a real $TMPDIR png is still accepted", okErr === null, String(okErr));
+  const missingTmpErr = await refusedWith(path.join(os.tmpdir(), "no-such-onionskin-file.png"));
+  check("a missing $TMPDIR file still says cannot read", missingTmpErr !== null && /cannot read file/.test(missingTmpErr), String(missingTmpErr));
+  await fs.rm(path.join(root, "Private", "Secret"), { recursive: true, force: true });
   await fs.rm(srcPng, { force: true });
 
   console.log("\nA0: PNG codec round-trip + chromaKeyPixels (unit-level, src/png.ts)");
@@ -2510,7 +2545,7 @@ async function main() {
       removeBackgroundImpl: async () => { throw new Error("rembg unavailable"); },
     });
   } catch { /* expected */ }
-  const fetchDir = path.join(os.tmpdir(), "onionskin-fetch");
+  const fetchDir = FETCH_DIR;
   const leftovers = (await fs.readdir(fetchDir).catch(() => [] as string[])).filter((f) => f.startsWith(cleanupStem));
   check("a failed removeBackground fetch leaves no temp files behind", leftovers.length === 0, JSON.stringify(leftovers));
   let hugeRembg = false;

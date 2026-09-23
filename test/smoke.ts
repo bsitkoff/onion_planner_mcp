@@ -1230,6 +1230,17 @@ async function main() {
   check("per-region svg persists to disk verbatim", aiPerRegion.includes(">PRSVG</text>"));
   check("merge of another region keeps the per-region svg", aiPerRegion.includes(">PRSVG</text>") && aiPerRegion.includes(">updated notes</text>"));
 
+  console.log("\nwrite_underlay status: refreshing warns (#61)");
+  const leftRefreshing = await writeUnderlay(root, daily, { status: "refreshing", regions: [{ region: "todo", lines: [{ text: "half built" }] }] });
+  check("a write left at refreshing warns status_refreshing",
+    leftRefreshing.warningDetails.some((w) => w.code === "status_refreshing" && w.severity === "warning" && /set_underlay_status/.test(w.message)),
+    JSON.stringify(leftRefreshing.warningDetails));
+  check("status_refreshing also lands in warnings[]", leftRefreshing.warnings.some((w) => /refreshing/.test(w)));
+  const readyWrite = await writeUnderlay(root, daily, { status: "ready", regions: [{ region: "todo", lines: [{ text: "done" }] }] });
+  check("a ready write does not warn status_refreshing", !readyWrite.warningDetails.some((w) => w.code === "status_refreshing"));
+  const dryRefreshing = await writeUnderlay(root, daily, { status: "refreshing", dryRun: true, regions: [{ region: "todo", lines: [{ text: "x" }] }] });
+  check("a dryRun at refreshing does not warn status_refreshing", !dryRefreshing.warningDetails.some((w) => w.code === "status_refreshing"));
+
   console.log("\nset_underlay_status / clear_underlay");
   await setStatus(root, daily, "refreshing");
   check("status set to refreshing", JSON.parse(await fs.readFile(path.join(root, daily, "manifest.json"), "utf8")).layers.ai.status === "refreshing");

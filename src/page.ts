@@ -1348,6 +1348,17 @@ export async function writeUnderlay(
     return { page: rel, status: opts.status, bytes, aiSvg: svg, warnings, warningDetails, dryRun: true };
   }
 
+  // The app only composites a `ready` layer (#61): a write left at `refreshing` is
+  // invisible until someone flips it, and an unattended caller that forgets is a page
+  // that silently never shows. Legit as step one of a multi-step edit — so warn, don't refuse.
+  if (opts.status === "refreshing") {
+    const message =
+      "page left at refreshing; the app won't show this underlay until you call " +
+      "set_underlay_status ready";
+    warnings.push(message);
+    warningDetails.push({ code: "status_refreshing", severity: "warning", message });
+  }
+
   await atomicWrite(path.join(abs, "ai.svg"), svg);
   // Drop any AI image no longer referenced by the final (possibly merged) ai.svg.
   await gcOrphanMedia(abs, svg);

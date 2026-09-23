@@ -591,7 +591,9 @@ server.tool(
     "sticker — and the habits tracker is the vector `habits: true` block, not a raster. A " +
     "failed image is a reason to try the contain fit or a vector doodle, never to ship a bare " +
     "page; `page_no_art` / `header_unwritten` info warnings tell you when you did. Sets status " +
-    "to 'ready' by default so the app will composite it. Use `merge` to update only the named " +
+    "to 'ready' by default so the app will composite it — finish every page at 'ready'. " +
+    "'refreshing' hides the page and is only for step one of a multi-step edit: it MUST be " +
+    "followed by set_underlay_status ready (a `status_refreshing` warning reminds you). Use `merge` to update only the named " +
     "regions and keep the rest of the page; use `dryRun` to preview the result + fit warnings " +
     "without writing. Returns non-fatal `warnings` plus structured `warningDetails` for likely " +
     "overflow. Refuses any page outside Shared/.",
@@ -710,7 +712,10 @@ server.tool(
     status: z
       .enum(["empty", "refreshing", "ready"])
       .default("ready")
-      .describe("AI-layer status to set after writing. 'ready' makes the app show it."),
+      .describe(
+        "AI-layer status to set after writing. 'ready' (the default) makes the app show it; " +
+          "'refreshing' hides the page until you call set_underlay_status ready.",
+      ),
     merge: z
       .boolean()
       .default(false)

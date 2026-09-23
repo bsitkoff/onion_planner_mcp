@@ -54,6 +54,118 @@ export function scanRawSvgElements(svg: string): string[] {
   return [...unsupported].sort();
 }
 
+/** Compact number for a transform: ≤4 decimals, no trailing zeros, never "-0". */
+function fmtNum(n: number): string {
+  const r = Math.round(n * 1e4) / 1e4;
+  return String(Object.is(r, -0) ? 0 : r);
+}
+
+/** A nested-svg length: a bare number or `px`; anything else (%, em, missing) → null. */
+function parseSvgLength(v: string | undefined): number | null {
+  if (v === undefined) return null;
+  const m = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s*(px)?\s*$/i.exec(v);
+  return m ? Number(m[1]) : null;
+}
+
+/** Attribute names a nested <svg> viewport consumes — dropped once folded into a transform. */
+const NESTED_SVG_VIEWPORT_ATTRS = new Set(["x", "y", "width", "height", "viewbox", "preserveaspectratio"]);
+
+/**
+ * The `transform` equivalent of a nested `<svg>` viewport (SVG 1.1 §7.8/§7.9): place at
+ * `x,y`, then map the `viewBox` into the `width×height` viewport per `preserveAspectRatio`
+ * (default `xMidYMid meet`: uniform scale + alignment offset; `none`: non-uniform).
+ * Returned as the pieces to append after any existing transform, e.g.
+ * `translate(x+tx,y+ty) scale(s) translate(-vbx,-vby)` — the same math the app's
+ * parser-side fix uses. Identity pieces are omitted. Clipping to the viewport is not
+ * reproduced (the renderer has no clip support either way).
+ */
+function nestedSvgTransform(attrs: Map<string, string>): string[] {
+  const x = parseSvgLength(attrs.get("x")) ?? 0;
+  const y = parseSvgLength(attrs.get("y")) ?? 0;
+  let tx = x;
+  let ty = y;
+  let scale: string | null = null;
+  let vbShift: string | null = null;
+  const vbRaw = attrs.get("viewbox");
+  const vb = vbRaw?.trim().split(/[\s,]+/).map(Number);
+  if (vb && vb.length === 4 && vb.every(Number.isFinite) && vb[2] > 0 && vb[3] > 0) {
+    const [vbx, vby, vbw, vbh] = vb;
+    const w = parseSvgLength(attrs.get("width")) ?? vbw;
+    const h = parseSvgLength(attrs.get("height")) ?? vbh;
+    let sx = w / vbw;
+    let sy = h / vbh;
+    const par = (attrs.get("preserveaspectratio") ?? "").trim().split(/\s+/).filter(Boolean);
+    const align = par[0] ?? "xMidYMid";
+    if (align !== "none") {
+      const s = par[1] === "slice" ? Math.max(sx, sy) : Math.min(sx, sy);
+      const off = (key: "x" | "Y", room: number) => {
+        const a = key === "x" ? align.slice(0, 4) : align.slice(4, 8);
+        return a.endsWith("Min") ? 0 : a.endsWith("Max") ? room : room / 2;
+      };
+      tx += off("x", w - vbw * s);
+      ty += off("Y", h - vbh * s);
+      sx = sy = s;
+    }
+    if (sx !== 1 || sy !== 1) {
+      scale = sx === sy ? `scale(${fmtNum(sx)})` : `scale(${fmtNum(sx)},${fmtNum(sy)})`;
+    }
+    if (vbx !== 0 || vby !== 0) vbShift = `translate(${fmtNum(-vbx)},${fmtNum(-vby)})`;
+  }
+  const out: string[] = [];
+  if (fmtNum(tx) !== "0" || fmtNum(ty) !== "0") out.push(`translate(${fmtNum(tx)},${fmtNum(ty)})`);
+  if (scale) out.push(scale);
+  if (vbShift) out.push(vbShift);
+  return out;
+}
+
+/**
+ * Rewrite every nested `<svg>` in caller svg to the equivalent `<g transform>` (#64).
+ * The app renderer treats `svg` like a plain group — a nested viewport's `x`/`y`/
+ * `viewBox`/`width`/`height` are ignored on device, so a nested doodle lands at the
+ * wrong place and size. Each nested open tag becomes `<g …>` carrying its other
+ * attributes (id, class, fill, data-*…; `xmlns*` and the viewport attrs dropped) with a
+ * composed `transform` (an existing `transform` first, then the viewport mapping), and its
+ * matching `</svg>` becomes `</g>`; `<svg …/>` becomes `<g …/>`. `skipRoot` leaves the
+ * outermost `<svg>` of a full raw document alone. Returns the rewritten svg and how many
+ * `<svg>` elements were unwrapped (0 → the input, unchanged).
+ */
+export function unwrapNestedSvg(fragment: string, opts: { skipRoot: boolean }): { svg: string; count: number } {
+  // An open tag's attribute run may contain quoted '>' characters.
+  const tagRe = /<svg\b((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>|<\/svg\s*>/gi;
+  const stack: boolean[] = []; // per open <svg>: was it rewritten to <g>?
+  let count = 0;
+  let rootSeen = false;
+  const svg = fragment.replace(tagRe, (whole, attrText: string | undefined, selfClose: string | undefined) => {
+    if (attrText === undefined) {
+      // A close tag.
+      return stack.pop() ? "</g>" : whole;
+    }
+    if (opts.skipRoot && !rootSeen && stack.length === 0) {
+      rootSeen = true;
+      if (!selfClose) stack.push(false);
+      return whole;
+    }
+    const attrs = new Map<string, string>();
+    const kept: string[] = [];
+    let existingTransform: string | null = null;
+    for (const a of attrText.matchAll(/([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)')/g)) {
+      const name = a[1];
+      const lower = name.toLowerCase();
+      const value = a[3] ?? a[4] ?? "";
+      if (NESTED_SVG_VIEWPORT_ATTRS.has(lower)) attrs.set(lower, value);
+      else if (lower === "xmlns" || lower.startsWith("xmlns:")) continue;
+      else if (lower === "transform") existingTransform = value.trim();
+      else kept.push(a[0]);
+    }
+    const pieces = [...(existingTransform ? [existingTransform] : []), ...nestedSvgTransform(attrs)];
+    if (pieces.length) kept.push(`transform="${pieces.join(" ")}"`);
+    count++;
+    if (!selfClose) stack.push(true);
+    return `<g${kept.length ? " " + kept.join(" ") : ""}${selfClose ? "/" : ""}>`;
+  });
+  return { svg: count ? svg : fragment, count };
+}
+
 /** The only <tspan> attributes the app honours (onionskin#212). */
 const TSPAN_POSITION_ATTRS = new Set(["x", "y", "dy"]);
 
@@ -1713,8 +1825,19 @@ export function composeAiSvg(
     // startHour) has its own info warning and IS still an empty region.
     let hourLabelsDrawn = false;
     if (input.svg !== undefined) {
-      // Raw fragment, emitted verbatim inside the region group (escape hatch).
-      const frag = input.svg.trim();
+      // Raw fragment, emitted verbatim inside the region group (escape hatch) — except
+      // a nested <svg>, which the renderer can't position, becomes a <g transform> (#64).
+      const unwrapped = unwrapNestedSvg(input.svg.trim(), { skipRoot: false });
+      const frag = unwrapped.svg;
+      if (unwrapped.count > 0) {
+        warn(
+          "nested_svg_unwrapped",
+          `region "${region.name}": ${unwrapped.count} nested <svg> rewritten to <g transform> — ` +
+            `the app renderer ignores a nested svg's x/y/width/height/viewBox.`,
+          "info",
+          region.name,
+        );
+      }
       if (frag) {
         const tspans = scanRawSvgTspans(frag);
         if (tspans.styled.length > 0) {

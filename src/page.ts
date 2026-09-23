@@ -25,6 +25,7 @@ import {
   imageBox,
   scanRawSvgElements,
   scanRawSvgDataUriImages,
+  unwrapNestedSvg,
   scanRawSvgTspans,
   extractRegionGroups,
   type RegionInput,
@@ -1266,10 +1267,20 @@ export async function writeUnderlay(
     }
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const size = pageSize(manifest, templateSvg);
-    svg = opts.svg.trim() + "\n";
+    // A nested <svg> can't be positioned by the app renderer — rewrite it (never the
+    // document's own root) to the equivalent <g transform> (#64).
+    const unwrapped = unwrapNestedSvg(opts.svg.trim(), { skipRoot: true });
+    svg = unwrapped.svg + "\n";
     const rawWarnings = rawSvgWarnings(svg, size);
     warnings = rawWarnings.warnings;
     warningDetails = rawWarnings.warningDetails;
+    if (unwrapped.count > 0) {
+      const message =
+        `${unwrapped.count} nested <svg> rewritten to <g transform> — the app renderer ` +
+        "ignores a nested svg's x/y/width/height/viewBox.";
+      warnings.push(message);
+      warningDetails.push({ code: "nested_svg_unwrapped", severity: "info", message });
+    }
     const rawBytes = Buffer.byteLength(svg);
     if (rawBytes > WARN_RAW_SVG_BYTES) {
       const message =

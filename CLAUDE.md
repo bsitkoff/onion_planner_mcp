@@ -250,7 +250,10 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
 - **The app renderer is a custom SVG subset** (SwiftUI `Canvas` + `XMLParser`, no WebKit):
   it handles `svg, g, rect, line, path, text, image, circle, ellipse, polyline, polygon`
   (`RAW_SVG_ALLOWED_ELEMENTS` in `src/svg.ts` is the source of truth) and silently drops
-  anything else. Since app build 121 (onionskin#212) a `<tspan>` carrying `x`/`y`/`dy` starts a
+  anything else. It treats a nested `<svg>` as a plain group (its viewport attrs are ignored),
+  so `unwrapNestedSvg` rewrites any nested `<svg>` in caller svg (region fragments, and a raw
+  document below its root) to the equivalent `<g transform>`, info-flagging
+  `nested_svg_unwrapped` (#64). Since app build 121 (onionskin#212) a `<tspan>` carrying `x`/`y`/`dy` starts a
   new line inside one `<text>` (no per-run font/fill — a bare tspan still flattens into the
   parent run with a space); the raw-svg validator accepts `tspan` and warns
   `raw_svg_tspan_attrs` / `raw_svg_tspan_unpositioned` for those two limits (#42), while

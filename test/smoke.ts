@@ -1230,6 +1230,29 @@ async function main() {
   check("per-region svg persists to disk verbatim", aiPerRegion.includes(">PRSVG</text>"));
   check("merge of another region keeps the per-region svg", aiPerRegion.includes(">PRSVG</text>") && aiPerRegion.includes(">updated notes</text>"));
 
+  console.log("\nnested <svg> in caller svg is unwrapped to <g transform> (#64)");
+  // The app renderer has no nested-viewport support: a nested <svg>'s x/y/viewBox are
+  // ignored on device. The server rewrites it to the equivalent <g transform>.
+  const nestedFrag = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [
+    { region: "ainotes", svg: '<svg id="dood" x="4" y="6" width="40" height="40" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/></svg>' },
+  ]});
+  check("region fragment: nested svg becomes <g transform>",
+    (nestedFrag.aiSvg ?? "").includes('<g id="dood" transform="translate(4,6) scale(2)"><circle cx="10" cy="10" r="8"/></g>') && !/<svg id="dood"/.test(nestedFrag.aiSvg ?? ""),
+    nestedFrag.aiSvg ?? "");
+  check("region fragment: info-level nested_svg_unwrapped detail",
+    nestedFrag.warningDetails.some((w) => w.code === "nested_svg_unwrapped" && w.severity === "info"),
+    JSON.stringify(nestedFrag.warningDetails));
+  const dailySize: [number, number] = JSON.parse(await fs.readFile(path.join(root, daily, "manifest.json"), "utf8")).size ?? [1024, 1366];
+  const nestedRaw = await writeUnderlay(root, daily, { status: "ready", dryRun: true,
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${dailySize[0]}" height="${dailySize[1]}" viewBox="0 0 ${dailySize[0]} ${dailySize[1]}">` +
+      '<svg x="100" y="200" width="64" height="64" viewBox="0 0 32 32"><rect width="32" height="32"/></svg></svg>' });
+  check("raw document: root svg kept, nested one unwrapped",
+    (nestedRaw.aiSvg ?? "").startsWith("<svg xmlns=") && (nestedRaw.aiSvg ?? "").includes('<g transform="translate(100,200) scale(2)"><rect width="32" height="32"/></g></svg>'),
+    nestedRaw.aiSvg ?? "");
+  check("raw document: nested_svg_unwrapped detail", nestedRaw.warningDetails.some((w) => w.code === "nested_svg_unwrapped" && w.severity === "info"), JSON.stringify(nestedRaw.warningDetails));
+  const plainFrag = await writeUnderlay(root, daily, { status: "ready", dryRun: true, regions: [{ region: "ainotes", svg: '<circle cx="1" cy="1" r="1"/>' }] });
+  check("no nested svg → no nested_svg_unwrapped detail", !plainFrag.warningDetails.some((w) => w.code === "nested_svg_unwrapped"));
+
   console.log("\nwrite_underlay status: refreshing warns (#61)");
   const leftRefreshing = await writeUnderlay(root, daily, { status: "refreshing", regions: [{ region: "todo", lines: [{ text: "half built" }] }] });
   check("a write left at refreshing warns status_refreshing",

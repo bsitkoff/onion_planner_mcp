@@ -948,6 +948,38 @@ function addMinutes(time: string, minutes: number): string {
   return `${hh}:${mm}`;
 }
 
+/** Partition true time overlaps into lanes. Endpoints that merely touch do not
+ * overlap. Each connected group shares a width; the next group starts full-width. */
+function scheduleLanes(lines: LineInput[], startHour: number | undefined, rowsPerHour: number,
+  maxRow: number): Map<number, { column: number; columns: number }> {
+  const result = new Map<number, { column: number; columns: number }>();
+  if (startHour === undefined || maxRow < 1) return result;
+  const spans = lines.flatMap((line, index) => {
+    if (line.heading || !line.time || (line.endTime === undefined && line.durationMin === undefined)) return [];
+    const start = Math.max(0, Math.min(maxRow, rowForTime(line.time, startHour, rowsPerHour)));
+    const end = Math.max(0, Math.min(maxRow, rowForTime(line.endTime ?? addMinutes(line.time, line.durationMin!), startHour, rowsPerHour)));
+    return end > start ? [{ index, start, end, column: 0 }] : [];
+  }).sort((a, b) => a.start - b.start || a.end - b.end || a.index - b.index);
+  let group: typeof spans = [];
+  let ends: number[] = [];
+  let groupEnd = -Infinity;
+  const finish = () => {
+    for (const span of group) result.set(span.index, { column: span.column, columns: ends.length });
+    group = []; ends = [];
+  };
+  for (const span of spans) {
+    if (span.start >= groupEnd) finish();
+    let column = ends.findIndex(end => end <= span.start);
+    if (column < 0) column = ends.length;
+    ends[column] = span.end;
+    span.column = column;
+    group.push(span);
+    groupEnd = Math.max(group.length === 1 ? -Infinity : groupEnd, span.end);
+  }
+  finish();
+  return result;
+}
+
 /** A 24h hour (0-23, wrapped) as compact "7a"/"12p" shorthand — for `showHours`. */
 function formatHour(hour: number): string {
   const h = ((hour % 24) + 24) % 24;
@@ -1075,11 +1107,8 @@ const WASHI_DEFAULT_OPACITY = 0.16;
  *
  * A label too long to fit the block's width on one line wraps into multiple lines
  * (reusing `wrapText`, the same greedy wrapper used for `ainotes`/`todo`), stacked and
- * vertically centred in the block — using the tape's own height rather than letting
- * the text run past the right edge. The single-line case renders byte-identical to
- * before (same baseline formula) so existing pages are unaffected. `overflow` comes
- * back true when even the wrapped lines don't fit the block's height, so the caller
- * can warn — today that case is silently drawn with no signal at all.
+ * vertically centred in the block. The tape always keeps its clock-true height;
+ * `overflow` reports labels that cannot fit, including single-line short events.
  */
 function washiBlockFragment(
   x: number,
@@ -1104,12 +1133,12 @@ function washiBlockFragment(
   let labels: string;
   let overflow: boolean;
   if (segments.length <= 1) {
-    // Unchanged from before wrapping was added: single baseline, centred by the same ratio.
-    const labelY = y1 + h - Math.round(h * 0.28);
+    // Centre relative to the font metrics, including on a sub-hour tape.
+    const labelY = Math.round(y1 + h / 2 + size * 0.32);
     labels =
       `<text x="${labelX}" y="${labelY}" font-family="${escapeXml(font)}" ` +
       `font-size="${size}" font-weight="${weight}" fill="${textFill}">${escapeXml(text)}</text>`;
-    overflow = false;
+    overflow = size > h;
   } else {
     const pitch = Math.round(size * 1.3);
     const blockHeight = segments.length * pitch;
@@ -1662,7 +1691,20 @@ export function composeAiSvg(
         const padX = BANNER_PAD_X;
         const bh = slot ? slot.height : Math.round(lsize * 1.15) + 6;
         const by = slot ? slot.y : ly - Math.round(lsize * 0.82) - 3;
-        const bw = slot ? slot.width : lw + padX * 2;
+        // A printed label slot is a starting anchor, not a clipping mask. Long labels
+        // used to keep the slot's authored width, leaving the text hanging outside the
+        // pill (and, on device, looking cropped). Expand within the region when there
+        // is room; only reduce the type size when the label is genuinely wider than
+        // the whole region.
+        const regionMax = region.width !== null ? Math.max(slot?.width ?? 0, region.width - lx) : null;
+        const available = regionMax === null ? null : Math.max(1, regionMax - padX * 2);
+        const labelSize = available !== null && lw > available
+          ? Math.max(11, Math.floor(available / (effLabel.length * 0.82)))
+          : lsize;
+        const fittedWidth = bannerLabelWidth(effLabel, labelSize);
+        const bw = slot
+          ? Math.min(regionMax ?? Math.max(slot.width, fittedWidth + padX * 2), Math.max(slot.width, fittedWidth + padX * 2))
+          : fittedWidth + padX * 2;
         const color = input.labelFill ?? theme.banners[bannerIdx % theme.banners.length];
         bannerIdx++;
         const labelText = pillLabelColor(color, input.labelFill !== undefined, region.name);
@@ -1670,7 +1712,7 @@ export function composeAiSvg(
           `    <rect x="${lx}" y="${by}" width="${bw}" height="${bh}" rx="6" fill="${color}"/>`,
         );
         parts.push(
-          `    <text x="${lx + padX}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${lsize}" ` +
+          `    <text x="${lx + padX}" y="${ly}" font-family="${escapeXml(labelFont)}" font-size="${labelSize}" ` +
             `font-weight="800" letter-spacing="0.1em" fill="${labelText}">${escapeXml(effLabel)}</text>`,
         );
       } else {
@@ -2014,6 +2056,7 @@ export function composeAiSvg(
       // eyebrow text must clear it — the composer reserves the slot plus 12px.
       const artClearX =
         region.artSlot && imageRects.length > 0 ? region.artSlot.x - 12 : null;
+      const lanes = scheduleLanes(lines, effStartHour, rowsPerHour, region.ruledLines.length - 1);
       lines.forEach((line, i) => {
         const size = line.size ?? def.size;
         const font = line.font ?? themeFontFor(theme, region.name, !!line.heading) ?? def.font;
@@ -2108,14 +2151,9 @@ export function composeAiSvg(
               region.name,
             );
           } else {
-            if (r2 - r1 < 1) {
-              // Min block height is one schedule-line interval, read from the template's
-              // ruled lines (2026-07-09 decisions; spec: design/UNDERLAY-VISUAL.md,
-              // forthcoming) — a 20-min meeting on a 1-row-per-hour grid still draws a
-              // visible tape, not a bare text line. Supersedes the old sub-hour
-              // plain-line fallback (#17). Rows are fractional (#32), so "shorter than
-              // one interval" is `r2 - r1 < 1`, and a block that starts mid-interval
-              // near the grid's end shifts up rather than spilling past the last rule.
+            if (r2 <= r1) {
+              // Invalid/non-positive ranges retain the legacy visible fallback and
+              // warning. Valid short events always keep both exact endpoints.
               r2 = r1 + 1;
               if (r2 > maxIdx) {
                 r2 = maxIdx;
@@ -2132,11 +2170,19 @@ export function composeAiSvg(
             const y1 = Math.round(ruledY(region, r1) - region.y);
             const y2 = Math.round(ruledY(region, r2) - region.y);
             // Never start left of the template's printed hour-label gutter (#44).
-            const bx = line.x ?? Math.max(def.xPad ?? DEFAULT_X_PAD, region.gutterX ?? 0);
+            const lane = lanes.get(i) ?? { column: 0, columns: 1 };
+            const baseX = line.x ?? Math.max(def.xPad ?? DEFAULT_X_PAD, region.gutterX ?? 0);
+            // Use one shared left edge for a collision group even if an individual
+            // line supplied x; otherwise custom offsets could reintroduce overlap.
+            const left = lane.columns > 1
+              ? Math.max(def.xPad ?? DEFAULT_X_PAD, region.gutterX ?? 0) : baseX;
             // Right inset is the standard margin, not a second helping of the schedule's
             // wide LEFT gutter (reserved for the printed hour labels) — re-subtracting it
             // on the right left the tape ~half its column narrower than it needed to be.
-            const bw = region.width - bx - DEFAULT_X_PAD;
+            const available = Math.max(0, region.width - left - DEFAULT_X_PAD);
+            const gap = lane.columns > 1 ? Math.min(6, available / (lane.columns * 2)) : 0;
+            const bw = Math.max(0, (available - gap * (lane.columns - 1)) / lane.columns);
+            const bx = left + lane.column * (bw + gap);
             const block = washiBlockFragment(
               bx,
               y1,

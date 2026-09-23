@@ -1388,6 +1388,48 @@ async function main() {
   const dayInMonth2 = await createPage(root, { chapter: "Monthly", name: "2026-02-11", title: "Feb 11" });
   check("sibling clone skips the monthly-overview page", dayInMonth2.template === "daily-minimal" && dayInMonth2.clonedFrom !== "Shared/Monthly/2026-02", `${dayInMonth2.template} from ${dayInMonth2.clonedFrom}`);
 
+  console.log("\ncreate_page stamps templateVersion + honours settings.defaultTemplate (#62)");
+  // The app flags a catalogue day page whose manifest.templateVersion is missing or differs
+  // from the library's seed.version as stale and restamps it — so a page this server makes
+  // must carry the root's current seed.version. Read it; never hard-code it.
+  const seedVersion = (await fs.readFile(path.join(root, "seed.version"), "utf8")).trim();
+  const manifestOf = async (rel: string) => JSON.parse(await fs.readFile(path.join(root, rel, "manifest.json"), "utf8"));
+  check("fixture library has a seed.version", seedVersion.length > 0, JSON.stringify(seedVersion));
+  check("catalogue-created page stamps templateVersion = seed.version",
+    dayInMonth.clonedFrom.startsWith("Templates/") && (await manifestOf(dayInMonth.page)).templateVersion === seedVersion,
+    `${dayInMonth.clonedFrom} → ${(await manifestOf(dayInMonth.page)).templateVersion}`);
+  check("sibling-cloned page stamps templateVersion = seed.version",
+    dayInMonth2.clonedFrom.startsWith("Shared/") && (await manifestOf(dayInMonth2.page)).templateVersion === seedVersion,
+    `${dayInMonth2.clonedFrom} → ${(await manifestOf(dayInMonth2.page)).templateVersion}`);
+  // No seed.version at the root → the key is omitted, not stamped empty.
+  const seedFile = path.join(root, "seed.version");
+  await fs.rename(seedFile, seedFile + ".bak");
+  try {
+    const noSeed = await createPage(root, { chapter: "Fresh", name: "2026-07-02", template: "daily-minimal" });
+    check("no seed.version → no templateVersion key", !("templateVersion" in (await manifestOf(noSeed.page))));
+  } finally {
+    await fs.rename(seedFile + ".bak", seedFile);
+  }
+  // A chapter with no defaultTemplate and no sibling falls back to the library-wide
+  // settings.json → defaultTemplate (the app's own fallback) before erroring.
+  let noDefaultRefused = false;
+  try { await createPage(root, { chapter: "NoDefault", name: "2026-07-03" }); } catch { noDefaultRefused = true; }
+  check("empty chapter, no defaults anywhere → refused", noDefaultRefused);
+  const settingsFile = path.join(root, "settings.json");
+  const settingsBefore = await fs.readFile(settingsFile, "utf8").catch(() => null);
+  const settingsObj = settingsBefore ? JSON.parse(settingsBefore) : {};
+  await fs.writeFile(settingsFile, JSON.stringify({ ...settingsObj, defaultTemplate: "todo-minimal" }, null, 2) + "\n");
+  try {
+    const fromSettings = await createPage(root, { chapter: "NoDefault", name: "2026-07-03" });
+    check("empty chapter falls back to settings.defaultTemplate", fromSettings.template === "todo-minimal" && fromSettings.clonedFrom === "Templates/todo-minimal", `${fromSettings.template} from ${fromSettings.clonedFrom}`);
+    // A sibling now exists: an un-templated create still clones it (settings never overrides a sibling).
+    const nextSibling = await createPage(root, { chapter: "NoDefault", name: "2026-07-04" });
+    check("with a sibling, the sibling still wins over settings", nextSibling.clonedFrom === fromSettings.page, nextSibling.clonedFrom);
+  } finally {
+    if (settingsBefore === null) await fs.rm(settingsFile, { force: true });
+    else await fs.writeFile(settingsFile, settingsBefore);
+  }
+
   console.log("\ncreate_page honors weekdayTemplates + deletedDays");
   const dailyFolderFile2 = path.join(root, "Shared", "Daily", ".folder.json");
   const dailyFolder2 = JSON.parse(await fs.readFile(dailyFolderFile2, "utf8").catch(() => "{}"));

@@ -1558,6 +1558,29 @@ async function listCatalogueTemplates(root: string): Promise<string[]> {
   return ids.sort();
 }
 
+/** The library root's `seed.version` (the catalogue version), trimmed; null if absent/empty. */
+async function readSeedVersion(root: string): Promise<string | null> {
+  const raw = await readIfExists(path.join(root, "seed.version")).catch(() => null);
+  const v = raw?.trim();
+  return v ? v : null;
+}
+
+/**
+ * The library-wide `settings.json → defaultTemplate`, or undefined when the file is
+ * missing, garbled, or the key isn't a non-empty string — advisory, never fatal.
+ */
+async function readSettingsDefaultTemplate(root: string): Promise<string | undefined> {
+  try {
+    const raw = await readIfExists(path.join(root, "settings.json"));
+    if (!raw) return undefined;
+    const v = (JSON.parse(raw) as any)?.defaultTemplate;
+    // A catalogue id is one folder name — never let a settings value walk out of Templates/.
+    return typeof v === "string" && v.trim() && !/[/\\]|^\.\.?$/.test(v.trim()) ? v.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Create a new shared page, writing manifest + layers + media/ and appending the
  * new folder to the chapter's .folder.json order. Template resolution: an explicit
@@ -1566,7 +1589,9 @@ async function listCatalogueTemplates(root: string): Promise<string[]> {
  * declared `.folder.json → defaultTemplate`; with a template id in hand, a matching
  * **sibling page** is cloned (keeps a chapter consistent), else the id is instantiated
  * from the top-level **`Templates/` catalogue**. With no id at all, any non-overview
- * sibling is cloned. A page named in the chapter's `.folder.json → deletedDays`
+ * sibling is cloned; with no such sibling, the library-wide `settings.json →
+ * defaultTemplate` is instantiated from the catalogue (the app's own fallback). The new
+ * manifest carries `templateVersion` = the root `seed.version` when there is one. A page named in the chapter's `.folder.json → deletedDays`
  * tombstone list is refused unless `clearDeleted` is set.
  */
 export async function createPage(
@@ -1627,8 +1652,25 @@ export async function createPage(
     name: opts.name,
     template: effTemplate,
   });
+  // No usable sibling and nothing named: the app falls through to the library-wide
+  // `settings.json → defaultTemplate` (#62), so do the same before erroring (or before
+  // handing a day page the month-overview grid). Never overrides a real sibling.
+  let settingsCat: Awaited<ReturnType<typeof loadCatalogueTemplate>> = null;
+  let settingsTemplate: string | undefined;
+  if (!effTemplate && (!sibling || isMonthlyOverview(path.basename(sibling.rel), sibling.manifest))) {
+    settingsTemplate = await readSettingsDefaultTemplate(root);
+    if (settingsTemplate) settingsCat = await loadCatalogueTemplate(root, settingsTemplate);
+  }
   let source: PageSource;
-  if (sibling) {
+  if (settingsCat && settingsTemplate) {
+    source = {
+      templateSvg: settingsCat.templateSvg,
+      stickersSvg: settingsCat.stickersSvg,
+      size: settingsCat.size,
+      templateName: settingsTemplate,
+      clonedFrom: `Templates/${settingsTemplate}`,
+    };
+  } else if (sibling) {
     source = {
       templateSvg: sibling.templateSvg,
       stickersSvg: null,
@@ -1642,7 +1684,10 @@ export async function createPage(
       const ids = await listCatalogueTemplates(root);
       const why = effTemplate
         ? `no catalogue template "${effTemplate}" exists under Templates/`
-        : "pass `template` with a catalogue id to start from the Templates/ catalogue";
+        : settingsTemplate
+          ? `settings.json's defaultTemplate "${settingsTemplate}" is not a Templates/ catalogue ` +
+            "id — pass `template` with a catalogue id"
+          : "pass `template` with a catalogue id to start from the Templates/ catalogue";
       throw new Error(
         `No sibling page in "${chapterRel}" to clone from, and ${why}. ` +
           `Available templates: ${ids.join(", ") || "(none)"}.`,
@@ -1659,6 +1704,9 @@ export async function createPage(
 
   const { size, templateName } = source;
   const ts = nowIso();
+  // The app treats a missing/different `templateVersion` as a stale template and
+  // restamps the page (FORMAT.md §3, #62 / onionskin#243) — stamp the current catalogue's.
+  const templateVersion = await readSeedVersion(root);
   const stageName = `.create-${sanitizeName(opts.name)}-${process.pid}-${tmpCounter++}`;
   const stageAbs = path.join(chapterAbs, stageName);
   let staged = false;
@@ -1679,6 +1727,7 @@ export async function createPage(
     const manifest: Manifest = {
       title: opts.title ?? opts.name,
       template: templateName,
+      ...(templateVersion ? { templateVersion } : {}),
       created: ts,
       modified: ts,
       size,

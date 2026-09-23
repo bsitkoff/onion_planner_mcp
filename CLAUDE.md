@@ -194,7 +194,9 @@ attribute, the app handles navigation. `lines` and `calendar` are mutually exclu
 `.folder.json → defaultTemplate` → a **sibling page** in the chapter (sorted; a month
 chapter's monthly-overview grid is never used for a new day page) → the top-level
 **`Templates/<id>/` catalogue** (a catalogue template may also ship a starter
-`stickers.svg`, copied on create). A fresh library ships the `Templates/` + `Stickers/` catalogues but no `Shared/`
+`stickers.svg`, copied on create) → with no non-overview sibling, the library-wide
+`settings.json → defaultTemplate`. The new manifest is stamped `templateVersion` = the root
+`seed.version` (the app treats a missing one as a stale template). A fresh library ships the `Templates/` + `Stickers/` catalogues but no `Shared/`
 pages, so catalogue instantiation is how the first page in a chapter gets made.
 
 ## Invariants (do not break)

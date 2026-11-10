@@ -401,7 +401,7 @@ export function resolveTheme(input?: ThemeInput | string): ResolvedTheme {
   let theme: Theme;
   if (isAdaptive(t)) {
     const harmony: Harmony = t.harmony ?? "match";
-    const variety = t.varietyDial ?? 0.5;
+    const variety = t.varietyDial ?? 0.6; // the app's default too (#63)
     const month = t.month ?? new Date().getMonth() + 1;
     const base = t.templatePalette ?? [];
     if (base.length === 0) {

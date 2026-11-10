@@ -146,6 +146,10 @@ Two `write_underlay` modifiers: **`merge`** patches only the named regions into 
 existing `ai.svg` (parsing its `<g data-region>` blocks, replacing matches, keeping the rest
 **verbatim** — `svg.mergeRegions`) so an update to one region doesn't clobber the page;
 **`dryRun`** composes and returns the result + warnings without writing or flipping status.
+A merge reads the existing `ai.svg` through `page.readLayerForMerge`, never `readIfExists`: only
+`ENOENT` means "no file"; an iCloud-dataless file or `.ai.svg.icloud` stub is `brctl download`ed
+and polled (30s), and anything still unreadable **refuses the write** — it is read before any
+media is written, since merging over "empty" would silently drop every other region (#60).
 `merge` is structured-input only (rejected with raw `svg`).
 
 A region entry may also carry **`images`** — PNG/JPEG art the caller supplies as base64

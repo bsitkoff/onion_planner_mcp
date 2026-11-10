@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { resolvePageRel, requireChapterName } from "./paths.js";
 import {
   parseRegions,
@@ -174,7 +174,7 @@ export async function writeChapterTheme(
  * given *without* any adaptive param is an explicit override that wins outright (a
  * chapter `fontPersonality` still rides along — fonts are an orthogonal axis).
  */
-async function resolveThemeInput(
+export async function resolveThemeInput(
   pageAbs: string,
   templateSvg: string | null,
   opts: {
@@ -205,16 +205,21 @@ async function resolveThemeInput(
       templatePalette,
     };
   }
-  // A chapter's `paletteCharacter` (or, for a calendar chapter, its month) IS its
-  // colour identity, so it beats the chapter's own `harmony`/`varietyDial` (which
-  // derive from the template's colours instead) — but a *per-call* adaptive param is an
-  // explicit override and always forwards.
-  const chapterAdaptive =
-    chapter?.paletteCharacter || monthlyMonth !== undefined ? undefined : chapter;
+  // Same rule as the app's composer (UnderlayTheme.swift, #63): a chapter's explicit
+  // `harmony` forwards, except `seasonal` on a calendar chapter — its per-month ink table
+  // already IS the seasonal identity. A chapter `varietyDial` rides with a surviving
+  // harmony; on a paletteCharacter / calendar chapter with no harmony it is dropped, since
+  // here varietyDial alone would switch to the template-derived palette (in the app it only
+  // tunes the ink-palette path). A *per-call* adaptive param always forwards.
+  const chapterHarmony =
+    chapter?.harmony === "seasonal" && monthlyMonth !== undefined ? undefined : chapter?.harmony;
+  const ownIdentity = !!chapter?.paletteCharacter || monthlyMonth !== undefined;
+  const chapterVariety =
+    chapterHarmony !== undefined || !ownIdentity ? chapter?.varietyDial : undefined;
   return {
     name: opts.theme,
-    harmony: opts.harmony ?? chapterAdaptive?.harmony,
-    varietyDial: opts.varietyDial ?? chapterAdaptive?.varietyDial,
+    harmony: opts.harmony ?? chapterHarmony,
+    varietyDial: opts.varietyDial ?? chapterVariety,
     fontPersonality: opts.fontPersonality ?? chapter?.fontPersonality,
     accent: chapter?.accent,
     paletteCharacter: chapter?.paletteCharacter,
@@ -578,6 +583,18 @@ async function resolveImagePath(libraryRoot: string, regionName: string, given: 
 export interface ResolveImagesDeps {
   knockoutSubjectImpl?: (inputPath: string, outputPath: string) => Promise<void>;
 }
+
+/**
+ * Test seam for the iCloud handling in `readLayerForMerge`. Defaults: `isDataless` checks the
+ * macOS `SF_DATALESS` file flag (`stat -f %f`), `download` runs `brctl download`, `waitMs` 30s.
+ */
+export interface ICloudOps {
+  isDataless?: (absFile: string) => Promise<boolean>;
+  download?: (absFile: string) => Promise<void>;
+  waitMs?: number;
+}
+
+export type WriteUnderlayDeps = ResolveImagesDeps & { icloud?: ICloudOps };
 
 /**
  * Decode, validate, size, and (unless dryRun) write each region's images into the
@@ -974,6 +991,82 @@ async function isDir(abs: string): Promise<boolean> {
   }
 }
 
+/** `SF_DATALESS` (sys/stat.h): the file's bytes live only in iCloud, not on this Mac. */
+const SF_DATALESS = 0x40000000;
+
+function execFileP(cmd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: 15_000 }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+  });
+}
+
+async function defaultIsDataless(absFile: string): Promise<boolean> {
+  if (process.platform !== "darwin") return false;
+  try {
+    const flags = Number((await execFileP("/usr/bin/stat", ["-f", "%f", absFile])).trim());
+    return Number.isFinite(flags) && (flags & SF_DATALESS) !== 0;
+  } catch {
+    return false; // a missing file is ENOENT's job, handled by the caller
+  }
+}
+
+async function defaultDownload(absFile: string): Promise<void> {
+  if (process.platform !== "darwin") return;
+  await execFileP("/usr/bin/brctl", ["download", absFile]).catch(() => {});
+}
+
+/**
+ * Read a layer that a `merge` write is about to build on (#60). Unlike `readIfExists`, only a
+ * genuine `ENOENT` means "no file": an iCloud-evicted (dataless) file or a `.<name>.icloud`
+ * stub is downloaded first (`brctl download`, then polled), and any other read error, or a
+ * file that stays cloud-only, throws. Treating either as empty would rewrite the page with
+ * only the caller's regions and silently drop the rest.
+ */
+export async function readLayerForMerge(absFile: string, ops: ICloudOps = {}): Promise<string | null> {
+  const isDataless = ops.isDataless ?? defaultIsDataless;
+  const download = ops.download ?? defaultDownload;
+  const waitMs = ops.waitMs ?? 30_000;
+  const name = path.basename(absFile);
+  const stub = path.join(path.dirname(absFile), `.${name}.icloud`);
+  const refuse = (why: string) =>
+    new Error(
+      `merge: ${name} ${why} — refusing to merge, because treating it as empty would drop every ` +
+        `region not named in this call. Retry once iCloud has synced it (open the page folder ` +
+        `in Finder or run \`brctl download\` on it), or write without \`merge\` to replace the whole page.`,
+    );
+
+  const present = async (): Promise<boolean> => {
+    try {
+      await fs.stat(absFile);
+      return true;
+    } catch (e: any) {
+      if (e?.code === "ENOENT") return false;
+      throw refuse(`is unreadable (${e.message})`);
+    }
+  };
+
+  const exists = await present();
+  if (!exists && !(await isFile(stub))) return null; // genuinely no ai.svg yet
+  if (!exists || (await isDataless(absFile))) {
+    await download(absFile);
+    const deadline = Date.now() + waitMs;
+    while (!((await present()) && !(await isDataless(absFile)))) {
+      if (Date.now() >= deadline) {
+        throw refuse(
+          `is in iCloud but not downloaded on this Mac (dataless) and didn't download within ` +
+            `${Math.round(waitMs / 1000)}s`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, Math.min(250, waitMs)));
+    }
+  }
+  try {
+    return await fs.readFile(absFile, "utf8");
+  } catch (e: any) {
+    throw refuse(`is unreadable (${e.message})`);
+  }
+}
+
 export async function readIfExists(absFile: string): Promise<string | null> {
   try {
     return await fs.readFile(absFile, "utf8");
@@ -1275,7 +1368,7 @@ export async function writeUnderlay(
     /** AI-text voice (clean/handwritten/editorial). Overrides the chapter default. */
     fontPersonality?: ChapterTheme["fontPersonality"];
   },
-  deps: ResolveImagesDeps = {},
+  deps: WriteUnderlayDeps = {},
 ): Promise<WriteResult> {
   const abs = resolvePageRel(root, rel);
   // Confirm it's a real page before writing.
@@ -1341,6 +1434,11 @@ export async function writeUnderlay(
     // and fills each image's href, ahead of composeAiSvg.
     const templateSvg = await readIfExists(path.join(abs, "template.svg"));
     const regions = templateSvg ? parseRegions(templateSvg, manifest.template) : [];
+    // Read the ai.svg a merge builds on FIRST — before resolveImages writes any media — so an
+    // unreadable / iCloud-dataless file refuses the whole write instead of dropping regions (#60).
+    const existingAi = opts.merge
+      ? await readLayerForMerge(path.join(abs, "ai.svg"), deps.icloud)
+      : null;
     // `habits: true` → the library's `settings.json → underlayHabits` (#50), resolved here
     // so composeAiSvg stays pure. No configured habits is a caller error, not an empty block.
     for (const r of opts.regions) {
@@ -1370,8 +1468,7 @@ export async function writeUnderlay(
     warnings = [...composed.warnings, ...imageResult.warnings];
     warningDetails = [...composed.warningDetails, ...imageResult.warningDetails];
     if (opts.merge) {
-      const existing = await readIfExists(path.join(abs, "ai.svg"));
-      const merged = mergeRegions(existing, composed.svg, size);
+      const merged = mergeRegions(existingAi, composed.svg, size);
       svg = merged.svg;
       if (merged.discardedExisting) {
         const message =

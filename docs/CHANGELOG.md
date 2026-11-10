@@ -7,6 +7,20 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Fix: `merge` never drops regions over an iCloud-dataless ai.svg; theme rule matches the app — 2026-11-10
+
+`write_underlay` with `merge: true` read the existing `ai.svg` with `readIfExists`, which
+returns `null` for *any* error, so an iCloud-evicted (dataless) file, a `.ai.svg.icloud` stub,
+or a locked file looked like "no ai.svg" and the page was rewritten with only the caller's
+regions (#60 item 1). The merge read now tells `ENOENT` apart: a dataless file or stub is
+downloaded (`brctl download`, polled up to 30s) and anything still unreadable refuses the whole
+write with a clear error, before any media is written. Regression tests: `test/merge-dataless.ts`.
+
+Theme drift (#63, MCP side): a chapter's `harmony` is now dropped only when it is `seasonal` on a
+month chapter (the app's rule in `UnderlayTheme.swift`), so a `paletteCharacter` chapter with an
+explicit harmony (e.g. `orchard` + `seasonal`) gets the same colours from either writer; the
+default `varietyDial` is 0.6, as in the app. Tests: `test/theme-parity.ts`.
+
 ## Fix: an incomplete page folder is completed, not refused — 2026-09-22
 
 The morning planner run couldn't write today's page. `Shared/2026-09/2026-09-22` had been left

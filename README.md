@@ -16,10 +16,12 @@ Planned work: [`docs/ROADMAP.md`](docs/ROADMAP.md) · shipped history:
 Every Onionskin page is a folder compositing four SVG layers
 (`template → ai → stickers → ink`). The **ai layer is yours**; the user's ink/stickers
 are not. Writing the underlay needs no permission (it isn't a privacy surface — 2026-07-09
-app decisions); the gated operation is reading the user's *ink*, per-chapter, once the app
-ships its ink-read toggle. Today the server still enforces `Shared/`-only containment
-(`Private/` is invisible) until the app retires that gate — a same-release change
-([#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)). This server lets Claude
+app decisions); the one gated operation is reading the user's *ink*, per chapter
+(`permissions.inkReadable`, fail-closed). Once the app has migrated a library (its
+`.ink-permissions-v1.json` marker), every chapter under `Shared/` and `Private/` is reachable;
+before that the server keeps the old `Shared/`-only rules
+([#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13); contract: the app's
+`design/FORMAT.md` §1). This server lets Claude
 fill a page's schedule, to-dos, focus, and the `ainotes` AI-voice block, then flip
 `manifest.json → layers.ai.status` to `ready` so the app composites it on next foreground.
 The underlay renders in **the chapter's own colours** (its `paletteCharacter`/theme, lifted
@@ -132,9 +134,10 @@ the future path if it ever needs distribution.)
   new page folder's own files and the chapter `.folder.json` order; via `set_chapter_theme`,
   the chapter `.folder.json → theme` block (only the passed keys; order and other fields are
   preserved).
-- **Never** writes `ink.svg`, `stickers.svg`, `template.svg`, or the rest of `media/`; never
-  reads/writes `Private/`.
-- Every write is validated to live under `Shared/` (no traversal) and is **atomic**
+- **Never** writes `ink.svg`, `stickers.svg`, `template.svg`, or the rest of `media/`; reads
+  `ink.svg` only where the chapter's `permissions.inkReadable` allows it.
+- Every write is validated to live inside a reachable chapter (`Shared/`, plus `Private/` in a
+  migrated library; never root content; no traversal) and is **atomic**
   (temp file + rename) so the app never reads a half-written file.
 - `fetch_image` is the one network-capable helper: it accepts HTTPS only, validates PNG/JPEG
   bytes and the 2 MB cap, and writes only to OS temp storage.

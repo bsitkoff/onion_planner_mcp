@@ -23,15 +23,13 @@ That's the whole "connection."
 underlay is **not a privacy surface** — *writing* `ai.svg` needs no permission gating. The only
 gated operation is *reading the user's ink layer* (`read_ink`), governed by the chapter's
 **`permissions.inkReadable`** boolean (a `permissions` block sibling to `theme` in the chapter
-`.folder.json`). `read_ink` refuses when it resolves false: an explicit value always wins;
-absent, it resolves from the chapter type — **monthly → readable, reflection → private,
-everything else → readable** (the last is the MCP's assumption for the app's global new-chapter
-default, which it can't see). The old location-based gate — "`Shared/` is
-readable/writable, everything else is private" — is retiring **app-side**, but the server's
-`resolvePageRel` guard still enforces `Shared/` containment today: dropping it is a
-same-release change coupled to the app shipping the gate retirement
-([#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)) — do not remove the guard
-unilaterally.
+`.folder.json`). The rules — fail-closed (only an explicit `true` is readable), and the
+retirement of the old "`Shared/` is visible, `Private/` is hidden" location gate — are owned by
+the app's `design/FORMAT.md` §1. Both are keyed on the app's `.ink-permissions-v1.json` marker
+at the library root: until it exists, only `Shared/` is reachable and an absent key resolves by
+chapter type (monthly → readable, reflection → private, otherwise readable), so a library the
+new app hasn't migrated yet behaves exactly as before
+([#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)).
 
 ---
 
@@ -58,7 +56,7 @@ Documents/                         ← library root
 │  └─ daily-minimal/template.svg   ← one folder per template id
 ├─ Stickers/                       ← catalogue of reusable sticker PNGs (read-only)
 │  └─ Marks/star.png …
-├─ Shared/                         ← YOUR sandbox. Anything here is writable.
+├─ Shared/                         ← chapters (new ones go here)
 │  └─ Daily/                       ← a chapter (folder)
 │     ├─ .folder.json
 │     └─ 2026-06-13/               ← a page (folder; name is a human date/slug)
@@ -68,20 +66,22 @@ Documents/                         ← library root
 │        ├─ stickers.svg           ← never write
 │        ├─ ink.svg                ← never write
 │        └─ media/
-└─ Private/                        ← off-limits. Do not read or write.
+└─ Private/                        ← older chapters: reachable once the app has migrated the library
 ```
 
 A fresh library ships the `Templates/` + `Stickers/` catalogues but **no `Shared/`
 pages** — the app (or `create_page`) creates pages by copying a template into `Shared/`.
 
-**Only touch pages whose path contains `…/Shared/…`.**
+**Only touch pages inside a chapter under `Shared/` (or `Private/` once
+`.ink-permissions-v1.json` exists).** Never write root content.
 
 ---
 
 ## 3. The connection recipe
 
 ### a. Find shared pages
-Walk `Documents/Shared/**`. Any directory containing a `manifest.json` is a page. Read
+Walk `Documents/Shared/**` (and `Documents/Private/**` in a migrated library). Any directory
+containing a `manifest.json` is a page. Read
 `manifest.json`:
 
 ```json
@@ -184,10 +184,10 @@ instant pickup.) Write whenever you like; it appears on the next read.
 
 ## 4. Rules (the short version)
 
-- **Write only `ai.svg`, only under `Shared/`** — plus the page's own `media/ai/` folder for
-  art you place, and a chapter's `.folder.json → theme` block if you set a chapter default.
-  Never write `ink.svg`, `stickers.svg`, `template.svg`, or the rest of `media/`; never read or
-  write under `Private/`.
+- **Write only `ai.svg`, only inside a reachable chapter** — plus the page's own `media/ai/`
+  folder for art you place, and a chapter's `.folder.json → theme` block if you set a chapter
+  default. Never write `ink.svg`, `stickers.svg`, `template.svg`, or the rest of `media/`; read
+  `ink.svg` only where `permissions.inkReadable` allows it.
 - **Write atomically.** Write to a temp file in the same directory and rename into place,
   so the app never reads a half-written `ai.svg`. Then flip `status` to `ready`.
 - **You own one file, so there is no write conflict.** The app never writes `ai.svg`;

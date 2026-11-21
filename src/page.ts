@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
 import { spawn, execFile } from "node:child_process";
-import { resolvePageRel, requireChapterName } from "./paths.js";
+import { resolvePageRel, requireChapterRel, locationGateRetired } from "./paths.js";
 import {
   parseRegions,
   parseViewBox,
@@ -79,7 +79,7 @@ export interface ChapterTheme {
  * gates `read_ink` (`inkReadable`); `defaultTemplate` helps type-detect a reflection
  * chapter when no explicit permission is set.
  */
-interface ChapterConfig {
+export interface ChapterConfig {
   theme: ChapterTheme | null;
   /** 1–12 when this is a calendar chapter; undefined otherwise. */
   month?: number;
@@ -109,16 +109,20 @@ async function readChapterConfig(pageAbs: string): Promise<ChapterConfig> {
 }
 
 /**
- * Whether `read_ink` may read this page's handwriting (confirmed 2026-07-10). An
- * explicit `permissions.inkReadable` on the chapter always wins; absent, it resolves
- * from the chapter *type*: a monthly (calendar) chapter → readable; a reflection
- * chapter (its own or the chapter's default template names "reflection") → private;
- * everything else → **readable** (confirmed by Bridget, 2026-07-10: the daily-underlay
- * workflow depends on reading ink to place AI content around handwriting; an explicit
- * `permissions.inkReadable: false` is the opt-out). Writing the underlay is never gated —
+ * Whether `read_ink` may read this page's handwriting. Writing the underlay is never gated —
  * the AI layer isn't a privacy surface.
+ *
+ * Once the app has migrated the library (app #144 Phase B, `locationGateRetired`), this is
+ * **fail-closed**: only an explicit `permissions.inkReadable: true` is readable; absent or
+ * malformed is private. The app stamped every pre-existing chapter with the value that was
+ * effective before, and writes one at every chapter creation.
+ *
+ * Before that migration (an app build that predates it), the transitional rule confirmed
+ * 2026-07-10 still applies: explicit wins; absent resolves from the chapter *type* — monthly
+ * → readable, reflection → private, everything else → readable.
  */
-function resolveInkReadable(config: ChapterConfig, manifest: Manifest): boolean {
+export function resolveInkReadable(config: ChapterConfig, manifest: Manifest, gateRetired: boolean): boolean {
+  if (gateRetired) return config.inkReadable === true;
   if (config.inkReadable !== undefined) return config.inkReadable;
   if (config.month !== undefined) return true; // monthly → readable
   const templateHint = `${manifest.template ?? ""} ${config.defaultTemplate ?? ""}`;
@@ -147,7 +151,7 @@ export async function writeChapterTheme(
   chapter: string,
   theme: ChapterTheme,
 ): Promise<{ chapter: string; theme: ChapterTheme }> {
-  const chapterRel = `Shared/${requireChapterName(chapter)}`;
+  const chapterRel = requireChapterRel(root, chapter);
   const chapterAbs = resolvePageRel(root, chapterRel);
   const stat = await fs.stat(chapterAbs).catch(() => null);
   if (!stat || !stat.isDirectory()) {
@@ -1234,7 +1238,7 @@ export async function readInk(
   const abs = resolvePageRel(root, rel);
   const manifest = await readManifest(abs, rel); // confirms it's a real page
   const config = await readChapterConfig(abs);
-  if (!resolveInkReadable(config, manifest)) {
+  if (!resolveInkReadable(config, manifest, locationGateRetired(root))) {
     throw new Error(
       `read_ink refused: this chapter's ink is private ` +
         `(permissions.inkReadable = false in its .folder.json). The AI may still write the ` +
@@ -1764,8 +1768,8 @@ export async function createPage(
       `Page name "${opts.name}" must be a single non-empty folder name (no slashes).`,
     );
   }
-  const chapterName = requireChapterName(opts.chapter);
-  const chapterRel = `Shared/${chapterName}`;
+  const chapterRel = requireChapterRel(root, opts.chapter);
+  const chapterName = chapterRel.slice(chapterRel.indexOf("/") + 1);
   const chapterAbs = resolvePageRel(root, chapterRel);
   const newRel = `${chapterRel}/${opts.name}`;
   const newAbs = resolvePageRel(root, newRel); // also validates name has no traversal

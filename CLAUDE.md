@@ -69,7 +69,7 @@ to exercise the MCP transport itself.
 | File | Role |
 |---|---|
 | `src/index.ts` | MCP server + the 11 tools (zod schemas, annotations, error handling). |
-| `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under `Shared/`, no traversal). |
+| `src/paths.ts` | Container resolution (`ONIONSKIN_CONTAINER` or default iCloud path) + the **path-safety guard** (`resolvePageRel`: must be under a reachable book folder — `bookFolders`: `Shared/`, plus `Private/` once the app's `.ink-permissions-v1.json` marker exists — no traversal, never root content) + `chapterRel` (chapter name/path → folder). |
 | `src/library.ts` | `requireLibrary` (existence + setup-guide error), chapter/page discovery. |
 | `src/template.ts` | Parse `template.svg` → `Region[]` geometry (transform, rect, rows/cols, ruled-line positions) with `fast-xml-parser`. |
 | `src/svg.ts` | Compose `ai.svg` from structured region input (text lines, `calendar` grid, `<image>` placement); `imageDims` header parse; the default (no-theme) underlay palette (a chapter's own resolved ink palette, gold retired); per-region font/size/weight defaults; theme resolution (named presets + adaptive `{harmony,varietyDial,fontPersonality}` param block → `Theme`). |
@@ -84,7 +84,7 @@ The 11 tools (all in `src/index.ts`): `get_library`, `list_pages`, `read_page`, 
 underlayHabits` key, read-modify-write, every other key preserved, refusing a garbled file); `read_ink` is read-only (the user's handwriting layer — read it before composing
 so you place AI content *around* a `shared` region's handwriting; bulky per-stroke `data-stroke`
 streams are stripped unless `includeStrokeData` is set; refuses when the chapter marks its ink
-private via `permissions.inkReadable: false`, reflection chapters private by default) and `fetch_image` only writes a
+private — fail-closed on `permissions.inkReadable` in a migrated library, the type-default bridge before) and `fetch_image` only writes a
 validated download to the OS temp dir (HTTPS image → temp file, PNG/JPEG + 2MB check, optional `rembg`
 background removal), never the library. `write_underlay` is the workhorse (structured `regions` →
 composed `ai.svg`).
@@ -93,7 +93,7 @@ composed `ai.svg`).
 
 A page is a folder of layered SVGs (`template → ai → stickers → ink`) plus `manifest.json`;
 a chapter is a folder of pages, ordered by `.folder.json`. Page discovery is "any folder
-containing `manifest.json`" (`library.findPages`), recursing under `Shared/` only.
+containing `manifest.json`" (`library.findPages`), recursing under each of `bookFolders(root)`.
 
 `template.svg` carries the geometry. Each addressable region is a `<g id="region-<name>"
 data-region="<name>" transform="translate(x,y)">`; `template.parseRegions` turns these into
@@ -212,8 +212,9 @@ pages, so catalogue instantiation is how the first page in a chapter gets made.
   `set_chapter_theme`, the chapter `.folder.json → theme` block (only the passed keys, order +
   other fields preserved); and via `set_habits`, the root `settings.json → underlayHabits` key
   only (the app's `UNDERLAY-AUTOFILL.md` names it MCP read/writable). Never touch
-  `ink.svg`, `stickers.svg`, `template.svg`, the rest of `media/`, or anything under `Private/`.
-- All writes go through `resolvePageRel` (enforces `Shared/` containment) and `atomicWrite`
+  `ink.svg`, `stickers.svg`, `template.svg`, the rest of `media/`, or root content.
+- All writes go through `resolvePageRel` (book-folder containment, keyed on the app's migration
+  marker — see the app's `design/FORMAT.md` §1) and `atomicWrite`
   (temp + rename).
 - **Re-read `manifest.size` per page** — never assume `1024×1366`. The geometry comes from
   each page's own `template.svg`; don't hard-code region coordinates.

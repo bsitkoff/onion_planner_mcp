@@ -30,9 +30,10 @@ below links its issue — detail, sketches, and open decisions live there, not h
    `permissions.inkReadable` from the chapter `.folder.json` and refuses when it resolves false
    (explicit value wins; else monthly → readable, reflection → private, everything else →
    readable — the last **confirmed by Bridget 2026-07-10**; an explicit
-   `permissions.inkReadable: false` is the opt-out). The app-side Shared/ visibility gate retires with the toggle in the
-   **same release** — until then `resolvePageRel` keeps enforcing Shared/ containment (see
-   [#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)).
+   `permissions.inkReadable: false` is the opt-out). **Gate retirement shipped 2026-11-21**
+   with app #144 Phase B ([#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)):
+   keyed on the app's `.ink-permissions-v1.json` marker, `Private/` becomes reachable and
+   `read_ink` goes fail-closed; an unmigrated library keeps the rules above.
 4. **No gold** (app design decisions 2026-07-09) — the default decoration palette derives
    from the chapter's palette character / `theme.harmony`, not a canonical gold token.
    **Shipped** ([#20](https://github.com/bsitkoff/onion_planner_mcp/issues/20), 2026-07-09);
@@ -48,8 +49,8 @@ below links its issue — detail, sketches, and open decisions live there, not h
 - Only ever write `ai.svg` + the manifest's `layers.ai` block (+ `modified`) + the page's
   **`media/ai/`** subfolder (AI-owned art); on create, the new page's own files + chapter
   `.folder.json`; via `set_chapter_theme`, the chapter `.folder.json → theme` block. Never
-  touch ink/stickers/template, the rest of `media/`, or Private.
-- All writes through `resolvePageRel` (Shared/ containment) + `atomicWrite`.
+  touch ink/stickers/template, the rest of `media/`, or root content.
+- All writes through `resolvePageRel` (book-folder containment, `bookFolders`) + `atomicWrite`.
 - No app/network API for planner state. Re-read `manifest.size` per page; geometry comes from
   each page's template.
 - Closed font set (`Mulish, Newsreader, IBM Plex Mono, Caveat, Fredoka, Phosphor`) — carries
@@ -114,11 +115,6 @@ instead of memorizing "don't double-write the date" in skill prose —
 - **Full-text / handwriting search** (`textContains` on `list_pages`) — needs the app-side
   OCR data source; the where-does-recognized-text-live decision is recorded in the issue.
   [#12](https://github.com/bsitkoff/onion_planner_mcp/issues/12)
-- **`resolvePageRel` change when the app retires the Shared/ gate** — standing cross-repo
-  coupling, same-release change. The driver is now the per-chapter **ink-read toggle**
-  decision (onionskin#144, 2026-07-09), paired with the app's E2 at-rest lock
-  (onionskin#18); nothing to do until those ship. `read_ink` must respect the toggle once
-  the app exposes it. [#13](https://github.com/bsitkoff/onion_planner_mcp/issues/13)
 
 ## Parked
 

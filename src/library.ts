@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveRoot, sharedDir, normalizeChapter, resolvePageRel } from "./paths.js";
+import { resolveRoot, sharedDir, bookFolders, chapterRel, resolvePageRel } from "./paths.js";
 import { type AiStatus, type Manifest, readIfExists, atomicWrite } from "./page.js";
 
 /**
@@ -144,25 +144,31 @@ export async function requireLibrary(): Promise<string> {
 
 export interface Chapter {
   name: string;
-  path: string; // relative, e.g. "Shared/Daily"
+  path: string; // relative, e.g. "Shared/Daily" or "Private/Notes"
   pageCount: number;
 }
 
-/** List chapters (immediate folders under Shared/) with page counts. */
+/**
+ * List chapters (immediate folders under each reachable book folder — `Shared/`, plus
+ * `Private/` once the app has retired the location gate) with page counts. Sorted by path, so
+ * Shared chapters come first.
+ */
 export async function listChapters(root: string): Promise<Chapter[]> {
-  const shared = sharedDir(root);
-  const entries = await fs.readdir(shared, { withFileTypes: true });
   const chapters: Chapter[] = [];
-  for (const e of entries) {
-    if (!e.isDirectory() || e.name.startsWith(".")) continue;
-    const pages = await findPages(root, path.join("Shared", e.name));
-    chapters.push({
-      name: e.name,
-      path: `Shared/${e.name}`,
-      pageCount: pages.length,
-    });
+  for (const folder of bookFolders(root)) {
+    let entries;
+    try {
+      entries = await fs.readdir(path.join(root, folder), { withFileTypes: true });
+    } catch {
+      continue; // a library with no Private/ folder yet
+    }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith(".")) continue;
+      const pages = await findPages(root, path.join(folder, e.name));
+      chapters.push({ name: e.name, path: `${folder}/${e.name}`, pageCount: pages.length });
+    }
   }
-  chapters.sort((a, b) => a.name.localeCompare(b.name));
+  chapters.sort((a, b) => a.path.localeCompare(b.path));
   return chapters;
 }
 
@@ -201,14 +207,15 @@ export async function findPages(
   return out;
 }
 
-/** All shared pages, optionally restricted to a single chapter name. */
+/** All reachable pages, optionally restricted to a single chapter. */
 export async function listPages(
   root: string,
   chapter?: string,
   pendingDownload?: string[],
 ): Promise<string[]> {
-  const base = chapter ? path.join("Shared", normalizeChapter(chapter)) : "Shared";
-  const pages = await findPages(root, base, pendingDownload);
+  const bases = chapter ? [chapterRel(root, chapter) || "Shared"] : bookFolders(root);
+  const pages: string[] = [];
+  for (const base of bases) pages.push(...(await findPages(root, base, pendingDownload)));
   pages.sort();
   return pages;
 }

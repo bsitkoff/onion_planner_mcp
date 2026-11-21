@@ -35,11 +35,13 @@ const server = new McpServer(
     instructions:
       "Onionskin is a planner whose pages are folders of SVG layers in an iCloud " +
       "folder. You write the 'ai.svg' AI underlay (schedule, to-dos, focus, and the " +
-      "ainotes AI-voice block) into pages under Shared/, then mark it ready — the app " +
+      "ainotes AI-voice block) into pages, then mark it ready — the app " +
       "composites it on next foreground. Always call get_library first, then read_page " +
       "to learn a page's regions before write_underlay (region names vary by template). " +
-      "You can ONLY touch Shared/ pages; Private/ is invisible, and you never write the " +
-      "user's ink or sticker layers. Prefer write_underlay's structured `regions` input " +
+      "get_library lists exactly the chapters you can reach (Shared/, plus Private/ once the " +
+      "app has moved the library to per-chapter permissions). Reading the user's handwriting " +
+      "(read_ink) is a per-chapter permission; writing the underlay is not gated. You never " +
+      "write the user's ink or sticker layers. Prefer write_underlay's structured `regions` input " +
       "(the server positions text from template geometry); use `merge` to update only " +
       "some regions, `dryRun` to preview. Use raw `svg` only when you need full control.",
   },
@@ -52,7 +54,7 @@ const json = (o: unknown) => text(JSON.stringify(o, null, 2));
 server.tool(
   "get_library",
   "Resolve and validate the Onionskin iCloud library. Returns the library root path, " +
-    "whether it exists, the chapters under Shared/ with page counts, and the global " +
+    "whether it exists, every chapter you can reach (path + page count), and the global " +
     "underlayVoice setting (name/tone/notes for personalizing the ainotes note), if set. " +
     "Call this FIRST. If the library is missing, its error explains how to fix it (run the " +
     "app once, or set ONIONSKIN_CONTAINER).",
@@ -246,9 +248,10 @@ server.tool(
     "notes and annotations. By default the bulky per-stroke `data-stroke` centerline " +
     "streams are stripped (the visible outline geometry remains); set `includeStrokeData` " +
     "for the verbatim file. Returns null if no ink file exists. Read-only; never modifies " +
-    "any layer. Refuses any page outside Shared/. Also refuses when the chapter marks its " +
-    "ink private (`permissions.inkReadable: false` in its .folder.json; reflection chapters " +
-    "default private) — the underlay can still be written, just not composed from handwriting.",
+    "any layer. Refuses any page outside a reachable chapter, and refuses when the chapter's " +
+    "ink is private: its .folder.json lacks `permissions.inkReadable: true` (or, in a library " +
+    "the app hasn't migrated yet, says `false`; reflection chapters default private) — the " +
+    "underlay can still be written, just not composed from handwriting.",
   {
     page: z
       .string()
@@ -598,7 +601,7 @@ server.tool(
     "followed by set_underlay_status ready (a `status_refreshing` warning reminds you). Use `merge` to update only the named " +
     "regions and keep the rest of the page; use `dryRun` to preview the result + fit warnings " +
     "without writing. Returns non-fatal `warnings` plus structured `warningDetails` for likely " +
-    "overflow. Refuses any page outside Shared/.",
+    "overflow. Refuses any page outside a reachable chapter (see get_library).",
   {
     page: z.string().describe('Relative page path, e.g. "Shared/Daily/2026-02-06".'),
     regions: z
@@ -875,7 +878,7 @@ server.tool(
       .string()
       .min(1)
       .describe(
-        'Chapter under Shared/. Either the bare name ("2026-06") or the path ' +
+        'A chapter. Either the bare name ("2026-06") or the path ' +
           'get_library returns ("Shared/2026-06") works.',
       ),
     name: z
@@ -933,7 +936,7 @@ server.tool(
       .string()
       .min(1)
       .describe(
-        'Chapter under Shared/. Either the bare name ("2026-06") or the path ' +
+        'A chapter. Either the bare name ("2026-06") or the path ' +
           'get_library returns ("Shared/2026-06") works.',
       ),
     accent: z

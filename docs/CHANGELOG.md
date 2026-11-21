@@ -7,6 +7,23 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## The `Shared/` gate retires with the app (onionskin#144 Phase B, #13) — 2026-11-21
+
+Keyed on the app's `.ink-permissions-v1.json` marker at the library root, which the app writes
+once it has stamped every existing chapter with an explicit `permissions.inkReadable`:
+
+- **Reach:** `resolvePageRel`, `get_library`, `list_pages`, `create_page` and
+  `set_chapter_theme` reach chapters under `Private/` as well as `Shared/` (`bookFolders`,
+  `chapterRel`). Root content stays unreachable. A bare chapter name finds a `Private/` chapter;
+  new chapters still go in `Shared/`.
+- **`read_ink` is fail-closed:** only an explicit `inkReadable: true` reads ink; absent or
+  malformed is private. No type inference at read time.
+- **Before the marker** nothing changes (Shared-only, type-default bridge), so the server and
+  the app flip together however their updates are ordered.
+
+Tests: `test/ink-permissions.ts` (both sides of the marker).
+
+
 ## Fix: `merge` never drops regions over an iCloud-dataless ai.svg; theme rule matches the app — 2026-11-10
 
 `write_underlay` with `merge: true` read the existing `ai.svg` with `readIfExists`, which

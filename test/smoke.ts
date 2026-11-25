@@ -9,6 +9,17 @@
  * driving the read/write/merge/dry-run/calendar flows. Coordinates and region names
  * are derived from the parsed geometry, never hard-coded (the fixtures keep changing).
  */
+// SAFETY: this test creates/deletes chapters and deletes settings.json. Without
+// ONIONSKIN_CONTAINER the server falls back to the LIVE iCloud library — on 2026-11-24 an
+// unguarded run deleted Bridget's settings.json and rewrote a month chapter. Refuse unless
+// the container is explicitly set to a throwaway path outside iCloud.
+{
+  const c = process.env.ONIONSKIN_CONTAINER?.trim() ?? "";
+  if (!c || c.includes("Mobile Documents") || c.includes("iCloud~com~onionskin~app")) {
+    console.error("smoke.ts refuses to run: set ONIONSKIN_CONTAINER to a throwaway copy (e.g. /tmp/onionskin-test), never the live library.");
+    process.exit(2);
+  }
+}
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";

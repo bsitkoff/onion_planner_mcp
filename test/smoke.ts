@@ -1708,10 +1708,10 @@ async function main() {
   check("a freshly minted month chapter carries year + month", m43Folder.year === 2026 && m43Folder.month === 9, JSON.stringify(m43Folder));
   check("no placeholder title is written (the app fills \"September 2026\")", !("title" in m43Folder), JSON.stringify(m43Folder));
   await createPage(root, { chapter: "2026-09", name: "2026-09-03", template: "daily-minimal" });
-  await createPage(root, { chapter: "2026-09", name: "sketch-sept", template: "blank-minimal" });
+  await createPage(root, { chapter: "2026-09", name: "2026-09-15-2", template: "daily-minimal" });
   await createPage(root, { chapter: "2026-09", name: "2026-09-08", template: "daily-minimal" });
   m43Folder = JSON.parse(await fs.readFile(m43FolderFile, "utf8"));
-  check("a back-filled earlier day is inserted before later days, not appended", JSON.stringify(m43Folder.order) === JSON.stringify(["2026-09-03", "2026-09-08", "2026-09-15", "sketch-sept"]), JSON.stringify(m43Folder.order));
+  check("a back-filled earlier day is inserted before later days, not appended", JSON.stringify(m43Folder.order) === JSON.stringify(["2026-09-03", "2026-09-08", "2026-09-15", "2026-09-15-2"]), JSON.stringify(m43Folder.order));
   // An existing config is merged into, never clobbered, and a present pair is kept.
   await fs.writeFile(m43FolderFile, JSON.stringify({ year: 2026, month: 9, title: "September 2026", theme: { accent: "#7B5EA7" }, order: ["2026-09-03"] }));
   await createPage(root, { chapter: "2026-09", name: "2026-09-01", template: "daily-minimal" });

@@ -1592,14 +1592,27 @@ async function readFolderConfig(chapterAbs: string): Promise<Record<string, any>
 async function assertMonthChapterName(
   root: string,
   chapterRel: string,
+  chapterName: string,
   cfg: Record<string, any> | null,
   name: string,
 ): Promise<void> {
-  if (!cfg || !Number.isInteger(cfg.year) || !Number.isInteger(cfg.month)) return;
-  const ym = `${String(cfg.year).padStart(4, "0")}-${String(cfg.month).padStart(2, "0")}`;
+  // Month-ness is metadata (valid numeric year + month 1-12); a chapter named exactly YYYY-MM
+  // with no valid pair counts too (the app adopts it, #215), so a first create can't slip by.
+  let ym: string | undefined;
+  if (cfg && Number.isInteger(cfg.year) && Number.isInteger(cfg.month) && cfg.month >= 1 && cfg.month <= 12) {
+    ym = `${String(cfg.year).padStart(4, "0")}-${String(cfg.month).padStart(2, "0")}`;
+  } else if (/^\d{4}-(0[1-9]|1[0-2])$/.test(chapterName)) {
+    ym = chapterName;
+  }
+  if (!ym) return;
   if (name === ym) return;
-  const m = /^(\d{4}-\d{2})-\d{2}(-\d+)?$/.exec(name);
-  if (m && m[1] === ym) return;
+  // Day pages: real day of that month; a same-day duplicate is `-N` with N >= 2 (the app's
+  // convention: a second same-day page is `YYYY-MM-DD-2`).
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:-([2-9]|[1-9]\d+))?$/.exec(name);
+  if (m && `${m[1]}-${m[2]}` === ym) {
+    const dim = new Date(Date.UTC(+m[1], +m[2], 0)).getUTCDate();
+    if (+m[3] >= 1 && +m[3] <= dim) return;
+  }
   const others: string[] = [];
   for (const c of await listChapters(root)) {
     const f = await readFolderConfig(resolvePageRel(root, c.path));
@@ -1608,7 +1621,7 @@ async function assertMonthChapterName(
   }
   throw new Error(
     `"${chapterRel}" is a month chapter (${ym}): month chapters hold only day pages ` +
-      `(${ym}-DD, or a ${ym}-DD-N sibling) plus the ${ym} overview, not "${name}". ` +
+      `(a real ${ym}-DD, or a ${ym}-DD-N sibling with N >= 2) plus the ${ym} overview, not "${name}". ` +
       (others.length
         ? `Create it in a non-month chapter instead: ${others.join(", ")}.`
         : `No non-month chapter exists yet; create a free-form chapter such as Shared/Lists and put it there.`),
@@ -1827,7 +1840,7 @@ export async function createPage(
   // The chapter's declared default template (FORMAT.md §4) fills in when the caller
   // doesn't pass one — a calendar chapter's day pages come out right by default.
   const folderCfg = await readFolderConfig(chapterAbs);
-  await assertMonthChapterName(root, chapterRel, folderCfg, opts.name);
+  await assertMonthChapterName(root, chapterRel, chapterName, folderCfg, opts.name);
   await checkNotDeleted(chapterAbs, folderCfg, opts.name, opts.clearDeleted);
   const weekdayTemplates =
     folderCfg?.weekdayTemplates && typeof folderCfg.weekdayTemplates === "object"

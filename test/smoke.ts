@@ -1358,6 +1358,18 @@ async function main() {
   check("month chapter allows a day", (await createPage(root, { chapter: "Shared/2026-11", name: "2026-11-26", template: "daily-minimal" })).page.endsWith("2026-11/2026-11-26"));
   check("month chapter allows a -2 sibling", (await createPage(root, { chapter: "Shared/2026-11", name: "2026-11-26-2", template: "daily-minimal" })).page.endsWith("2026-11-26-2"));
   check("month chapter allows its YYYY-MM overview", (await createPage(root, { chapter: "Shared/2026-11", name: "2026-11", template: "monthly-minimal" })).page.endsWith("2026-11/2026-11"));
+  for (const bad of ["2026-11-31", "2026-11-00", "2026-11-26-1", "2026-11-26-0"]) {
+    check(`month chapter refuses ${bad}`, (await refuses("Shared/2026-11", bad)) !== false);
+  }
+  check("missing YYYY-MM chapter refuses a non-day name on first create", (await refuses("Shared/2026-12", "groceries")) !== false);
+  check("refused first create makes no chapter folder", !(await fs.stat(path.join(root, "Shared", "2026-12")).then(() => true, () => false)));
+  await fs.mkdir(path.join(root, "Shared", "2027-01"), { recursive: true });
+  check("orphan YYYY-MM folder refuses a non-day name", (await refuses("Shared/2027-01", "groceries")) !== false);
+  await fs.rm(path.join(root, "Shared", "2027-01"), { recursive: true, force: true });
+  await fs.mkdir(path.join(root, "Shared", "Lists"), { recursive: true });
+  await fs.writeFile(path.join(root, "Shared", "Lists", ".folder.json"), JSON.stringify({ year: 2026, month: 13, order: [] }));
+  check("invalid month (13) means not a month chapter", (await createPage(root, { chapter: "Shared/Lists", name: "odd-name", template: "daily-minimal" })).page.endsWith("Lists/odd-name"));
+  await fs.rm(path.join(root, "Shared", "Lists"), { recursive: true, force: true });
   check("free-form chapter is unaffected", (await createPage(root, { chapter: "Shared/Lists", name: "thanksgiving-groceries", template: "daily-minimal" })).page.endsWith("Lists/thanksgiving-groceries"));
   // Remove the scratch chapters so later list_pages assertions see the original fixture.
   await fs.rm(monthDir, { recursive: true, force: true });

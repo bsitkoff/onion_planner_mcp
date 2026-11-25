@@ -57,7 +57,7 @@ server.tool(
   "Resolve and validate the Onionskin iCloud library. Returns the library root path, " +
     "whether it exists, every chapter you can reach (path + page count), and the global " +
     "underlayVoice setting (name/tone/notes for personalizing the ainotes note), if set, and " +
-    "the `templates` catalogue (id, category, one-sentence `purpose` — what each page type is " +
+    "the `templates` catalogue (id, name, category, one-sentence `purpose` — what each page type is " +
     "for and not for; omitted when a template declares none). Call this FIRST. If the library is missing, its error explains how to fix it (run the " +
     "app once, or set ONIONSKIN_CONTAINER).",
   {},
@@ -199,7 +199,7 @@ server.tool(
     "printed label slot, if it has one, actually has a label banner drawn into it yet " +
     "(null if the region has no slot; false means the template prints a slot but nothing's " +
     "there — don't assume a slot means content exists, pass `label` to fill it)), current ai.svg, " +
-    "a `template` summary, `templateMeta` (id, category, and `purpose` — what the page is for " +
+    "a `template` summary, `templateMeta` (id, name, category, and `purpose` — what the page is for " +
     "and NOT for; fit your content to it, and if the content belongs on a different page type, " +
     "say so rather than forcing it in), and optionally template.svg. Use the regions to target " +
     "write_underlay — never hard-code coordinates. Each region's `fill` says who fills it: " +
@@ -868,7 +868,7 @@ server.tool(
   "create_page",
   "Create a new shared page (e.g. tomorrow's daily). Pick the template whose `purpose` " +
     "(see get_library `templates`) matches the content — lists of things (shopping, packing) " +
-    "go on a List page, never on To-do or Daily. The result echoes the page's `templateMeta`. " +
+    "go on a List page if the catalogue has one (otherwise blank or lined), never on To-do or Daily. The result echoes the page's `templateMeta`. " +
     "Template resolution: an explicit " +
     "`template` wins; else the chapter's `.folder.json → weekdayTemplates` (a weekend-specific " +
     "choice for a page named YYYY-MM-DD); else the chapter's `.folder.json → defaultTemplate`; " +

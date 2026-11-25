@@ -471,32 +471,33 @@ export interface TemplateMeta {
   purpose?: string;
 }
 
+/** Single-pass entity decode (so `&#38;lt;` -> `&lt;`, not `<`); invalid code points stay literal. */
 function decodeXml(v: string): string {
-  return v
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&");
+  return v.replace(/&(#x[0-9a-fA-F]+|#\d+|quot|apos|lt|gt|amp);/g, (whole, e: string) => {
+    if (e[0] === "#") {
+      const cp = e[1] === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return whole;
+      return String.fromCodePoint(cp);
+    }
+    return { quot: '"', apos: "'", lt: "<", gt: ">", amp: "&" }[e] ?? whole;
+  });
 }
 
 /**
- * Parse `data-template-id/name/category/purpose` off the root `<svg>` tag. Absent
- * attributes are omitted (never an error), so older/imported templates still work.
+ * Parse `data-template-id/name/category/purpose` off the root `<svg>` tag (comments
+ * stripped; quote-aware so a `>` inside a value is fine). Absent attributes are omitted
+ * and this never throws, so older/imported templates still work.
  */
 export function parseTemplateMeta(templateSvg: string): TemplateMeta {
-  const tag = templateSvg.match(/<svg\b[^>]*>/)?.[0] ?? "";
-  const attr = (n: string): string | undefined => {
-    const m = tag.match(new RegExp(`\\bdata-template-${n}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`));
-    const v = m ? decodeXml(m[1] ?? m[2] ?? "").trim() : "";
-    return v || undefined;
-  };
   const out: TemplateMeta = {};
-  for (const k of ["id", "name", "category", "purpose"] as const) {
-    const v = attr(k);
-    if (v) out[k] = v;
+  try {
+    const tag = templateSvg.replace(/<!--[\s\S]*?-->/g, "").match(/<svg\b(?:[^>"']|"[^"]*"|'[^']*')*>/)?.[0] ?? "";
+    for (const m of tag.matchAll(/(?:^|\s)data-template-(id|name|category|purpose)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+      const v = decodeXml(m[2] ?? m[3] ?? "").trim();
+      if (v) out[m[1] as keyof TemplateMeta] = v;
+    }
+  } catch {
+    /* garbled: no meta */
   }
   return out;
 }

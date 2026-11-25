@@ -31,9 +31,9 @@ lighter than the user's ink and contrast-floored) — gold is retired.
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `get_library` | read | Resolve & validate the iCloud library; list Shared chapters, the `templates` catalogue (id, `category`, one-sentence `purpose`: what each page type is for and not for), and the global `underlayVoice` setting, if set. **Call first.** |
+| `get_library` | read | Resolve & validate the iCloud library; list Shared chapters, the `templates` catalogue (id, `name`, `category`, one-sentence `purpose`: what each page type is for and not for), and the global `underlayVoice` setting, if set. **Call first.** |
 | `list_pages` | read | List shared pages with title, template, size, modified, ai status. Optional filters (AND): `chapter`, `template`, `aiStatus`, `titleContains`, `modifiedAfter`/`modifiedBefore`. |
-| `read_page` | read | One page's manifest + parsed **regions** (geometry) + current ai.svg + `templateMeta` (id, category, `purpose`). |
+| `read_page` | read | One page's manifest + parsed **regions** (geometry) + current ai.svg + `templateMeta` (id, name, category, `purpose`; omitted if the template declares none). |
 | `read_ink` | read | Read the user's `ink.svg` layer for context without modifying it. |
 | `write_underlay` | write | Write ai.svg (structured `regions` *or* raw `svg`) + set status. `merge` patches named regions; `dryRun` previews without writing; returns fit `warnings` plus structured `warningDetails`. |
 | `set_underlay_status` | write | Flip ai status (`empty`/`refreshing`/`ready`) without rewriting. |

@@ -1128,11 +1128,11 @@ export interface PageRead {
    */
   template: TemplateInfo;
   /**
-   * What the page's template is for: `id`, `category`, and `purpose` (one sentence — what
+   * What the page's template is for: `id` (the page's template id), `name`, `category`, and `purpose` (one sentence — what
    * the page is for and NOT for). Fields are omitted when the template doesn't declare
    * them. Read it before writing so content fits the page type.
    */
-  templateMeta: TemplateMeta;
+  templateMeta?: TemplateMeta;
   /**
    * The chapter's theme (`.folder.json → theme`), or null if none. Surfaced so an
    * orchestrator can see the day's harmony/variety/font-personality + chrome accent
@@ -1222,7 +1222,7 @@ export async function readPage(
           palette: [],
           paperColor: PAPER_COLOR,
         },
-    templateMeta: await pageTemplateMeta(root, templateSvg, manifest.template),
+    ...(await optionalMeta(pageTemplateMeta(root, templateSvg, manifest.template))),
     theme,
     underlay,
     underlayVoice,
@@ -1765,7 +1765,7 @@ async function listCatalogueTemplates(root: string): Promise<string[]> {
   const ids: string[] = [];
   for (const e of entries) {
     if (!e.isDirectory() || e.name.startsWith(".")) continue;
-    if (await readIfExists(path.join(root, "Templates", e.name, "template.svg"))) {
+    if (await fs.stat(path.join(root, "Templates", e.name, "template.svg")).then((st) => st.isFile(), () => false)) {
       ids.push(e.name);
     }
   }
@@ -1781,10 +1781,36 @@ export async function listCatalogue(root: string): Promise<(TemplateMeta & { id:
   const index = await readCatalogueIndex(root);
   const out: (TemplateMeta & { id: string })[] = [];
   for (const id of await listCatalogueTemplates(root)) {
-    const svg = await readIfExists(path.join(root, "Templates", id, "template.svg"));
-    out.push({ ...mergeMeta(index.get(id), svg ? parseTemplateMeta(svg) : {}), id });
+    let own: TemplateMeta = {};
+    try {
+      const head = await readHead(path.join(root, "Templates", id, "template.svg"));
+      if (head) own = parseTemplateMeta(head);
+    } catch {
+      /* unreadable template: list it bare */
+    }
+    out.push({ ...mergeMeta(index.get(id), own), id }); // the folder id always wins
   }
   return out;
+}
+
+/**
+ * First 8 KB of a file (enough for the root tag). null if absent or iCloud-dataless
+ * (allocated 0 blocks) — reading that would block on a download.
+ */
+async function readHead(file: string): Promise<string | null> {
+  let fh;
+  try {
+    fh = await fs.open(file, "r");
+    const st = await fh.stat();
+    if (st.size > 0 && st.blocks === 0) return null;
+    const buf = Buffer.alloc(Math.min(8192, st.size));
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    return buf.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    await fh?.close().catch(() => {});
+  }
 }
 
 async function readCatalogueIndex(root: string): Promise<Map<string, TemplateMeta>> {
@@ -1810,19 +1836,31 @@ async function readCatalogueIndex(root: string): Promise<Map<string, TemplateMet
 
 /** svg attributes win; index fills any gaps. */
 function mergeMeta(index: TemplateMeta | undefined, svg: TemplateMeta): TemplateMeta {
-  const out: TemplateMeta = { ...(index ?? {}), ...svg };
-  return out;
+  return { ...(index ?? {}), ...svg };
 }
 
-/** A page's template meta: its own template.svg first, the catalogue index as fallback. */
+/**
+ * A page's template meta. `id` is the page's actual template id (manifest), never the
+ * svg's data-template-id; the page's own template.svg wins, the catalogue index fills gaps.
+ * Never throws.
+ */
 async function pageTemplateMeta(root: string, templateSvg: string | null, templateId?: string): Promise<TemplateMeta> {
-  const own = templateSvg ? parseTemplateMeta(templateSvg) : {};
-  const id = own.id ?? templateId;
-  const safeId = id && !/[/\\]|^\.\.?$/.test(id) ? id : undefined;
-  const fromIndex = safeId ? (await readCatalogueIndex(root)).get(safeId) : undefined;
-  const out = mergeMeta(fromIndex, own);
-  if (safeId && !out.id) out.id = safeId;
-  return out;
+  try {
+    const own = templateSvg ? parseTemplateMeta(templateSvg) : {};
+    const id = templateId && !/[/\\]|^\.\.?$/.test(templateId) ? templateId : undefined;
+    const fromIndex = id ? (await readCatalogueIndex(root)).get(id) : undefined;
+    const out = mergeMeta(fromIndex, own);
+    if (id) out.id = id;
+    else delete out.id;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function optionalMeta(p: Promise<TemplateMeta>): Promise<{ templateMeta?: TemplateMeta }> {
+  const m = await p;
+  return Object.keys(m).length ? { templateMeta: m } : {};
 }
 
 /** The library root's `seed.version` (the catalogue version), trimmed; null if absent/empty. */
@@ -2068,11 +2106,10 @@ export async function createPage(
     );
   }
 
-  const templateMeta = await pageTemplateMeta(root, source.templateSvg, templateName);
   return {
     page: newRel,
     template: templateName,
-    ...(Object.keys(templateMeta).length ? { templateMeta } : {}),
+    ...(await optionalMeta(pageTemplateMeta(root, source.templateSvg, templateName))),
     size,
     clonedFrom: source.clonedFrom,
     ...(adopting ? { completed: true } : {}),

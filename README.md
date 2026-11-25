@@ -31,14 +31,14 @@ lighter than the user's ink and contrast-floored) — gold is retired.
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `get_library` | read | Resolve & validate the iCloud library; list Shared chapters + the global `underlayVoice` setting, if set. **Call first.** |
+| `get_library` | read | Resolve & validate the iCloud library; list Shared chapters, the `templates` catalogue (id, `category`, one-sentence `purpose`: what each page type is for and not for), and the global `underlayVoice` setting, if set. **Call first.** |
 | `list_pages` | read | List shared pages with title, template, size, modified, ai status. Optional filters (AND): `chapter`, `template`, `aiStatus`, `titleContains`, `modifiedAfter`/`modifiedBefore`. |
-| `read_page` | read | One page's manifest + parsed **regions** (geometry) + current ai.svg. |
+| `read_page` | read | One page's manifest + parsed **regions** (geometry) + current ai.svg + `templateMeta` (id, category, `purpose`). |
 | `read_ink` | read | Read the user's `ink.svg` layer for context without modifying it. |
 | `write_underlay` | write | Write ai.svg (structured `regions` *or* raw `svg`) + set status. `merge` patches named regions; `dryRun` previews without writing; returns fit `warnings` plus structured `warningDetails`. |
 | `set_underlay_status` | write | Flip ai status (`empty`/`refreshing`/`ready`) without rewriting. |
 | `clear_underlay` | write | Reset ai.svg to empty + status `empty`. |
-| `create_page` | write | New shared page from a sibling's template, or from the `Templates/` catalogue by id. Month chapters (year+month) accept only that month's day pages and `YYYY-MM` overview. |
+| `create_page` | write | New shared page from a sibling's template, or from the `Templates/` catalogue by id. Pick the template by its `purpose` (lists of things go on a List page, not To-do/Daily); result echoes `templateMeta`. Month chapters (year+month) accept only that month's day pages and `YYYY-MM` overview. |
 | `set_chapter_theme` | write | Set a chapter's default theme (`.folder.json → theme`): `paletteCharacter`, explicit `accent`, `customInk1/2`, `harmony`/`varietyDial`/`fontPersonality`, `displayName`. Only the passed keys change; page order is preserved. `write_underlay` applies it as the default, `read_page` surfaces it. |
 | `set_habits` | write | Set the library's daily habit list (`settings.json → underlayHabits` — the one settings key this server writes; every other key preserved). Both the app's on-device composer and a `{ region: "habits", habits: true }` entry draw it as a vector checkbox block. `[]` clears. |
 | `fetch_image` | helper | Download an HTTPS PNG/JPEG to an `onionskin-fetch/` folder under the **OS temp dir** (`$TMPDIR` on macOS — not `/tmp`) and return a local path for `images[].path`; optional background removal requires `rembg`. |

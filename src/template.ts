@@ -461,3 +461,42 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
   }
   return regions;
 }
+
+/** What a template is for — read from the template.svg root's `data-template-*` attributes. */
+export interface TemplateMeta {
+  id?: string;
+  name?: string;
+  category?: string;
+  /** One sentence: what the page is for and not for (`data-template-purpose`). */
+  purpose?: string;
+}
+
+function decodeXml(v: string): string {
+  return v
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Parse `data-template-id/name/category/purpose` off the root `<svg>` tag. Absent
+ * attributes are omitted (never an error), so older/imported templates still work.
+ */
+export function parseTemplateMeta(templateSvg: string): TemplateMeta {
+  const tag = templateSvg.match(/<svg\b[^>]*>/)?.[0] ?? "";
+  const attr = (n: string): string | undefined => {
+    const m = tag.match(new RegExp(`\\bdata-template-${n}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`));
+    const v = m ? decodeXml(m[1] ?? m[2] ?? "").trim() : "";
+    return v || undefined;
+  };
+  const out: TemplateMeta = {};
+  for (const k of ["id", "name", "category", "purpose"] as const) {
+    const v = attr(k);
+    if (v) out[k] = v;
+  }
+  return out;
+}

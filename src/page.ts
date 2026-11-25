@@ -8,7 +8,9 @@ import {
   parseRegions,
   parseViewBox,
   inspectTemplate,
+  parseTemplateMeta,
   PAPER_COLOR,
+  type TemplateMeta,
   paperColorOf,
   type Region,
   type TemplateInfo,
@@ -1126,6 +1128,12 @@ export interface PageRead {
    */
   template: TemplateInfo;
   /**
+   * What the page's template is for: `id`, `category`, and `purpose` (one sentence — what
+   * the page is for and NOT for). Fields are omitted when the template doesn't declare
+   * them. Read it before writing so content fits the page type.
+   */
+  templateMeta: TemplateMeta;
+  /**
    * The chapter's theme (`.folder.json → theme`), or null if none. Surfaced so an
    * orchestrator can see the day's harmony/variety/font-personality + chrome accent
    * before composing — write_underlay applies it as the default, overridable per call.
@@ -1214,6 +1222,7 @@ export async function readPage(
           palette: [],
           paperColor: PAPER_COLOR,
         },
+    templateMeta: await pageTemplateMeta(root, templateSvg, manifest.template),
     theme,
     underlay,
     underlayVoice,
@@ -1554,6 +1563,8 @@ export interface CreateResult {
   template: string;
   size: [number, number];
   clonedFrom: string;
+  /** The new page's template category + purpose, when declared (see read_page `templateMeta`). */
+  templateMeta?: TemplateMeta;
   /** True when the folder was already there without a manifest and was completed in place. */
   completed?: boolean;
   /** Non-fatal problems (e.g. the page was created but the chapter order wasn't updated). */
@@ -1761,6 +1772,59 @@ async function listCatalogueTemplates(root: string): Promise<string[]> {
   return ids.sort();
 }
 
+/**
+ * Catalogue entries (`Templates/<id>/`) with their `category` + `purpose`. Purpose/category
+ * come from the template.svg root attributes, falling back to `Templates/templates.json`;
+ * anything absent is omitted. Never throws on a garbled index.
+ */
+export async function listCatalogue(root: string): Promise<(TemplateMeta & { id: string })[]> {
+  const index = await readCatalogueIndex(root);
+  const out: (TemplateMeta & { id: string })[] = [];
+  for (const id of await listCatalogueTemplates(root)) {
+    const svg = await readIfExists(path.join(root, "Templates", id, "template.svg"));
+    out.push({ ...mergeMeta(index.get(id), svg ? parseTemplateMeta(svg) : {}), id });
+  }
+  return out;
+}
+
+async function readCatalogueIndex(root: string): Promise<Map<string, TemplateMeta>> {
+  const m = new Map<string, TemplateMeta>();
+  try {
+    const raw = await readIfExists(path.join(root, "Templates", "templates.json"));
+    const list = raw ? (JSON.parse(raw) as any)?.templates : null;
+    if (Array.isArray(list)) {
+      for (const t of list) {
+        if (!t || typeof t.id !== "string") continue;
+        const e: TemplateMeta = {};
+        if (typeof t.name === "string" && t.name) e.name = t.name;
+        if (typeof t.category === "string" && t.category) e.category = t.category;
+        if (typeof t.purpose === "string" && t.purpose.trim()) e.purpose = t.purpose.trim();
+        m.set(t.id, e);
+      }
+    }
+  } catch {
+    /* garbled index: ignore */
+  }
+  return m;
+}
+
+/** svg attributes win; index fills any gaps. */
+function mergeMeta(index: TemplateMeta | undefined, svg: TemplateMeta): TemplateMeta {
+  const out: TemplateMeta = { ...(index ?? {}), ...svg };
+  return out;
+}
+
+/** A page's template meta: its own template.svg first, the catalogue index as fallback. */
+async function pageTemplateMeta(root: string, templateSvg: string | null, templateId?: string): Promise<TemplateMeta> {
+  const own = templateSvg ? parseTemplateMeta(templateSvg) : {};
+  const id = own.id ?? templateId;
+  const safeId = id && !/[/\\]|^\.\.?$/.test(id) ? id : undefined;
+  const fromIndex = safeId ? (await readCatalogueIndex(root)).get(safeId) : undefined;
+  const out = mergeMeta(fromIndex, own);
+  if (safeId && !out.id) out.id = safeId;
+  return out;
+}
+
 /** The library root's `seed.version` (the catalogue version), trimmed; null if absent/empty. */
 async function readSeedVersion(root: string): Promise<string | null> {
   const raw = await readIfExists(path.join(root, "seed.version")).catch(() => null);
@@ -1885,7 +1949,7 @@ export async function createPage(
   } else {
     const cat = effTemplate ? await loadCatalogueTemplate(root, effTemplate) : null;
     if (!cat) {
-      const ids = await listCatalogueTemplates(root);
+      const ids = (await listCatalogue(root)).map((t) => (t.purpose ? `${t.id} (${t.purpose})` : t.id));
       const why = effTemplate
         ? `no catalogue template "${effTemplate}" exists under Templates/`
         : settingsTemplate
@@ -2004,9 +2068,11 @@ export async function createPage(
     );
   }
 
+  const templateMeta = await pageTemplateMeta(root, source.templateSvg, templateName);
   return {
     page: newRel,
     template: templateName,
+    ...(Object.keys(templateMeta).length ? { templateMeta } : {}),
     size,
     clonedFrom: source.clonedFrom,
     ...(adopting ? { completed: true } : {}),

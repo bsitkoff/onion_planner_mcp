@@ -42,6 +42,7 @@ import {
   setStatus,
   clearUnderlay,
   createPage,
+  listCatalogue,
   writeChapterTheme,
   fetchImageToTemp,
   FETCH_DIR,
@@ -145,6 +146,43 @@ async function main() {
   const monthly = "Shared/Monthly/2026-02"; // Feb 2026 = 28 days
   await createPage(root, { chapter: "Monthly", name: "2026-02", title: "February", template: "monthly-minimal" });
   check("monthly listed after create", (await listPages(root, "Monthly")).includes(monthly));
+
+  console.log("\ntemplate purpose (get_library templates, read_page, create_page)");
+  {
+    const mk = async (id: string, attrs: string) => {
+      const d = path.join(root, "Templates", id);
+      await fs.mkdir(d, { recursive: true });
+      await fs.writeFile(
+        path.join(d, "template.svg"),
+        `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1366" viewBox="0 0 1024 1366" data-template-id="${id}" ${attrs}>` +
+          `<g id="region-items" transform="translate(56,84)" data-region="items" data-fill="ai"><rect width="900" height="900" fill="none"/></g></svg>`,
+      );
+    };
+    const purpose = "A flat list of things (shopping, packing); not for scheduling or tasks by day.";
+    await mk("zz-list-purpose", `data-template-category="List" data-template-purpose="${purpose.replace(/;/, "&#59;")}"`);
+    await mk("zz-nopurpose", `data-template-category="Misc"`);
+    // Fallback source: no svg attribute, purpose only in templates.json.
+    await mk("zz-indexonly", "");
+    const idxPath = path.join(root, "Templates", "templates.json");
+    const idx = JSON.parse(await fs.readFile(idxPath, "utf8"));
+    idx.templates.push({ id: "zz-indexonly", name: "Idx", category: "Idx", purpose: "From the index." });
+    await fs.writeFile(idxPath, JSON.stringify(idx));
+
+    const cat = await listCatalogue(root);
+    const byId = (id: string) => cat.find((t) => t.id === id);
+    check("listing carries category + purpose from template.svg", byId("zz-list-purpose")?.purpose === purpose && byId("zz-list-purpose")?.category === "List", JSON.stringify(byId("zz-list-purpose")));
+    check("listing falls back to templates.json purpose", byId("zz-indexonly")?.purpose === "From the index." && byId("zz-indexonly")?.category === "Idx");
+    check("template without purpose is listed, purpose omitted", !!byId("zz-nopurpose") && !("purpose" in byId("zz-nopurpose")!) && byId("zz-nopurpose")?.category === "Misc");
+
+    const cp = await createPage(root, { chapter: "Lists", name: "groceries", template: "zz-list-purpose" });
+    check("create_page result echoes templateMeta.purpose", cp.templateMeta?.purpose === purpose && cp.templateMeta?.category === "List");
+    const rp = await readPage(root, "Shared/Lists/groceries");
+    check("read_page includes templateMeta purpose", rp.templateMeta.purpose === purpose && rp.templateMeta.category === "List" && rp.templateMeta.id === "zz-list-purpose");
+    await createPage(root, { chapter: "Lists", name: "plain", template: "zz-nopurpose" });
+    const rn = await readPage(root, "Shared/Lists/plain");
+    check("read_page without purpose works (omitted)", !("purpose" in rn.templateMeta) && rn.templateMeta.category === "Misc");
+    check("read_page on a page without data-template-* still has templateMeta", (await readPage(root, daily)).templateMeta !== undefined);
+  }
 
   console.log("\nread_page (region geometry, current names)");
   const read = await readPage(root, daily);

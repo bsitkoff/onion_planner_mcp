@@ -872,7 +872,11 @@ server.tool(
     "that is already a page is refused; one that EXISTS BUT HAS NO manifest.json is not a page " +
     "(debris from a create that was interrupted before writing one) and is completed in place " +
     "instead — its media/ is left as-is and the result carries `completed: true`. Prefer " +
-    "letting the user create pages in the app; use this only when asked.",
+    "letting the user create pages in the app; use this only when asked. MONTH CHAPTERS " +
+    "(`.folder.json` with numeric year+month) accept only `YYYY-MM-DD` day pages (optionally a " +
+    "`-N` sibling like `YYYY-MM-DD-2`) of that same month, or the chapter's own `YYYY-MM` " +
+    "overview; any other name is refused — put lists/notes in a free-form chapter (e.g. " +
+    "Shared/Lists) instead.",
   {
     chapter: z
       .string()

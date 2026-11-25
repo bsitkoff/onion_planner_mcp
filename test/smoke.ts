@@ -1345,6 +1345,24 @@ async function main() {
   } catch { refusedSlashName = true; }
   check("create_page rejects a name containing a slash", refusedSlashName);
 
+  console.log("\ncreate_page month-chapter guard");
+  const monthDir = path.join(root, "Shared", "2026-11");
+  await fs.mkdir(monthDir, { recursive: true });
+  await fs.writeFile(path.join(monthDir, ".folder.json"), JSON.stringify({ title: "2026-11", year: 2026, month: 11, defaultTemplate: "daily-minimal", order: [] }, null, 2) + "\n");
+  const refuses = async (chapter: string, name: string) => {
+    try { await createPage(root, { chapter, name, title: "x", template: "daily-minimal" }); return false; } catch (e: any) { return e.message as string; }
+  };
+  const slugErr = await refuses("Shared/2026-11", "thanksgiving-groceries");
+  check("month chapter refuses a non-day name", typeof slugErr === "string" && /month chapters hold only day pages/.test(slugErr) && /Shared\/Daily/.test(slugErr), String(slugErr));
+  check("month chapter refuses a day from another month", (await refuses("Shared/2026-11", "2026-12-01")) !== false);
+  check("month chapter allows a day", (await createPage(root, { chapter: "Shared/2026-11", name: "2026-11-26", template: "daily-minimal" })).page.endsWith("2026-11/2026-11-26"));
+  check("month chapter allows a -2 sibling", (await createPage(root, { chapter: "Shared/2026-11", name: "2026-11-26-2", template: "daily-minimal" })).page.endsWith("2026-11-26-2"));
+  check("month chapter allows its YYYY-MM overview", (await createPage(root, { chapter: "Shared/2026-11", name: "2026-11", template: "monthly-minimal" })).page.endsWith("2026-11/2026-11"));
+  check("free-form chapter is unaffected", (await createPage(root, { chapter: "Shared/Lists", name: "thanksgiving-groceries", template: "daily-minimal" })).page.endsWith("Lists/thanksgiving-groceries"));
+  // Remove the scratch chapters so later list_pages assertions see the original fixture.
+  await fs.rm(monthDir, { recursive: true, force: true });
+  await fs.rm(path.join(root, "Shared", "Lists"), { recursive: true, force: true });
+
   console.log("\nlist_pages metadata filters");
   // At this point: Daily/2026-06-22 (daily-minimal, "Monday", status empty after clear),
   // Daily/2026-06-23 (daily-minimal, "Tuesday", ready), Monthly/2026-02 (monthly-minimal,

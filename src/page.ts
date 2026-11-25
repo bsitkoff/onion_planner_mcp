@@ -13,7 +13,7 @@ import {
   type Region,
   type TemplateInfo,
 } from "./template.js";
-import { readUnderlayVoice, readUnderlayHabits, type UnderlayVoice } from "./library.js";
+import { readUnderlayVoice, readUnderlayHabits, listChapters, type UnderlayVoice } from "./library.js";
 import {
   composeAiSvg,
   mergeRegions,
@@ -1584,6 +1584,37 @@ async function readFolderConfig(chapterAbs: string): Promise<Record<string, any>
   }
 }
 
+/**
+ * A month chapter (`.folder.json` with numeric `year` + `month`) holds only day pages
+ * (`YYYY-MM-DD`, optionally a `-N` sibling) of that month, plus its own `YYYY-MM` overview.
+ * Anything else belongs in a free-form chapter; refuse with a pointer to the reachable ones.
+ */
+async function assertMonthChapterName(
+  root: string,
+  chapterRel: string,
+  cfg: Record<string, any> | null,
+  name: string,
+): Promise<void> {
+  if (!cfg || !Number.isInteger(cfg.year) || !Number.isInteger(cfg.month)) return;
+  const ym = `${String(cfg.year).padStart(4, "0")}-${String(cfg.month).padStart(2, "0")}`;
+  if (name === ym) return;
+  const m = /^(\d{4}-\d{2})-\d{2}(-\d+)?$/.exec(name);
+  if (m && m[1] === ym) return;
+  const others: string[] = [];
+  for (const c of await listChapters(root)) {
+    const f = await readFolderConfig(resolvePageRel(root, c.path));
+    if (f && Number.isInteger(f.year) && Number.isInteger(f.month)) continue;
+    others.push(c.path);
+  }
+  throw new Error(
+    `"${chapterRel}" is a month chapter (${ym}): month chapters hold only day pages ` +
+      `(${ym}-DD, or a ${ym}-DD-N sibling) plus the ${ym} overview, not "${name}". ` +
+      (others.length
+        ? `Create it in a non-month chapter instead: ${others.join(", ")}.`
+        : `No non-month chapter exists yet; create a free-form chapter such as Shared/Lists and put it there.`),
+  );
+}
+
 /** A month chapter's single overview page: folder `YYYY-MM` / a monthly template. */
 function isMonthlyOverview(folderName: string, manifest: Manifest): boolean {
   return /^\d{4}-\d{2}$/.test(folderName) || /monthly/i.test(manifest.template ?? "");
@@ -1796,6 +1827,7 @@ export async function createPage(
   // The chapter's declared default template (FORMAT.md §4) fills in when the caller
   // doesn't pass one — a calendar chapter's day pages come out right by default.
   const folderCfg = await readFolderConfig(chapterAbs);
+  await assertMonthChapterName(root, chapterRel, folderCfg, opts.name);
   await checkNotDeleted(chapterAbs, folderCfg, opts.name, opts.clearDeleted);
   const weekdayTemplates =
     folderCfg?.weekdayTemplates && typeof folderCfg.weekdayTemplates === "object"

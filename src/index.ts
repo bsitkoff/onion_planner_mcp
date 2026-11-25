@@ -18,6 +18,7 @@ import {
   setStatus,
   clearUnderlay,
   createPage,
+  listCatalogue,
   writeChapterTheme,
   fetchImageToTemp,
 } from "./page.js";
@@ -55,8 +56,9 @@ server.tool(
   "get_library",
   "Resolve and validate the Onionskin iCloud library. Returns the library root path, " +
     "whether it exists, every chapter you can reach (path + page count), and the global " +
-    "underlayVoice setting (name/tone/notes for personalizing the ainotes note), if set. " +
-    "Call this FIRST. If the library is missing, its error explains how to fix it (run the " +
+    "underlayVoice setting (name/tone/notes for personalizing the ainotes note), if set, and " +
+    "the `templates` catalogue (id, name, category, one-sentence `purpose` — what each page type is " +
+    "for and not for; omitted when a template declares none). Call this FIRST. If the library is missing, its error explains how to fix it (run the " +
     "app once, or set ONIONSKIN_CONTAINER).",
   {},
   { readOnlyHint: true },
@@ -64,9 +66,10 @@ server.tool(
     try {
       const root = await requireLibrary();
       const chapters = await listChapters(root);
+      const templates = await listCatalogue(root);
       const underlayVoice = await readUnderlayVoice(root);
       const underlayHabits = await readUnderlayHabits(root);
-      return json({ root, exists: true, sharedChapters: chapters, underlayVoice, underlayHabits });
+      return json({ root, exists: true, sharedChapters: chapters, templates, underlayVoice, underlayHabits });
     } catch (e: any) {
       if (e instanceof LibraryMissingError) {
         return {
@@ -196,7 +199,9 @@ server.tool(
     "printed label slot, if it has one, actually has a label banner drawn into it yet " +
     "(null if the region has no slot; false means the template prints a slot but nothing's " +
     "there — don't assume a slot means content exists, pass `label` to fill it)), current ai.svg, " +
-    "and a `template` summary, and optionally template.svg. Use the regions to target " +
+    "a `template` summary, `templateMeta` (id, name, category, and `purpose` — what the page is for " +
+    "and NOT for; fit your content to it, and if the content belongs on a different page type, " +
+    "say so rather than forcing it in), and optionally template.svg. Use the regions to target " +
     "write_underlay — never hard-code coordinates. Each region's `fill` says who fills it: " +
     "`ai` (you own it — fill it), `shared` (you seed it — calendar/tasks — but read_ink first " +
     "and place around the user's handwriting), or `ink` (the user's handwriting surface — " +
@@ -861,7 +866,10 @@ server.tool(
 // --- create_page ---
 server.tool(
   "create_page",
-  "Create a new shared page (e.g. tomorrow's daily). Template resolution: an explicit " +
+  "Create a new shared page (e.g. tomorrow's daily). Pick the template whose `purpose` " +
+    "(see get_library `templates`) matches the content — lists of things (shopping, packing) " +
+    "go on a List page if the catalogue has one (otherwise blank or lined), never on To-do or Daily. The result echoes the page's `templateMeta`. " +
+    "Template resolution: an explicit " +
     "`template` wins; else the chapter's `.folder.json → weekdayTemplates` (a weekend-specific " +
     "choice for a page named YYYY-MM-DD); else the chapter's `.folder.json → defaultTemplate`; " +
     "a matching sibling page is cloned when one exists (a month chapter's monthly-overview " +
@@ -897,7 +905,7 @@ server.tool(
       .string()
       .optional()
       .describe(
-        'Catalogue template id, e.g. "daily-minimal". Used to seed an empty chapter from the ' +
+        'Catalogue template id, e.g. "daily-minimal"; choose by its `purpose` in get_library. Used to seed an empty chapter from the ' +
           "Templates/ catalogue, and to require a matching template when cloning a sibling.",
       ),
     clearDeleted: z

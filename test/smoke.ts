@@ -42,6 +42,7 @@ import {
   setStatus,
   clearUnderlay,
   createPage,
+  listCatalogue,
   writeChapterTheme,
   fetchImageToTemp,
   FETCH_DIR,
@@ -55,7 +56,7 @@ import {
   monthlyInks,
   PALETTE_CHARACTERS,
 } from "../src/color.js";
-import { inspectTemplate, parseRegions, PAPER_COLOR, FILL_BY_NAME } from "../src/template.js";
+import { parseTemplateMeta, inspectTemplate, parseRegions, PAPER_COLOR, FILL_BY_NAME } from "../src/template.js";
 import { decodePng, encodePng, chromaKeyPixels } from "../src/png.js";
 
 // Gold is retired — the default (no theme override) resolves to the chapter's own ink
@@ -145,6 +146,71 @@ async function main() {
   const monthly = "Shared/Monthly/2026-02"; // Feb 2026 = 28 days
   await createPage(root, { chapter: "Monthly", name: "2026-02", title: "February", template: "monthly-minimal" });
   check("monthly listed after create", (await listPages(root, "Monthly")).includes(monthly));
+
+  console.log("\ntemplate purpose (get_library templates, read_page, create_page)");
+  {
+    const mk = async (id: string, attrs: string) => {
+      const d = path.join(root, "Templates", id);
+      await fs.mkdir(d, { recursive: true });
+      await fs.writeFile(
+        path.join(d, "template.svg"),
+        `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1366" viewBox="0 0 1024 1366" data-template-id="${id}" ${attrs}>` +
+          `<g id="region-items" transform="translate(56,84)" data-region="items" data-fill="ai"><rect width="900" height="900" fill="none"/></g></svg>`,
+      );
+    };
+    const purpose = "A flat list of things (shopping, packing); not for scheduling or tasks by day.";
+    await mk("zz-list-purpose", `data-template-category="List" data-template-purpose="${purpose.replace(/;/, "&#59;")}"`);
+    await mk("zz-nopurpose", `data-template-category="Misc"`);
+    // Fallback source: no svg attribute, purpose only in templates.json.
+    await mk("zz-indexonly", "");
+    const idxPath = path.join(root, "Templates", "templates.json");
+    const idx = JSON.parse(await fs.readFile(idxPath, "utf8"));
+    idx.templates.push({ id: "zz-indexonly", name: "Idx", category: "Idx", purpose: "From the index." });
+    await fs.writeFile(idxPath, JSON.stringify(idx));
+
+    const cat = await listCatalogue(root);
+    const byId = (id: string) => cat.find((t) => t.id === id);
+    check("listing carries category + purpose from template.svg", byId("zz-list-purpose")?.purpose === purpose && byId("zz-list-purpose")?.category === "List", JSON.stringify(byId("zz-list-purpose")));
+    check("listing falls back to templates.json purpose", byId("zz-indexonly")?.purpose === "From the index." && byId("zz-indexonly")?.category === "Idx");
+    check("template without purpose is listed, purpose omitted", !!byId("zz-nopurpose") && !("purpose" in byId("zz-nopurpose")!) && byId("zz-nopurpose")?.category === "Misc");
+
+    const cp = await createPage(root, { chapter: "Lists", name: "groceries", template: "zz-list-purpose" });
+    check("create_page result echoes templateMeta.purpose", cp.templateMeta?.purpose === purpose && cp.templateMeta?.category === "List");
+    const rp = await readPage(root, "Shared/Lists/groceries");
+    check("read_page includes templateMeta purpose", rp.templateMeta?.purpose === purpose && rp.templateMeta?.category === "List" && rp.templateMeta?.id === "zz-list-purpose");
+    await createPage(root, { chapter: "Lists", name: "plain", template: "zz-nopurpose" });
+    const rn = await readPage(root, "Shared/Lists/plain");
+    check("read_page without purpose works (omitted)", rn.templateMeta?.purpose === undefined && rn.templateMeta?.category === "Misc");
+    const rd = await readPage(root, daily);
+    check("read_page templateMeta.id is the page's manifest template id", rd.templateMeta?.id === "daily-minimal", JSON.stringify(rd.templateMeta));
+    // Parser edge cases.
+    const P = (svg: string) => parseTemplateMeta(svg);
+    check("single-quoted attr", P(`<svg data-template-purpose='single quoted'>`).purpose === "single quoted");
+    check("multi-line root tag", P(`<svg\n  width="1"\n  data-template-category="Notes"\n  data-template-purpose="multi\nline ok">`).category === "Notes");
+    check("'>' inside a value", P(`<svg data-template-purpose="a > b" data-template-category="C">`).purpose === "a > b" && P(`<svg data-template-purpose="a > b" data-template-category="C">`).category === "C");
+    check("bad numeric entities stay literal, no throw", P(`<svg data-template-purpose="x &#x110000; y &#99999999; z &#xD800;">`).purpose === "x &#x110000; y &#99999999; z &#xD800;");
+    check("no double decoding", P(`<svg data-template-purpose="a &#38;lt; b">`).purpose === "a &lt; b");
+    check("commented-out svg before the real root is ignored", P(`<!-- <svg data-template-purpose="old"> --><svg data-template-purpose="real">`).purpose === "real");
+    check("hyphen-prefixed attr name is not matched", P(`<svg my-data-template-purpose="no">`).purpose === undefined);
+    check("empty/garbage input -> {}", Object.keys(P("")).length === 0 && Object.keys(P("<nope")).length === 0);
+    // Catalogue resilience: a bad entity, a missing template.svg, a garbled index.
+    await mk("zz-badentity", `data-template-purpose="oops &#x110000;"`);
+    await fs.mkdir(path.join(root, "Templates", "zz-notemplate"), { recursive: true });
+    await fs.writeFile(path.join(root, "Templates", "templates.json"), "{ not json");
+    const cat2 = await listCatalogue(root);
+    check("bad entity template listed, library listing survives", cat2.find((t) => t.id === "zz-badentity")?.purpose === "oops &#x110000;");
+    check("folder without template.svg is skipped", !cat2.some((t) => t.id === "zz-notemplate"));
+    await fs.rm(path.join(root, "Templates", "zz-notemplate"), { recursive: true });
+    check("garbled templates.json: svg purpose still read, index fallback gone", cat2.find((t) => t.id === "zz-list-purpose")?.purpose === purpose && cat2.find((t) => t.id === "zz-indexonly")?.purpose === undefined);
+    const cb = await createPage(root, { chapter: "Lists", name: "badent", template: "zz-badentity" });
+    check("create_page with a bad-entity template works", cb.templateMeta?.purpose === "oops &#x110000;");
+    await fs.writeFile(idxPath, JSON.stringify(idx)); // restore for later sections
+    // A page whose template carries nothing: templateMeta omitted entirely from both tools.
+    await fs.mkdir(path.join(root, "Templates", "zz-bare"), { recursive: true });
+    await fs.writeFile(path.join(root, "Templates", "zz-bare", "template.svg"), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1366"></svg>`);
+    const bare = await createPage(root, { chapter: "Lists", name: "bare", template: "zz-bare" });
+    check("create_page: templateMeta only carries the id when nothing declared", bare.templateMeta?.purpose === undefined && bare.templateMeta?.id === "zz-bare");
+  }
 
   console.log("\nread_page (region geometry, current names)");
   const read = await readPage(root, daily);

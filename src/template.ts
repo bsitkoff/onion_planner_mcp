@@ -461,3 +461,43 @@ export function parseRegions(templateSvg: string, templateName?: string): Region
   }
   return regions;
 }
+
+/** What a template is for — read from the template.svg root's `data-template-*` attributes. */
+export interface TemplateMeta {
+  id?: string;
+  name?: string;
+  category?: string;
+  /** One sentence: what the page is for and not for (`data-template-purpose`). */
+  purpose?: string;
+}
+
+/** Single-pass entity decode (so `&#38;lt;` -> `&lt;`, not `<`); invalid code points stay literal. */
+function decodeXml(v: string): string {
+  return v.replace(/&(#x[0-9a-fA-F]+|#\d+|quot|apos|lt|gt|amp);/g, (whole, e: string) => {
+    if (e[0] === "#") {
+      const cp = e[1] === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return whole;
+      return String.fromCodePoint(cp);
+    }
+    return { quot: '"', apos: "'", lt: "<", gt: ">", amp: "&" }[e] ?? whole;
+  });
+}
+
+/**
+ * Parse `data-template-id/name/category/purpose` off the root `<svg>` tag (comments
+ * stripped; quote-aware so a `>` inside a value is fine). Absent attributes are omitted
+ * and this never throws, so older/imported templates still work.
+ */
+export function parseTemplateMeta(templateSvg: string): TemplateMeta {
+  const out: TemplateMeta = {};
+  try {
+    const tag = templateSvg.replace(/<!--[\s\S]*?-->/g, "").match(/<svg\b(?:[^>"']|"[^"]*"|'[^']*')*>/)?.[0] ?? "";
+    for (const m of tag.matchAll(/(?:^|\s)data-template-(id|name|category|purpose)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+      const v = decodeXml(m[2] ?? m[3] ?? "").trim();
+      if (v) out[m[1] as keyof TemplateMeta] = v;
+    }
+  } catch {
+    /* garbled: no meta */
+  }
+  return out;
+}

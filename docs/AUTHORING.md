@@ -92,6 +92,8 @@ region from the MCPs the orchestrator already has:
 |---|---|
 | `schedule` | the user's calendar — the day's events (use `time`; the template's `data-start-hour` anchors it) |
 | `todo` | whatever task sources the orchestrator has — concrete, checkable items; **star the 2–3 that matter most** with a leading ★ in the text (priorities are folded in here, no separate region) |
+| `dinners` (meal plan) | the week's dinners: one `{ text, row }` line per day, `row` 0 = Mon … 6 = Sun (the template prints the day names and 7 row rules); dish name only, the user adds notes by hand. `shared`, Mulish 15 / 600 |
+| `groceries` (meal plan) | the week's grocery checklist, what the dinners need: flow lines with `marker: "checkbox"` (the template prints no boxes). `shared`, Mulish 15 / 600; the app never puts Reminders to-dos here either |
 | `ainotes` → weather | a weather source for *the user's* location, today (not a guess) |
 | `ainotes` → "Important" | time-sensitive, real stakes (a bill, an order, a check-in) |
 | `ainotes` → "Tomorrow" | tomorrow's calendar — a 2–3 line preview |

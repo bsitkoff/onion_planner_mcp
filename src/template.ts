@@ -277,6 +277,9 @@ export const FILL_BY_NAME: Record<string, RegionFill> = {
   morning: "shared",
   afternoon: "shared",
   evening: "shared",
+  // Meal plan (onionskin 273b901): the AI writes the dish on its day row / the checklist; the user adds by hand.
+  dinners: "shared", // 7 day rows (Mon→Sun, `row` 0-6) — AI writes the dish, the user adds notes
+  groceries: "shared", // `data-list="groceries"` plain checklist — AI draws checkbox rows
   // ai — the AI owns it (a daily message, a title, structure).
   ainotes: "ai", // the AI voice: weather/context/affirmation + a home for a small image
   last: "ai", // reflection's "from last session" — the AI surfaces it

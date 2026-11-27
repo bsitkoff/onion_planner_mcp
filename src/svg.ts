@@ -2056,8 +2056,8 @@ export function composeAiSvg(
       // above/between the ruled lines, leaving the lines free for the user's ink.
       // A line with an explicit `row` or `time` still snaps to the ruled grid.
       const flowBases = flowBaselines(region, lines, def, theme);
-      // baseline y -> the text of the `lines[]` entry that owns it (row_collision, #30).
-      const baselineOwners = new Map<number, string>();
+      // First baseline of every non-heading `lines[]` entry so far (row_collision, #30).
+      const baselineOwners: { y: number; size: number; text: string }[] = [];
       let handwritingWarned = false;
       // `accent` is the catalogue's universal decorative pocket — "one sticker or tiny
       // drawing, never text, ok to leave empty" (#49).
@@ -2169,9 +2169,12 @@ export function composeAiSvg(
               region.name,
             );
           } else {
+            const appScope = isAppScheduleRegion(region.name);
             if (r2 <= r1) {
               // Invalid/non-positive ranges retain the legacy visible fallback and
               // warning. Valid short events always keep both exact endpoints.
+              // schedule/agenda: the app floors the start row first (F7 floor).
+              if (appScope) r1 = Math.floor(r1);
               r2 = r1 + 1;
               if (r2 > maxIdx) {
                 r2 = maxIdx;
@@ -2186,7 +2189,6 @@ export function composeAiSvg(
               );
             }
             // schedule/agenda: exact-minute edges, no rounding (app parity, F4); others rounded.
-            const appScope = isAppScheduleRegion(region.name);
             const y1 = appScope ? ruledY(region, r1) - region.y : Math.round(ruledY(region, r1) - region.y);
             const y2 = appScope ? ruledY(region, r2) - region.y : Math.round(ruledY(region, r2) - region.y);
             // Never start left of the template's printed hour-label gutter (#44).
@@ -2305,7 +2307,13 @@ export function composeAiSvg(
             );
           }
           const localRuled = ruledY(region, effLine.row) - region.y;
-          y = Math.round(localRuled + rowOffset(region));
+          if (rowFromTime && isAppScheduleRegion(region.name) && !line.heading) {
+            // App parity (F7): a timed schedule/agenda line sits size*0.78 below its
+            // exact (unrounded) rule, not at the row-offset baseline.
+            y = localRuled + size * 0.78;
+          } else {
+            y = Math.round(localRuled + rowOffset(region));
+          }
         } else {
           y = Math.round(flowBases[i]);
         }
@@ -2314,18 +2322,29 @@ export function composeAiSvg(
         // strings stacked in the same visual slot (#30/#31). Wrapped continuations of a
         // single entry are one item and never count; headings are labels and exempt.
         if (!line.heading) {
-          const prior = baselineOwners.get(y);
-          if (prior !== undefined) {
+          const same = baselineOwners.find((o) => o.y === y);
+          if (same !== undefined) {
             warn(
               "row_collision",
               `region "${region.name}": line "${truncate(line.text)}" lands on the same ` +
-                `baseline (y=${y}) as "${truncate(prior)}" — two items in one slot.`,
+                `baseline (y=${fmtNum(y)}) as "${truncate(same.text)}" — two items in one slot.`,
               "warning",
               region.name,
             );
           } else {
-            baselineOwners.set(y, line.text);
+            const near = baselineOwners.find((o) => Math.abs(o.y - y) < Math.min(o.size, size));
+            if (near !== undefined) {
+              warn(
+                "row_collision",
+                `region "${region.name}": line "${truncate(line.text)}" (baseline y=${fmtNum(y)}) ` +
+                  `overlaps "${truncate(near.text)}" (baseline y=${fmtNum(near.y)}) — closer than ` +
+                  `one text height; two items in one slot.`,
+                "warning",
+                region.name,
+              );
+            }
           }
+          baselineOwners.push({ y, size, text: line.text });
         }
 
         // Horizontal alignment (#33): resolved against the region box, emitted as
@@ -2446,7 +2465,7 @@ export function composeAiSvg(
         segments.forEach((seg, si) => {
           const sy = y + si * subPitch;
           parts.push(
-            `    <text x="${textX}" y="${sy}" font-family="${escapeXml(font)}" ` +
+            `    <text x="${textX}" y="${fmtNum(sy)}" font-family="${escapeXml(font)}" ` +
               `font-size="${size}" font-weight="${weight}"${anchorAttr} fill="${fill}">${escapeXml(seg)}</text>`,
           );
         });

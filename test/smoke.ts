@@ -493,8 +493,8 @@ async function main() {
   });
   const y130 = yOf(halfHour.aiSvg, ">onethirty</text>");
   const y200 = yOf(halfHour.aiSvg, ">twopm</text>");
-  check("13:30 line sits halfway between the 13:00 and 14:00 rules", y130 === Math.round(rl[6] + pitch / 2 + off), `y=${y130} expected=${Math.round(rl[6] + pitch / 2 + off)} (rules ${rl[6]}..${rl[7]})`);
-  check("13:30 line is above the 14:00 line (no longer snapped onto it)", y130 < y200 && y200 === Math.round(rl[7] + off), `${y130} vs ${y200}`);
+  check("13:30 line sits halfway between the 13:00 and 14:00 rules", Math.abs(y130 - (rl[6] + pitch / 2 + 15 * 0.78)) < 0.01, `y=${y130} expected=${rl[6] + pitch / 2 + 15 * 0.78} (rules ${rl[6]}..${rl[7]})`);
+  check("13:30 line is above the 14:00 line (no longer snapped onto it)", y130 < y200 && Math.abs(y200 - (rl[7] + 15 * 0.78)) < 0.01, `${y130} vs ${y200}`);
   check("a sub-hour time does not collide-warn against the next hour", !halfHour.warningDetails.some((w) => w.code === "row_collision"), JSON.stringify(halfHour.warnings));
   // A washi block 13:30–14:30 starts mid-interval and spans one full interval.
   const halfBlock = await writeUnderlay(root, daily, {

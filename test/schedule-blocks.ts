@@ -101,16 +101,17 @@ test('non-schedule region: wrapped label uses round(size*1.3) pitch and overflow
   assert.equal(texts[1].y-texts[0].y,20);
   assert.ok(result.warningDetails.some(w=>w.code==='washi_block_label_overflow'));
 });
-test('schedule and agenda: timed line baseline stays the baseline value round(rule + round(0.4*52)) = rule + 21 (F7 split out)',()=>{
-  // Pins the split: the app's row + size*0.78 is a follow-up PR with a collision fix.
+test('schedule and agenda: timed line baseline is the exact rule + size*0.78 (F7), unrounded',()=>{
   for(const name of ['schedule','agenda']){
     const {texts}=drawIn(name,34,[{text:'Call',time:'09:00',size:15}]);
-    assert.equal(texts[0].y,125);
+    near(texts[0].y,115.7);
+    const half=drawIn(name,34,[{text:'Half',time:'09:30',size:15}]);
+    near(half.texts[0].y,141.7);
   }
 });
-test('schedule: last-rule zero-duration fallback baseline is the baseline value',()=>{
+test('schedule: last-rule zero-duration fallback baseline is the last rule + size*0.78',()=>{
   const {texts}=drawIn('schedule',34,[{text:'Edge',time:'21:00',endTime:'21:00',size:15}]);
-  assert.equal(texts[0].y,749);
+  near(texts[0].y,739.7);
 });
 test('non-schedule region: timed line baseline keeps round(rule + round(0.4*52)) = rule + 21',()=>{
   const {texts}=drawFull('morning',[{text:'Call',time:'09:00',size:15}]);
@@ -133,4 +134,44 @@ test('schedule label wrap width is block width - 16 (F2), scoped to schedule/age
   assert.equal(lines('agenda',39),1);
   assert.equal(lines('schedule',41),2);   // wraps past 205
   assert.equal(lines('morning',41),1);    // non-schedule keeps inner width 217 (24/24 insets, 12px pad)
+});
+
+const collisions=(r:{warningDetails:{code:string;message:string}[]})=>r.warningDetails.filter(w=>w.code==='row_collision');
+test('F7 collisions: row line and timed line on one rule still warn (schedule and morning)',()=>{
+  // Timed y is 115.7 in schedule, row 2 is 125: 9.3 apart, closer than size 15.
+  const sch=drawIn('schedule',34,[{text:'by row',row:2,size:15},{text:'by time',time:'09:00',size:15}]).result;
+  assert.equal(collisions(sch).length,1);
+  const mor=drawIn('morning',34,[{text:'by row',row:2,size:15},{text:'by time',time:'09:00',size:15}]).result;
+  assert.equal(collisions(mor).length,1);
+  assert.match(collisions(mor)[0].message,/same baseline/);
+});
+test('F7 collisions: 09:00 + 09:30 do not collide; 09:00 + 09:05 do',()=>{
+  assert.equal(collisions(drawIn('schedule',34,[{text:'A',time:'09:00',size:15},{text:'B',time:'09:30',size:15}]).result).length,0);
+  const r=drawIn('schedule',34,[{text:'A',time:'09:00',size:15},{text:'B',time:'09:05',size:15}]).result;
+  assert.equal(collisions(r).length,1);
+  assert.match(collisions(r)[0].message,/closer than one text height/);
+});
+test('F7 collisions: two timed lines at 09:00 use the same-baseline message',()=>{
+  const r=drawIn('schedule',34,[{text:'A',time:'09:00',size:15},{text:'B',time:'09:00',size:15}]).result;
+  assert.equal(collisions(r).length,1);
+  assert.match(collisions(r)[0].message,/same baseline/);
+});
+test('F7 collisions: A y=100, B y=110, C y=120 warn for B and C only',()=>{
+  const r=drawIn('morning',34,[{text:'A',y:100,size:15},{text:'B',y:110,size:15},{text:'C',y:120,size:15}]).result;
+  const c=collisions(r);
+  assert.equal(c.length,2);
+  assert.ok(c[0].message.includes('"B"')&&c[1].message.includes('"C"'));
+});
+test('F7 collisions: flow lines 14 then 38 apart-by-flow in a box region do not collide',()=>{
+  const r=drawIn('morning',34,[{text:'one',y:14,size:15},{text:'two',y:38,size:15}]).result;
+  assert.equal(collisions(r).length,0);
+});
+test('non-positive duration: schedule floors the start row before the one-row fallback; others do not',()=>{
+  const sch=drawIn('schedule',34,[{text:'Back',time:'09:30',endTime:'09:00',size:15}]);
+  const m=/<rect\b[^>]*fill-opacity="[^"]+"[^>]*\/>/.exec(sch.result.svg)!;
+  const n=(key:string)=>Number(new RegExp(`\\b${key}="([^"]+)"`).exec(m[0])?.[1]);
+  near(n('y'),104); near(n('height'),52);
+  assert.ok(sch.result.warningDetails.some(w=>w.code==='washi_block_min_height'));
+  const mor=drawFull('morning',[{text:'Back',time:'09:30',endTime:'09:00',size:15}]);
+  assert.equal(mor.rect!.y,130);
 });

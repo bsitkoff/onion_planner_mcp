@@ -183,9 +183,11 @@ cozy/colorful, §1); right inset = `20`; the label sits 8px inside the block's l
 (`x + 8`, wrap width `width − 16`). Block edges are the exact clock positions, **not rounded**
 (fractional `y`/`height`); a wrapped label's line pitch is `size × 1.3` (unrounded). A plain
 point-in-time schedule line (`time`, no end, and the last-rule zero-duration fallback) starts at
-the same `max(48, gutterX)` (x only). **Known delta:** its baseline y is still
-`round(rule + round(0.4 × pitch))` in every region; the app uses `y(at:start) + size × 0.78`. That
-is pending a follow-up PR that also fixes row/timed-line collision warnings. All of this
+the same `max(48, gutterX)` (x only). Its baseline y is `(exact rule y at the start row) + size × 0.78`, unrounded, as in the
+app (`ruledY` clamps to the last rule, so the last-rule fallback uses `lines[last] + size × 0.78`);
+timed headings and every other region keep `round(rule + round(0.4 × pitch))`. A non-positive
+duration (`endTime` ≤ `time`) floors the start row first, then draws the one-row block
+(`floor(start)` to `floor(start) + 1`) in schedule/agenda; other regions do not floor. All of this
 applies to `schedule`/`agenda` only; every other region keeps rounded edges, a
 `round(size × 1.3)` pitch, a left inset of `max(xPad, gutterX)` (24 by default) with a 24 right inset, and a 12px label pad.
 Label overflow (the app now matches, onionskin#307): a single-line label overflows when `size > h`;

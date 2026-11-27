@@ -7,6 +7,12 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Timed schedule lines sit at the app's baseline; collision check by distance — 2026-11-26
+
+Finishes the schedule-parity work (F7). In `schedule`/`agenda`, a timed (non-heading) line's baseline is now the exact rule y plus `size × 0.78`, unrounded (was `round(rule + round(0.4 × pitch))`); the last-rule zero-duration fallback uses `lines[last] + size × 0.78`; text `y` is written through `fmtNum` (integers unchanged). A non-positive duration in schedule/agenda floors the start row before the one-row fallback. Other regions are unchanged. Because the timed line no longer lands exactly on a row line's baseline, `row_collision` now also fires when two non-heading entries' first baselines are closer than the smaller text height (new message "closer than one text height"); an identical baseline keeps the old message; one warning per line, all regions, warnings only. `docs/SHARED-VISUAL-SPEC.md` §7 and `docs/AUTHORING.md` updated.
+
+---
+
 ## Meal-plan regions `dinners` + `groceries` known to the server — 2026-11-26
 
 The app's three meal-plan templates (onionskin 273b901) print `dinners` (7 ruled day rows, `data-rows="7"`) and `groceries` (`data-list="groceries"`, an open box), which `FILL_BY_NAME`/`REGION_DEFAULTS` didn't know, so `test/parity.ts` failed (86/2). Both are now `shared`, Mulish 15/600 (the agenda/todo register), reusing existing behaviour, nothing new: `dinners` lines snap to a day row with `row` 0-6; `groceries` takes flow lines with `marker: "checkbox"`. This matches the app, which has no special handling for either name (its only rule is excluding `data-list` `groceries`/`items` regions from Reminders to-dos). New smoke cases compose all three templates. `docs/AUTHORING.md` region table updated.

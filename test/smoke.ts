@@ -2701,6 +2701,34 @@ async function main() {
   console.log("\nNEGATIVE: missing library");
   const saved = process.env.ONIONSKIN_CONTAINER;
   process.env.ONIONSKIN_CONTAINER = "/tmp/onionskin-does-not-exist-xyz";
+  // Meal plan (onionskin 273b901): `dinners` (7 day rows) + `groceries` (data-list checklist)
+  // were unknown to FILL_BY_NAME/REGION_DEFAULTS. Compose on every shipped mealplan template.
+  for (const tid of ["mealplan-minimal", "mealplan-cozy", "mealplan-colorful"]) {
+    const svgSrc = await fs.readFile(path.join(root, "Templates", tid, "template.svg"), "utf8");
+    const mp = parseRegions(svgSrc, tid);
+    const dn = mp.find((r) => r.name === "dinners")!;
+    const gr = mp.find((r) => r.name === "groceries")!;
+    check(`${tid}: dinners/groceries derive fill=shared`, dn.fill === "shared" && gr.fill === "shared");
+    check(`${tid}: dinners/groceries have explicit defaults`, !!REGION_DEFAULTS.dinners && !!REGION_DEFAULTS.groceries && FILL_BY_NAME.dinners === "shared" && FILL_BY_NAME.groceries === "shared");
+    const mpOut = composeAiSvg([1024, 1366], [
+      { region: "dinners", lines: [{ text: "MPtacos", row: 0 }, { text: "MPsoup", row: 1 }, { text: "MPpasta", row: 6 }] },
+      { region: "groceries", lines: [{ text: "MPtortillas", marker: "checkbox" }, { text: "MPlimes", marker: "checkbox" }] },
+    ], mp, undefined, tid);
+    const dnBlock = regionGroup(mpOut.svg, "dinners") ?? "";
+    const grBlock = regionGroup(mpOut.svg, "groceries") ?? "";
+    // dinners: each dish snaps to its day row (below that row's printed rule, above the next)
+    const dy = (t: string) => Number(dnBlock.match(new RegExp(`y="([\\d.]+)"[^>]*>${t}</text>`))?.[1]);
+    const rel = dn.ruledLines.map((l) => l - dn.y);
+    check(`${tid}: dinners rows snap to Mon/Tue/Sun day rows`,
+      dy("MPtacos") > rel[0] && dy("MPtacos") < rel[1] && dy("MPsoup") > rel[1] && dy("MPsoup") < rel[2] && dy("MPpasta") > rel[6] && dy("MPpasta") < dn.height!,
+      `${dy("MPtacos")} ${dy("MPsoup")} ${dy("MPpasta")} vs ${rel.join(",")}`);
+    // groceries: checkbox rows, inside the region box, in flow order
+    const gy = (t: string) => Number(grBlock.match(new RegExp(`y="([\\d.]+)"[^>]*>${t}</text>`))?.[1]);
+    check(`${tid}: groceries draws one checkbox per item`, (grBlock.match(/<rect /g) ?? []).length === 2);
+    check(`${tid}: groceries lines flow inside the region`, gy("MPtortillas") > 0 && gy("MPlimes") > gy("MPtortillas") && gy("MPlimes") < gr.height!);
+    check(`${tid}: no unknown-region warning`, !mpOut.warnings.some((w) => /unknown|no region|not in the template|not found/i.test(w)), JSON.stringify(mpOut.warnings));
+  }
+
   let missingErr = false;
   try {
     await requireLibrary();

@@ -555,6 +555,8 @@ export const REGION_DEFAULTS: Record<string, RegionDefault> = {
   morning: { font: "Mulish", size: 15, weight: 600 }, // weekend day-parts
   afternoon: { font: "Mulish", size: 15, weight: 600 },
   evening: { font: "Mulish", size: 15, weight: 600 },
+  dinners: { font: "Mulish", size: 15, weight: 600 }, // meal plan: one dish per day row (like agenda/todo type)
+  groceries: { font: "Mulish", size: 15, weight: 600 }, // meal plan: checkbox checklist (like todo)
   weekdays: { font: "Mulish", size: 13, weight: 800 }, // monthly's Sun–Sat header (printed)
   page: { font: "Mulish", size: 14, weight: 600 }, // lined/dotted/blank surface (ink)
   joys: { font: "Mulish", size: 14, weight: 600 }, // reflection prompts (ink)

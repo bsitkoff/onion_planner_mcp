@@ -1098,6 +1098,17 @@ function iconFragment(
 // design/UNDERLAY-VISUAL.md, forthcoming — onionskin#23): ~8px radius, ~0.16 tint.
 const WASHI_RX = 8;
 const WASHI_DEFAULT_OPACITY = 0.16;
+// Block placement mirrors the app composer (UnderlaySVGComposer.swift ~455-523; onionskin#245):
+// left inset 48 (past the printed hour labels), right inset 20, label padded 8 inside the tape.
+const WASHI_LEFT_INSET = 48;
+const WASHI_RIGHT_INSET = 20;
+const WASHI_LABEL_PAD_X = 8;
+/** The app draws schedule blocks and timed lines only in `schedule`/`agenda` (it treats them
+ *  identically: `aiRegion(regions, ["schedule", "agenda"])`); every other region keeps the
+ *  generic xPad/DEFAULT_X_PAD placement. One predicate so block and timed-line scope can't drift. */
+function isAppScheduleRegion(name: string): boolean {
+  return name === "schedule" || name === "agenda";
+}
 
 /**
  * A washi-tape-style duration block: a rounded, translucent-tint rect spanning
@@ -1122,14 +1133,19 @@ function washiBlockFragment(
   textFill: string,
   blockFill: string,
   opacity: number,
+  appScope: boolean = false,
 ): { svg: string; overflow: boolean } {
+  // schedule/agenda follow the app (unrounded edges/pitch, 8px label pad); other regions keep
+  // the baseline output byte-for-byte (raw numbers, rounded pitch, BANNER_PAD_X).
+  const labelPadX = appScope ? WASHI_LABEL_PAD_X : BANNER_PAD_X;
+  const nf = appScope ? fmtNum : (n: number) => String(n);
   const h = y2 - y1;
   const rect =
-    `<rect x="${x}" y="${y1}" width="${width}" height="${h}" rx="${WASHI_RX}" ` +
+    `<rect x="${nf(x)}" y="${nf(y1)}" width="${nf(width)}" height="${nf(h)}" rx="${WASHI_RX}" ` +
     `fill="${blockFill}" fill-opacity="${opacity}"/>`;
-  const innerWidth = width - BANNER_PAD_X * 2;
+  const innerWidth = width - labelPadX * 2;
   const segments = wrapText(text, font, size, innerWidth);
-  const labelX = x + BANNER_PAD_X;
+  const labelX = nf(x + labelPadX);
   let labels: string;
   let overflow: boolean;
   if (segments.length <= 1) {
@@ -1140,7 +1156,7 @@ function washiBlockFragment(
       `font-size="${size}" font-weight="${weight}" fill="${textFill}">${escapeXml(text)}</text>`;
     overflow = size > h;
   } else {
-    const pitch = Math.round(size * 1.3);
+    const pitch = appScope ? size * 1.3 : Math.round(size * 1.3); // app uses the unrounded pitch (F5)
     const blockHeight = segments.length * pitch;
     overflow = blockHeight > h;
     const startY = y1 + h / 2 - blockHeight / 2 + pitch * 0.78; // first baseline, block vertically centred
@@ -2167,19 +2183,22 @@ export function composeAiSvg(
                 region.name,
               );
             }
-            const y1 = Math.round(ruledY(region, r1) - region.y);
-            const y2 = Math.round(ruledY(region, r2) - region.y);
+            // schedule/agenda: exact-minute edges, no rounding (app parity, F4); others rounded.
+            const appScope = isAppScheduleRegion(region.name);
+            const y1 = appScope ? ruledY(region, r1) - region.y : Math.round(ruledY(region, r1) - region.y);
+            const y2 = appScope ? ruledY(region, r2) - region.y : Math.round(ruledY(region, r2) - region.y);
             // Never start left of the template's printed hour-label gutter (#44).
             const lane = lanes.get(i) ?? { column: 0, columns: 1 };
-            const baseX = line.x ?? Math.max(def.xPad ?? DEFAULT_X_PAD, region.gutterX ?? 0);
+            const insetX = appScope
+              ? Math.max(WASHI_LEFT_INSET, region.gutterX ?? 0)
+              : Math.max(def.xPad ?? DEFAULT_X_PAD, region.gutterX ?? 0);
+            const baseX = line.x ?? insetX;
             // Use one shared left edge for a collision group even if an individual
             // line supplied x; otherwise custom offsets could reintroduce overlap.
-            const left = lane.columns > 1
-              ? Math.max(def.xPad ?? DEFAULT_X_PAD, region.gutterX ?? 0) : baseX;
-            // Right inset is the standard margin, not a second helping of the schedule's
-            // wide LEFT gutter (reserved for the printed hour labels) — re-subtracting it
-            // on the right left the tape ~half its column narrower than it needed to be.
-            const available = Math.max(0, region.width - left - DEFAULT_X_PAD);
+            const left = lane.columns > 1 ? insetX : baseX;
+            // Right inset (schedule/agenda) is the app's fixed 20, not a second helping of the schedule's
+            // wide LEFT gutter (reserved for the printed hour labels).
+            const available = Math.max(0, region.width - left - (appScope ? WASHI_RIGHT_INSET : DEFAULT_X_PAD));
             const gap = lane.columns > 1 ? Math.min(6, available / (lane.columns * 2)) : 0;
             const bw = Math.max(0, (available - gap * (lane.columns - 1)) / lane.columns);
             const bx = left + lane.column * (bw + gap);
@@ -2195,6 +2214,7 @@ export function composeAiSvg(
               fill,
               line.blockFill ?? theme.washiTint ?? theme.accent,
               line.blockOpacity ?? WASHI_DEFAULT_OPACITY,
+              appScope,
             );
             parts.push(`    ${block.svg}`);
             if (block.overflow) {
@@ -2257,6 +2277,10 @@ export function composeAiSvg(
             }
             effLine = { ...line, row: r };
             rowFromTime = true;
+            // Plain point-in-time schedule line: the app starts it at 48, not 52 (F6).
+            if (line.x === undefined && isAppScheduleRegion(region.name)) {
+              x = Math.max(WASHI_LEFT_INSET, region.gutterX ?? 0);
+            }
           }
         }
 

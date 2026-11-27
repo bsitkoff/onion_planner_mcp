@@ -442,7 +442,7 @@ async function main() {
 
   console.log("\ntime-aware schedule (template start-hour + per-call override; dry-run)");
   const yOf = (svg: string | undefined, needle: string) =>
-    Number(((svg ?? "").split("\n").find((l) => l.includes(needle)) ?? "").match(/y="(\d+)"/)?.[1] ?? -1);
+    Number(((svg ?? "").split("\n").find((l) => l.includes(needle)) ?? "").match(/y="(-?[\d.]+)"/)?.[1] ?? -1);
   // The schedule self-describes its grid via data-start-hour / data-rows-per-hour.
   check("schedule parses its template start-hour (7) + rows-per-hour (1)", schedule?.startHour === 7 && schedule?.rowsPerHour === 1, `${schedule?.startHour}/${schedule?.rowsPerHour}`);
   // With NO caller startHour, a clock time now anchors via the template's start-hour.
@@ -502,9 +502,9 @@ async function main() {
     regions: [{ region: "schedule", lines: [{ text: "Dentist", time: "13:30", endTime: "14:30" }] }],
   });
   const halfRect = (regionGroup(halfBlock.aiSvg, "schedule") ?? "").match(/<rect[^>]*fill-opacity="[\d.]+"[^>]*\/>/);
-  const hbY = Number(halfRect?.[0].match(/ y="(-?\d+)"/)?.[1]);
-  const hbH = Number(halfRect?.[0].match(/height="(\d+)"/)?.[1]);
-  check("13:30–14:30 block starts halfway down the 13:00 interval", hbY === Math.round(rl[6] + pitch / 2), `y=${hbY} expected=${Math.round(rl[6] + pitch / 2)}`);
+  const hbY = Number(halfRect?.[0].match(/ y="(-?[\d.]+)"/)?.[1]);
+  const hbH = Number(halfRect?.[0].match(/height="([\d.]+)"/)?.[1]);
+  check("13:30–14:30 block starts halfway down the 13:00 interval", Math.abs(hbY - (rl[6] + pitch / 2)) < 0.01, `y=${hbY} expected=${rl[6] + pitch / 2}`);
   check("13:30–14:30 block spans one full interval", Math.abs(hbH - pitch) <= 1, `h=${hbH} pitch=${pitch}`);
   check("a mid-interval one-hour block is NOT flagged below the minimum height", !halfBlock.warningDetails.some((w) => w.code === "washi_block_min_height"), JSON.stringify(halfBlock.warnings));
   // #30 repro 2: 30 rows into a 15-row grid used to fold 16 strings onto the last rule
@@ -521,6 +521,11 @@ async function main() {
     regions: [{ region: "schedule", lines: [{ text: "by row", row: 2 }, { text: "by time", time: "09:00" }] }],
   });
   check("a time line on the same rule as a row line warns row_collision", mixed.warningDetails.some((w) => w.code === "row_collision"), JSON.stringify(mixed.warnings));
+  const twoTimes = await writeUnderlay(root, daily, {
+    status: "ready", dryRun: true,
+    regions: [{ region: "schedule", lines: [{ text: "by time", time: "09:00" }, { text: "also by time", time: "09:00" }] }],
+  });
+  check("two time lines at the same time warn row_collision", twoTimes.warningDetails.some((w) => w.code === "row_collision"), JSON.stringify(twoTimes.warnings));
   // #31: wrapped continuations of ONE entry are one item — never a collision.
   const wrappedItems = await writeUnderlay(root, daily, {
     status: "ready", dryRun: true,
@@ -559,25 +564,24 @@ async function main() {
   const washiGroup = regionGroup(washi.aiSvg, "schedule") ?? "";
   const rectMatch = washiGroup.match(/<rect[^>]*fill-opacity="[\d.]+"[^>]*\/>/);
   check("duration block draws a fill-opacity rect", !!rectMatch, washiGroup.slice(0, 300));
-  const yAttr = Number(rectMatch?.[0].match(/y="(-?\d+)"/)?.[1]);
-  const hAttr = Number(rectMatch?.[0].match(/height="(\d+)"/)?.[1]);
+  const yAttr = Number(rectMatch?.[0].match(/y="(-?[\d.]+)"/)?.[1]);
+  const hAttr = Number(rectMatch?.[0].match(/height="([\d.]+)"/)?.[1]);
   // 09:00 -> row 2, 10:00 -> row 3, given the schedule's own startHour 7 / rowsPerHour 1.
-  check("block y matches the start row (09:00 -> row 2)", yAttr === Math.round(rl[2]), `y=${yAttr} expected=${Math.round(rl[2])}`);
-  check("block height spans start->end row (10:00 -> row 3)", yAttr + hAttr === Math.round(rl[3]), `y+h=${yAttr + hAttr} expected=${Math.round(rl[3])}`);
+  check("block y matches the start row (09:00 -> row 2)", Math.abs(yAttr - rl[2]) < 0.01, `y=${yAttr} expected=${rl[2]}`);
+  check("block height spans start->end row (10:00 -> row 3)", Math.abs(yAttr + hAttr - rl[3]) < 0.01, `y+h=${yAttr + hAttr} expected=${rl[3]}`);
   // rx=8 / 0.16 tint per the 2026-07-09 washi spec (design/UNDERLAY-VISUAL.md, forthcoming).
   check("block uses the washi rx=8 corner radius", rectMatch![0].includes('rx="8"'), rectMatch?.[0]);
   check("block uses the 0.16 default tint opacity", rectMatch![0].includes('fill-opacity="0.16"'), rectMatch?.[0]);
   check("block draws the label text inside it", washiGroup.includes(">Team sync</text>"), washiGroup.slice(0, 300));
-  // The tape's right inset should be the standard margin (24px), not a re-subtraction of the
-  // schedule's wide LEFT gutter (52px, reserved for the printed hour labels) — that double-charge
-  // left ~52px of dead space on the right of every block. bx is whatever xPad the schedule
-  // region resolved to (52 by default); the tape should reach to region.width - 24, not - bx.
+  // The tape's right inset is the app's fixed 20px, not a re-subtraction of the schedule's
+  // wide LEFT gutter (reserved for the printed hour labels). The block starts at the app's
+  // left inset (max(48, gutterX)) and reaches to region.width - 20.
   const xAttr = Number(rectMatch?.[0].match(/ x="(-?[\d.]+)"/)?.[1]);
   const wAttr = Number(rectMatch?.[0].match(/width="([\d.]+)"/)?.[1]);
-  const expectedWidth = Math.round(schedule!.width! - xAttr - 24);
+  const expectedWidth = schedule!.width! - xAttr - 20;
   check(
-    "block width uses a standard right margin, not the left gutter twice",
-    wAttr === expectedWidth,
+    "block width uses the fixed 20px right inset, not the left gutter twice",
+    Math.abs(wAttr - expectedWidth) < 0.01,
     `x=${xAttr} width=${wAttr} region.width=${schedule!.width} expected width=${expectedWidth}`,
   );
 
@@ -620,11 +624,11 @@ async function main() {
     JSON.stringify(zeroDur.warningDetails),
   );
   // 10:00 -> row 3 on this grid; the minimum block spans exactly one ruled interval.
-  const zeroH = Number(zeroRect?.[0].match(/height="(\d+)"/)?.[1]);
-  const oneInterval = Math.round(rl[4]) - Math.round(rl[3]);
+  const zeroH = Number(zeroRect?.[0].match(/height="([\d.]+)"/)?.[1]);
+  const oneInterval = rl[4] - rl[3];
   check(
     "minimum block height equals one ruled-line interval from the template",
-    zeroH === oneInterval,
+    Math.abs(zeroH - oneInterval) < 0.01,
     `height=${zeroH} interval=${oneInterval}`,
   );
   // A 20-minute meeting must remain a 20-minute tape, even on an hourly grid.

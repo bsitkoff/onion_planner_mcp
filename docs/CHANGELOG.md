@@ -7,6 +7,19 @@ roadmap holds only planned feature development (bugs/polish live on the
 
 ---
 
+## Schedule-block placement matches the app; shared parity fixture — 2026-11-26
+
+Where the app and this server disagreed on schedule-block placement, the server now follows the
+app (onionskin#245): left inset `max(48, gutterX)` (was `max(52, gutterX)`), right inset 20 (was
+24), label `x + 8` with wrap width `width − 16` (was `+12`/`−24`), block edges unrounded, wrapped
+label pitch `size × 1.3` unrounded, and plain timed schedule lines start at `max(48, gutterX)` (x only). A schedule/agenda block with an explicit `x` keeps that `x` but is 4px wider (right inset 24 → 20). All of this applies to `schedule`/`agenda` only; other regions render exactly as before.
+`BANNER_PAD_X`, `REGION_DEFAULTS.schedule.xPad` and the overflow rule are unchanged. New
+`test/schedule-parity.ts` checks the server against the app's shared fixture
+(`../onionskin/Onionskin/Tests/Fixtures/schedule-parity.json`); skips when the app checkout is absent.
+`docs/SHARED-VISUAL-SPEC.md` §7 updated.
+
+Known delta, left for a follow-up PR: a timed line's y keeps the baseline `round(rule + round(0.4 × pitch))`; the app uses `y(at:start) + size × 0.78`. Matching it needs a collision fix first (a timed line and a row line at the same hour would overlap without the `row_collision` warning). Label-overflow rule (the app now matches the server, onionskin#307): single line overflows when `size > h`; wrapped lines overflow when `lines × size × 1.3 > h`, using the unrounded pitch in schedule/agenda.
+
 ## The `Shared/` gate retires with the app (onionskin#144 Phase B, #13) — 2026-11-21
 
 Keyed on the app's `.ink-permissions-v1.json` marker at the library root, which the app writes

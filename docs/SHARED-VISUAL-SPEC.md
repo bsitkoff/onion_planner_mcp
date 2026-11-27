@@ -51,9 +51,12 @@
   `*-minimal` schedule/agenda print ruled rows only (rules from region-local x=0, no gutter).
   `daily-cozy`, `daily-colorful`, `agenda-cozy`, `agenda-colorful` print an **IBM Plex Mono 14 /
   500 hour gutter** at region-local x<34; their rules start at x=34. The region reports where
-  its rules start as `gutterX` (`read_page`), and every default-placed line or block insets to
-  `max(xPad, gutterX)` — the `52px` schedule `xPad` already clears the 34px gutter, so on all
-  shipped templates the inset is effectively a margin; an explicit `x` is the caller's call.
+  its rules start as `gutterX` (`read_page`), and every default-placed line insets to
+  `max(xPad, gutterX)`, except in `schedule`/`agenda` (the only regions the app draws blocks
+  in, treated identically): there duration blocks and plain timed lines start at
+  `max(48, gutterX)` (blocks end 20 from the right edge, label at block x + 8), matching the
+  app. Other regions keep the generic `xPad` inset and 24 right margin. An explicit `x` is
+  the caller's call.
   Placement is agenda-style either way: by `row` (snap to a ruled line) or by clock `time`
   anchored via the region's `startHour` + `rowsPerHour` (a sub-hour time interpolates between
   rules — `13:30` is row 6.5).
@@ -159,23 +162,35 @@ to the on-device composer.
 
 ## 7. Washi-tape schedule blocks
 
-> **Status (2026-09-22 audit): no longer MCP-only.** The app's on-device composer now draws
-> duration blocks too (`Features/OnDeviceAI/UnderlaySVGComposer.swift`, onionskin#170) with the
-> same tint/`rx`/opacity, but it snaps to whole rows with a one-row minimum and has **no overlap
-> lanes** — so the two writers diverge on short and overlapping events until the app ports these
-> rules. Originally resolved as MCP-only decoration: underlay-authored, matching the app renderer's confirmed support for `rx` + `fill-opacity`.
+> **Status (2026-11-26): ported to the app.** The app's on-device composer
+> (`Features/OnDeviceAI/UnderlaySVGComposer.swift`) ported these rules in onionskin#245 (build 140):
+> exact-minute edges, overlap lanes, centred labels. The owner of the shared look is the app's
+> `design/UNDERLAY-VISUAL.md`; placement parity is pinned by the shared fixture
+> `Onionskin/Tests/Fixtures/schedule-parity.json` (checked by `test/schedule-parity.ts`). Where the
+> two disagreed on placement, this server changed to match the app. Remaining deltas are listed in
+> that doc's "Known parity deltas".
 
 A schedule line with `time` + (`endTime` or `durationMin`) draws a block instead of a single
 baseline: rounded `<rect rx="8">` with `fill-opacity` (default **0.16**, a translucent "tape"
 tint) instead of a solid fill — the only element in this file to use `fill-opacity` rather than
 `opacity`. Radius + opacity follow the 2026-07-09 washi spec (owner: the app repo's
-`design/UNDERLAY-VISUAL.md`, forthcoming — onionskin#23). Tint defaults to the chapter's
+`design/UNDERLAY-VISUAL.md`, onionskin#23). Tint defaults to the chapter's
 **`chromeAccent`** (the chapter's accent colour — a no-text fill, so it rides through raw),
 falling back to `theme.accent`, overridable per-block via `blockFill`. The label text sits
-vertically centred inside the block at `round(y1 + height / 2 + size × 0.32)`. Left inset = `max(xPad, gutterX)` — the region's `xPad`, never
-left of where its rules start (the printed hour gutter on cozy/colorful, §1); right edge =
-`region.width − DEFAULT_X_PAD`, the *standard* margin — not the region's (often wider) `xPad`
-again, which would double-charge the left gutter on a side that has no hour labels to clear.
+vertically centred inside the block at `round(y1 + height / 2 + size × 0.32)`. Placement (app parity):
+left inset = `max(48, gutterX)` — never left of where the rules start (the printed hour gutter on
+cozy/colorful, §1); right inset = `20`; the label sits 8px inside the block's left edge
+(`x + 8`, wrap width `width − 16`). Block edges are the exact clock positions, **not rounded**
+(fractional `y`/`height`); a wrapped label's line pitch is `size × 1.3` (unrounded). A plain
+point-in-time schedule line (`time`, no end, and the last-rule zero-duration fallback) starts at
+the same `max(48, gutterX)` (x only). **Known delta:** its baseline y is still
+`round(rule + round(0.4 × pitch))` in every region; the app uses `y(at:start) + size × 0.78`. That
+is pending a follow-up PR that also fixes row/timed-line collision warnings. All of this
+applies to `schedule`/`agenda` only; every other region keeps rounded edges, a
+`round(size × 1.3)` pitch, a left inset of `max(xPad, gutterX)` (24 by default) with a 24 right inset, and a 12px label pad.
+Label overflow (the app now matches, onionskin#307): a single-line label overflows when `size > h`;
+a wrapped label overflows when `lines × size × 1.3 > h` (unrounded pitch in schedule/agenda,
+`round(size × 1.3)` elsewhere), warning `washi_block_label_overflow`.
 A block's start/end rows are **fractional** (`13:30–14:30` starts halfway down the 1 PM
 interval) — #32. A label too long to fit the block's width on one line wraps
 (reusing the same wrap heuristic as `ainotes`/`todo`), stacking centred within the block's
@@ -201,7 +216,7 @@ there is no span to draw, so the plain-time fallback warns `washi_block_zero_dur
    at the floor), no reserved colours. Default palette source is the chapter's `paletteCharacter`.
    (§0)
 2. **Schedule:** hour labels are per style — minimal prints none, cozy/colorful print a 34px
-   gutter (`gutterX`); default inset is `max(xPad, gutterX)`. Agenda placement (`row`, or `time`
+   gutter (`gutterX`); default inset is `max(xPad, gutterX)`, but schedule/agenda blocks and timed lines use `max(48, gutterX)`. Agenda placement (`row`, or `time`
    via `startHour`/`rowsPerHour`, sub-hour times interpolated). Re-verified 2026-08-20. (§1)
 3. **To-do:** no shipped template prints checkboxes → the author always draws
    `marker: "checkbox"`. Re-verified 2026-08-20. (§2)
@@ -215,9 +230,8 @@ there is no span to draw, so the plain-time fallback warns `washi_block_zero_dur
    per-day theme; on-device renders one quiet/matched style. Template *style* and underlay *theme*
    stay independent axes. Underlay colour is the chapter's own ink palette, lifted lighter — never
    a fixed seed (gold retired). (§0, §6)
-8. **Washi-tape schedule blocks:** MCP-only, drawn via `time`+`endTime`/`durationMin`; tint
+8. **Washi-tape schedule blocks:** drawn via `time`+`endTime`/`durationMin`; tint
    defaults to the chapter's `chromeAccent` (else `theme.accent`), `fill-opacity` default 0.16,
-   `rx 8` (2026-07-09 washi spec); right inset is the standard margin (not the schedule's own
-   wider left gutter); an overlong label wraps into the block before anything warns; span
+   `rx 8` (2026-07-09 washi spec); in schedule/agenda only: left inset `max(48, gutterX)`, right inset 20, label `x + 8`, unrounded edges and wrapped-label pitch, timed-line x 48 (app parity, onionskin#245; timed-line y still differs, see §7; other regions unchanged); an overlong label wraps into the block before anything warns; span
    overflow clamps and warns rather than distorting the grid; valid durations keep exact minute endpoints with no minimum height; actual overlaps
    use separate columns. (§7)

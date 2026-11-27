@@ -134,7 +134,7 @@ coordinates; they reference a region name and a row index from
 of this — full control, no geometry help. `composeAiSvg` returns `{ svg, warnings }`; the
 warnings flag likely overflow (text past the region's right edge or below its box —
 `text_below_region`; a `row` beyond the ruled grid — `row_out_of_range`, instead of silently
-folding onto the last rule; two different `lines[]` entries on one baseline — `row_collision`,
+folding onto the last rule; two different `lines[]` entries on one baseline or closer than one text height — `row_collision`,
 where wrapped continuations of one entry never count; a wrapped block that overruns its row; a
 `time` that can't be anchored) and surface in the `write_underlay` result — important because
 overnight/unattended writes have no human watching. A clock `time` resolves to a **fractional**

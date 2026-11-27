@@ -230,7 +230,7 @@ the visual lines of one thing.
 **Row discipline: wrapping is fine, collisions are not.** One *logical item* per visual slot.
 A paragraph, a to-do, or a block label may wrap onto several lines and still read as one item —
 that's expected and never warned. What the server does warn about is two *different* entries
-landing in one slot: `row_collision` (two `lines[]` entries resolve to the same baseline — e.g.
+landing in one slot: `row_collision` (two `lines[]` entries resolve to the same baseline or baselines closer than one text height — e.g.
 a `time` line on the rule an explicit `row` line already uses), `row_out_of_range` (a `row`
 past the grid, which would otherwise fold onto the last rule), and `text_below_region` (a flow
 line whose baseline falls below the region box). Treat any of these as "re-layout", not noise —
